@@ -3,6 +3,7 @@ members = [
     "crates/rekursiv-asm",
     "crates/rekursiv-model",
     "crates/rekursiv-sim",
+    "crates/rekursiv-smalltalk",
 ]
 resolver = "2"
 

@@ -1262,11 +1262,16 @@ project behavior.
 
 ## Smalltalk-80 port
 
-The next language target is a single-core port of the Blue Book Smalltalk-80 VM. Multicore
-execution, MVCC, and snapshot isolation are deferred and do not constrain this port. The goal is to
-import and execute a compatible Smalltalk-80 image through RTL microcode. The runtime preserves the
-guest VM semantics while adapting its storage to the project machine. This section defines planned
-work; no Smalltalk runtime is implemented yet. Importer and initial interpreter work can use the
+The intended first language target is a single-core port of the Blue Book Smalltalk-80 VM.
+Multicore execution, MVCC, and snapshot isolation remain deferred. The eventual goal is a usable
+Smalltalk / object-oriented workstation. It will boot a converted Smalltalk-80 image on the
+Mellanox NV303212A FPGA card, use its 8 GB of RAM, and display through the PCIe host machine's
+framebuffer. Keyboard, mouse, storage, and saved images are part of that workstation goal.
+The architecture must remain usable by other object-oriented languages.
+
+The runtime preserves guest VM semantics while adapting storage to the project machine.
+The offline image importer is implemented. No Smalltalk runtime is implemented yet.
+Importer and initial interpreter work can use the
 [machine collector](docs/recovery.md). Language microcode must expose its roots through the generic
 machine root contract.
 
@@ -1299,14 +1304,43 @@ runtime can use metadata descriptors and implement prototype or property lookup 
 object fields and microcode. The stage 5 access-type field, alternating dictionary, and
 saved-context format remain example conventions, not requirements for all runtimes.
 
-A proposed `rekursiv-smalltalk` crate owns the guest layouts, image importer, microcode
-construction, primitive mapping, and runtime tests. It uses the generic assembler and machine
-interfaces. The existing core crates do not depend on it. Simulator integration loads a runtime
-image and connects service handlers without placing Smalltalk tables in the generic execution loop.
+The `rekursiv-smalltalk` crate contains guest layout definitions, offline image conversion, and tests.
+Later stages add runtime microcode build tooling and execution tests. It uses the generic assembler
+and machine interfaces. The existing core crates do not depend on it. Simulator integration loads a runtime
+image and connects external devices without placing Smalltalk tables in the generic execution loop.
 Guest bytecode handlers are writable microcode, not new cases in the RTL decoder. Guest primitive
-numbers map to runtime routines or service handlers, not to hardware control-field encodings. A host
-reference interpreter can serve as an oracle; target execution must still occur through RTL
-microcode.
+numbers map to microcode routines. Device primitives use those routines to issue requests through
+generic device interfaces.
+
+#### Hardware execution requirement
+
+The implementation must execute processor and language behavior in synthesizable RTL or microcode
+running on that RTL. Rust or other host code must not replace any of that execution.
+This rule applies throughout development, including the first interpreter demonstration.
+
+| Work | Required execution location |
+| --- | --- |
+| Bytecode fetch, decode, dispatch, and method lookup | LOGIK/NUMERIK microcode |
+| Sends, contexts, returns, blocks, and primitive success or failure | Processor RTL and microcode |
+| Arithmetic, object access, identity operations, and BitBlt | Processor RTL and microcode |
+| Allocation, root discovery, tracing, relocation, and recovery retries | OBJEKT and LOGIK/NUMERIK RTL and microcode |
+| Smalltalk processes, semaphores, and scheduling decisions | Runtime microcode |
+| External RAM, disk/backing storage, and I/O devices | Real devices or host device models |
+| Source assembly, initial image conversion, and loading while halted | Offline tools, including Rust |
+| Expected-result calculation and execution comparison | Separate test code |
+
+Device models return data, completion status, and events through documented interfaces.
+They can model latency, faults, and backpressure. They must not inspect Smalltalk classes to choose
+language behavior, execute a primitive, traverse the live heap, or repair processor state.
+For example, a host display adapter can present a bitmap produced by the machine.
+The machine must perform Smalltalk drawing operations, including BitBlt.
+Likewise, the host can supply clock and input events, but the machine decides which process runs.
+
+Rust can convert an original image before execution and serialize a snapshot produced by the machine.
+The machine owns live snapshot preparation and runtime consistency.
+A reference interpreter can calculate expected results in tests. Target execution must never call
+that interpreter to complete an operation or supply its next state.
+An unsupported operation remains an explicit implementation gap until RTL or microcode implements it.
 
 ### Representation decisions
 
@@ -1314,6 +1348,9 @@ The machine already has representation policies: 40-bit tagged words, scanned or
 compact codes, and one-based field addressing. The runtime adapter must expose the guest's
 object-memory behavior without changing those meanings. This is a semantic port, not a byte-for-byte
 copy of an image into physical RAM.
+
+The implemented [image conversion contract](docs/smalltalk-image.md) fixes the initial representation,
+root assignments, and selected Xerox distribution. The requirements below also apply to later runtime operations.
 
 - Map guest object pointers to stable machine identities and preserve sharing and cycles.
 - Define guest nil, true, and false explicitly. The existing Boolean compact code has only one class
@@ -1335,23 +1372,133 @@ Smalltalk method lookup, superclass search, primitive failure, block returns, an
 remain runtime operations. The Blue Book scheduler supplies processes, priorities, and semaphores;
 the port adds no transactional execution semantics.
 
-### Implementation sequence
+### Implementation stages
 
-| Step                           | Deliverable                                                                                                      | Acceptance evidence                                                                                                   |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| 1. Guest contract and importer | Identify an image variant; define guest layouts, pointer mapping, scalar rules, roots, and safe physical storage | Import a cyclic fixture and real image metadata; preserve sharing, class links, literal references, and byte contents |
-| 2. Bytecode execution          | Microcode fetch/decode, basic stack and variable operations, branches, and initial arithmetic primitives         | Small methods agree with an independent guest interpreter while executing on actual RTL                               |
-| 3. Calls and contexts          | Method lookup, sends, activation, returns, blocks, and guest-visible contexts                                    | An imported method sends a message and returns the expected value through RTL microcode                               |
-| 4. Runtime integration         | Allocation recovery, required primitives, process scheduling, semaphores, and device services                    | Guest execution survives collection, process switches, primitive failure, and image-required I/O                      |
-| 5. Image boot and persistence  | Boot the chosen image and support its required snapshot and device behavior                                      | The image reaches a usable environment and resumes after a save/reload cycle                                          |
+These stages describe the Smalltalk port and workstation work. Their numbering is separate from
+the earlier processor stages. Stage 1 is implemented. Stages 2–7 remain planned.
+All stages obey the hardware execution requirement.
+The next implementation scope is the first bytecode test in stage 2.
+The first integrated milestone is stage 3: an imported message send and return that survives collection.
 
-Runtime work can expose missing generic machine operations or insufficient control-store and stack
-capacities. Each lower-level change must have a language-independent contract and machine-level
-tests. For example, byte extraction, dynamic dispatch, or identity indirection can be generic
-mechanisms; a Smalltalk method-header decoder is runtime policy. The port does not require all
-historical Rekursiv controls before useful execution begins.
+#### ST-80 stage 1: Image contract and importer
 
-Existing machine tests and examples remain acceptance gates for core changes. Guest tests check
-Smalltalk semantics separately from the machine model and include integer boundaries, primitive
-failure, context state, and reference preservation. The first end-to-end target is the imported
-send-and-return example, before a full image boot.
+Implemented in [rekursiv-smalltalk](crates/rekursiv-smalltalk/), with a pinned
+[distribution manifest](crates/rekursiv-smalltalk/fixtures/xerox-v2.json) and
+[representation contract](docs/smalltalk-image.md).
+`scripts/check-smalltalk-image.sh` fetches the checked distribution and verifies complete conversion.
+The image contains 18,391 objects, including 4,505 compiled methods.
+Conversion preserves their contents and collector-visible edges in 341,467 physical body words.
+The saved context's first bytecode matches Xerox's startup trace.
+This completes offline conversion, not guest execution or image boot.
+
+- Use the original Xerox Smalltalk-80 Version 2 image as the initial candidate.
+- Record the exact image source, checksum, format, primitive conventions, and applicable specification corrections.
+- Add `rekursiv-smalltalk` for offline conversion, guest layout definitions, and runtime tests.
+- Define pointer conversion, singleton objects, SmallInteger limits, identity hashes, guest indexing, and machine roots.
+- Preserve sharing, cycles, class links, byte contents, and method literals during conversion.
+- Define a physical representation for compiled methods that the existing tagged-word collector can scan safely.
+
+The initial method representation uses tagged references for literals and raw words for byte data.
+Runtime access routines preserve the guest's byte offsets and lengths independently of this physical layout.
+The collector must not decode Smalltalk method headers or recognize Smalltalk classes.
+
+Completion requires successful conversion of cyclic fixtures and the selected image's object graph.
+Checks cover class links, shared references, singleton identity, scalar boundaries, and compiled-method contents.
+The importer must report unsupported image features explicitly.
+The preserved Version 2 distribution includes reference traces, as described by the
+[ST80 implementation](https://github.com/devhawala/ST80). These provide later execution comparison data.
+
+#### ST-80 stage 2: Bytecode execution on LOGIK
+
+- Write standalone interpreter sources under `microcode/smalltalk/`.
+- Fetch bytecodes from the active compiled-method object through OBJEKT.
+- Implement bytecode dispatch, constants, stack operations, variable access, branches, and simple returns.
+- Implement initial SmallInteger arithmetic and its required overflow and primitive-failure behavior.
+- Store execution references in locations visible to the machine collector from the first test.
+
+NAM dispatch alone does not implement Smalltalk bytecode fetch or context handling.
+The interpreter must preserve guest instruction-pointer values while translating access to the physical method representation.
+
+Completion requires a converted method to execute through RTL and return the expected result.
+Independent guest tests compare bytecode boundaries, stack contents, branches, and integer edge cases.
+Rust callbacks must not execute unsupported bytecodes or arithmetic operations.
+
+#### ST-80 stage 3: Sends, contexts, and collection
+
+- Implement method-dictionary lookup, superclass traversal, sends, activation, and normal method returns in microcode.
+- Preserve contexts as guest-visible objects, including sender links, arguments, temporaries, and evaluation stacks.
+- Define roots for active contexts, methods, receivers, and temporary references across every allocating operation.
+- Exercise allocation, eviction, refill, and machine collection during guest execution.
+
+Completion requires an imported method to send another message, allocate an object, survive collection, and return the expected result.
+The test must use small memory and pager capacities to force recovery and transfer paths.
+Hardware stacks can cache context state, but the guest-visible contexts must remain correct.
+Host code supplies external memory and backing-store transactions only.
+
+#### ST-80 stage 4: Complete interpreter and runtime semantics
+
+- Complete bytecode coverage, block activation, non-local returns, and message-send failure paths.
+- Implement primitive dispatch, fallback, numeric operations, indexed access, object creation, and identity operations including `become:`.
+- Implement the guest process scheduler, priorities, semaphores, and context switches.
+- Account for every primitive required by the selected image and its startup path.
+- Define generic device interfaces for display, input, clocks, storage, and snapshot transfer.
+
+Completion requires guest tests for primitive failure, escaped blocks, context state, identity changes, and process switching.
+These tests must also pass with collection, paging, and device delays.
+Primitive numbers and class layouts remain runtime definitions, outside the generic RTL decoder.
+
+#### ST-80 stage 5: Interactive image in RTL simulation
+
+- Resume the selected image from its saved process and context state.
+- Compare startup execution against available reference traces, accounting for the physical representation conversion.
+- Implement bitmap operations, including BitBlt, on the processor.
+- Connect host device models for framebuffer presentation, keyboard, mouse, clocks, and storage.
+- Implement machine-owned snapshot preparation and image save/reload.
+
+Completion requires a usable Smalltalk environment driven by the simulated RTL processor.
+The user can evaluate expressions, browse and edit methods, interact with windows, and save and resume a session.
+Display presentation and external device models are the permitted host execution boundary.
+Bytecode execution, drawing algorithms, scheduling, and GC must remain on the machine.
+
+#### ST-80 stage 6: Memory capacity and FPGA implementation
+
+This work can start alongside interpreter development. It must finish before the workstation stage.
+
+- Expand the current 256-word control-store configuration as the interpreter requires.
+- Map the enlarged control store and suitable resident arrays to FPGA block RAM.
+- Preserve fetch timing, programming behavior, root inspection, and recovery across memory implementation changes.
+- Expand the current 24-bit physical address path to cover the card's RAM with a documented word-packing scheme.
+- Update address arithmetic, pager bases, transfer interfaces, collector relocation, and bounds checks together.
+- Provide the board's memory controller and measure usable heap capacity after semispace and system reservations.
+- Measure pager behavior and collection pauses beyond the current 16-entry test configuration.
+- Implement the PCIe device interface and complete placement, routing, and timing checks for the actual FPGA.
+
+Completion requires working external-memory access across the intended address range without truncation or aliasing.
+Synthesis and board tests must establish resource use, clock timing, and reliable device handshakes.
+Smalltalk tests from earlier stages must pass on the revised generic machine.
+Addressable RAM and usable object-heap capacity must be reported separately.
+
+#### ST-80 stage 7: Smalltalk / OO workstation
+
+- Boot the converted image on the Mellanox NV303212A card.
+- Use the card's RAM for object memory through the stage 6 memory interface.
+- Present the machine-produced display through the PCIe host's framebuffer.
+- Support interactive keyboard and mouse input, storage, and saved sessions.
+
+Completion means the user can develop and run Smalltalk programs on the FPGA workstation.
+The demonstration must exercise sustained allocation, collection, message sends, process activity, drawing, and a save/reload cycle.
+Memory tests must demonstrate use beyond the simulator's small heap configuration and across the board's available RAM.
+The PCIe host supplies device services, never a substitute Smalltalk interpreter or collector.
+
+### Validation and generic hardware changes
+
+Runtime work can expose missing generic operations or insufficient control-store and stack capacities.
+Each lower-level change must have a language-independent contract and machine-level tests.
+Byte extraction, dynamic dispatch, or identity indirection can be generic mechanisms.
+A Smalltalk method-header decoder belongs in runtime microcode.
+The port does not require every historical Rekursiv control before useful execution begins.
+
+Existing machine tests and examples remain acceptance checks for core changes.
+Guest tests check Smalltalk semantics separately from the machine model.
+Every stage must demonstrate which behavior executes on RTL and which external devices the host models.
+Passing a host reference interpreter test alone does not complete a target execution milestone.

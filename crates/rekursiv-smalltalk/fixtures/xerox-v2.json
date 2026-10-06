@@ -1,0 +1,43 @@
+{
+  "profile": "xerox-smalltalk-80-v2-1983",
+  "source_page": "http://www.wolczko.com/st80/",
+  "archive_url": "https://archive.org/download/smalltalk-80/image.tar.gz",
+  "archive_sha256": "ee6e5a107536aa5f8f35160405ef3ea2de0f57cdb030173a043507f4b5b16dd6",
+  "files": {
+    "VirtualImage": "cac3a2d9690e8353d9ccfd073b1199bd49b43b5989607032a06a185cd4f23a1c",
+    "class.oops": "eb71fc41d0a6c9e04e8b7ac3c50339b40e5c074e33b5027681687586c33fb13b",
+    "method.oops": "c23e40139ac35a8ea75c1808b8f536376a40807a68824b8533249f8682cc4d49",
+    "trace2": "b6b42ecdc4e52381e85ef30fde9669656ae1e665604819dd3ab04a4f06c8cd72",
+    "trace3": "a758b528a3b3c89b2dc0d0b2ca8a9d561da6cf74a2817062acb6560c809f50ef",
+    "Smalltalk-80.sources": "cad30b4cce6f87539a42a60192000730d8cd248aa85ec0d1d9e74938198b0f86"
+  },
+  "manual_url": "http://www.wolczko.com/st80/manual.pdf.gz",
+  "manual_sha256": "945402a2bb8229125277fdf9506fa286daac0bb60914c9be21749f69cca35cda",
+  "image_bytes": 596128,
+  "object_space_words": 258880,
+  "object_table_words": 38736,
+  "objects": 18391,
+  "kinds": {
+    "pointers": 7607,
+    "words": 359,
+    "bytes": 5920,
+    "methods": 4505
+  },
+  "target_body_words": 341467,
+  "initial_context_oop": 11048,
+  "initial_method_oop": 27492,
+  "initial_ip": 144,
+  "first_bytecode": 131,
+  "stale_class_listing_oops": [
+    37808,
+    38512
+  ],
+  "stale_method_listing_oops": [
+    37872,
+    37958,
+    39676,
+    39968,
+    43984,
+    46840
+  ]
+}
