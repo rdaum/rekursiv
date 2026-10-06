@@ -214,6 +214,19 @@ impl Harness<'_> {
         model: &mut Processor,
         limit: usize,
     ) -> Result<usize> {
+        self.run_processor_observed(image, model, limit, |_, _| Ok(()))
+    }
+
+    /// Observe checked retirements without handing execution to the observer.
+    /// The immutable harness exposes device state and transaction history only;
+    /// an observer cannot inject commands or choose the next microinstruction.
+    pub fn run_processor_observed(
+        &mut self,
+        image: &Image,
+        model: &mut Processor,
+        limit: usize,
+        mut observe: impl FnMut(&Self, &Processor) -> Result<()>,
+    ) -> Result<usize> {
         let mut retired = 0;
         let mut candidate = None;
         let mut expected_object = None;
@@ -369,6 +382,7 @@ impl Harness<'_> {
                 *model = next;
                 self.compare_processor(model)?;
                 retired += 1;
+                observe(self, model)?;
             } else {
                 // Architectural state must remain stable during request and response stalls.
                 self.compare_processor(model)?;

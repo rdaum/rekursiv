@@ -66,10 +66,20 @@ acceptance target: earlier command routines still use Rust sequencing. A full la
 substitution, additional arithmetic, stack paging, and automatic processor recovery remain follow-up
 work.
 
+## Smalltalk bytecode execution
+
+`cargo test --locked -p rekursiv-smalltalk --test execution` compares guest instruction boundaries
+against an independent test interpreter. The target executes standalone microcode on actual RTL.
+The checks cover stack and variable operations, branches, integer arithmetic, explicit failure,
+and context-root retention during machine collection. See the [execution contract](smalltalk-execution.md).
+`scripts/check-smalltalk-image.sh` also executes two original methods from the pinned Xerox image.
+
 ## FPGA resource estimate
 
+The following estimate predates the stage 2 increase to 512 control words. It is not a current resource estimate.
+
 On 2026-10-06, Yosys 0.33 mapped the combined `objekt_tb` wrapper to Xilinx 7-series primitives. The
-configuration has 16 pager entries, 32 words per stack, 256 microinstructions, 256 NAM words, and
+configuration had 16 pager entries, 32 words per stack, 256 microinstructions, 256 NAM words, and
 1,024 opcode-map entries. The external object-memory capacity parameter is 512 words for this test
 configuration. Object memory itself is external: neither its storage nor a board-specific SRAM or
 DRAM controller is included.

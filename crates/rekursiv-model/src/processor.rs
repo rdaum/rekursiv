@@ -3,7 +3,8 @@
 //! which implements clock cycles and request/response handshakes.
 use rekursiv_asm::{processor::*, Command, Word};
 
-pub const CODE_WORDS: usize = 256;
+// Matches the simulation wrapper. Individual RTL modules remain parameterized.
+pub const CODE_WORDS: usize = 512;
 pub const STACK_WORDS: usize = 32;
 pub const NAM_WORDS: usize = 256;
 

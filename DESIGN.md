@@ -1270,10 +1270,10 @@ framebuffer. Keyboard, mouse, storage, and saved images are part of that worksta
 The architecture must remain usable by other object-oriented languages.
 
 The runtime preserves guest VM semantics while adapting storage to the project machine.
-The offline image importer is implemented. No Smalltalk runtime is implemented yet.
-Importer and initial interpreter work can use the
-[machine collector](docs/recovery.md). Language microcode must expose its roots through the generic
-machine root contract.
+The offline image importer and initial RTL bytecode interpreter are implemented.
+Method calls, the complete runtime, and image startup remain later work.
+The interpreter uses the [machine collector](docs/recovery.md).
+Language microcode must expose its roots through the generic machine root contract.
 
 The
 [Blue Book VM specification](https://docs.huihoo.com/smalltalk/esug/HistoricalDocuments/Smalltalk80/BlueBookImplementation/bluebook_chapter27.html)
@@ -1304,10 +1304,10 @@ runtime can use metadata descriptors and implement prototype or property lookup 
 object fields and microcode. The stage 5 access-type field, alternating dictionary, and
 saved-context format remain example conventions, not requirements for all runtimes.
 
-The `rekursiv-smalltalk` crate contains guest layout definitions, offline image conversion, and tests.
-Later stages add runtime microcode build tooling and execution tests. It uses the generic assembler
-and machine interfaces. The existing core crates do not depend on it. Simulator integration loads a runtime
-image and connects external devices without placing Smalltalk tables in the generic execution loop.
+The `rekursiv-smalltalk` crate contains guest layouts, offline image conversion, microcode assembly,
+and execution tests. It uses the generic assembler and machine interfaces.
+The existing core crates do not depend on it. Simulator integration loads a runtime image and connects
+external devices without placing Smalltalk tables in the generic execution loop.
 Guest bytecode handlers are writable microcode, not new cases in the RTL decoder. Guest primitive
 numbers map to microcode routines. Device primitives use those routines to issue requests through
 generic device interfaces.
@@ -1375,9 +1375,9 @@ the port adds no transactional execution semantics.
 ### Implementation stages
 
 These stages describe the Smalltalk port and workstation work. Their numbering is separate from
-the earlier processor stages. Stage 1 is implemented. Stages 2–7 remain planned.
+the earlier processor stages. Stages 1 and 2 are implemented. Stages 3–7 remain planned.
 All stages obey the hardware execution requirement.
-The next implementation scope is the first bytecode test in stage 2.
+The next implementation scope is sends and contexts in stage 3.
 The first integrated milestone is stage 3: an imported message send and return that survives collection.
 
 #### ST-80 stage 1: Image contract and importer
@@ -1409,6 +1409,15 @@ The preserved Version 2 distribution includes reference traces, as described by 
 [ST80 implementation](https://github.com/devhawala/ST80). These provide later execution comparison data.
 
 #### ST-80 stage 2: Bytecode execution on LOGIK
+
+Implemented in [standalone interpreter microcode](microcode/smalltalk/interpreter.uc).
+The [execution contract](docs/smalltalk-execution.md) defines supported bytecodes, state locations,
+terminal results, and the boundary before method lookup. The simulator wrapper now has 512 control words.
+Independent guest tests compare context IP, temporaries, and stack contents at each bytecode boundary.
+Tests execute original Xerox `Object>>isNil` and `Object>>notNil` methods, plus converted fixtures.
+A forced refill exercises machine collection and retries while interpreter references remain live.
+Failed arithmetic preserves its operands and stops explicitly; later stages supply message-send fallback.
+Root-method return terminates the test activation. Calls and non-local returns remain subsequent work.
 
 - Write standalone interpreter sources under `microcode/smalltalk/`.
 - Fetch bytecodes from the active compiled-method object through OBJEKT.
@@ -1464,7 +1473,7 @@ Bytecode execution, drawing algorithms, scheduling, and GC must remain on the ma
 
 This work can start alongside interpreter development. It must finish before the workstation stage.
 
-- Expand the current 256-word control-store configuration as the interpreter requires.
+- Expand the current 512-word control-store configuration as the interpreter requires.
 - Map the enlarged control store and suitable resident arrays to FPGA block RAM.
 - Preserve fetch timing, programming behavior, root inspection, and recovery across memory implementation changes.
 - Expand the current 24-bit physical address path to cover the card's RAM with a documented word-packing scheme.

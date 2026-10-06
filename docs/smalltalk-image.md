@@ -1,8 +1,8 @@
 # Smalltalk-80 image conversion contract
 
-`rekursiv-smalltalk` converts a Xerox Smalltalk-80 image into ordinary 40-bit OBJEKT records.
-It is an offline tool. It contains no bytecode interpreter, primitive implementations, scheduler,
-or collector. RTL and microcode must supply those operations in subsequent stages.
+The `rekursiv-smalltalk import` command converts a Xerox Smalltalk-80 image into ordinary 40-bit OBJEKT records.
+Conversion runs before execution. RTL and microcode supply runtime behavior, including bytecodes,
+primitives, scheduling, and collection. The [execution contract](smalltalk-execution.md) records current interpreter coverage.
 
 ## Selected distribution
 
@@ -221,5 +221,5 @@ method literals, primitive extensions, and all 32,768 SmallInteger values.
 Negative tests cover invalid flags, truncated files, bad extents, dangling references, unsupported
 profiles, malformed methods, and nonzero padding.
 
-Stage 1 ends at verified conversion. Loading the bundle into the simulator and executing guest
-bytecodes belong to stage 2. A full image run also needs larger memory than the current test wrapper.
+Stage 1 ends at verified conversion. The [stage 2 interpreter](smalltalk-execution.md) executes converted
+methods through RTL. A full image run still needs larger memory and the remaining runtime operations.

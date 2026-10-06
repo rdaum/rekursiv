@@ -20,7 +20,7 @@ h.start_processor(0)?;
 `with_ram_collector` assembles 68 ordinary microinstructions at the supplied address and rejects
 overlap with existing code. The pager count must match the hardware configuration. Root bounds come
 from the image's stack and control-store capacities. The wrapper has 16 pager entries, 32 stack
-words, and 256 control words. The collector uses NUMERIK registers R0–R4 for loop state; hardware
+words, and 512 control words. The collector uses NUMERIK registers R0–R4 for loop state; hardware
 preserves the mutator's complete arithmetic state.
 
 The loader sets `gc_enable_i` and `gc_entry_i` while halted. Keep these settings fixed throughout

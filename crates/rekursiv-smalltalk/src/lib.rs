@@ -3,6 +3,7 @@
 //! This crate does not execute guest bytecodes, primitives, or garbage collection.
 //! Its output is a set of ordinary OBJEKT backing records and boot metadata.
 //! The representation contract is in `docs/smalltalk-image.md`.
+pub mod interpreter;
 pub mod layout;
 pub mod source;
 pub mod target;
