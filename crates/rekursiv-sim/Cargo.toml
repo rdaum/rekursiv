@@ -1,0 +1,12 @@
+[package]
+name = "rekursiv-sim"
+version.workspace = true
+edition.workspace = true
+[dependencies]
+camino = "1.1"
+eyre = "0.6"
+marlin = { version = "=0.7.2", features = ["verilog"] }
+rekursiv-asm = { path = "../rekursiv-asm" }
+rekursiv-model = { path = "../rekursiv-model" }
+[dev-dependencies]
+proptest = "1.4"

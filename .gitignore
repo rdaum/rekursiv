@@ -1,0 +1,7 @@
+/target/
+/artifacts/
+*.vcd
+
+# Local research papers and book photographs; not project source.
+/*.pdf
+/*.zip
