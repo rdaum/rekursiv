@@ -8,7 +8,7 @@ if ! yosys -Q -T -p 'read_verilog -sv -Irtl rtl/objekt.sv rtl/objekt_transfer.sv
 fi
 tail -40 artifacts/yosys-synth.log
 
-if ! yosys -Q -T -p 'read_verilog -sv -Irtl rtl/logik.sv rtl/logik_store.sv rtl/logik_stacks.sv rtl/logik_sequencer.sv rtl/numerik.sv rtl/numerik_alu.sv; hierarchy -check -top logik; synth -top logik; check -assert; stat; write_json artifacts/logik.json' > artifacts/yosys-logik.log 2>&1; then
+if ! yosys -Q -T -p 'read_verilog -sv -Irtl rtl/logik.sv rtl/logik_store.sv rtl/logik_stacks.sv rtl/logik_sequencer.sv rtl/numerik.sv rtl/numerik_alu.sv; hierarchy -check -top logik -chparam CODE_WORDS 1024; synth -top logik; check -assert; stat; write_json artifacts/logik.json' > artifacts/yosys-logik.log 2>&1; then
     cat artifacts/yosys-logik.log
     exit 1
 fi

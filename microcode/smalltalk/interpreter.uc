@@ -14,15 +14,15 @@
 ; 10 literal count, 11 method byte length, 12 temporary count,
 ; 13 opcode, 14 context slot capacity, 15 terminal status.
 ;
-; Status: 1 root return, 2 unsupported bytecode/send, 3 primitive failure,
-; 4 non-Boolean branch, 5 malformed context/index/stack. No host continuation.
-; On primitive failure the receiver and argument remain on the guest stack.
-; Stage 3 will replace that stop with ordinary message lookup in microcode.
+; Status: 1 root return, 2 unsupported bytecode, 4 non-Boolean branch,
+; 5 malformed context/index/stack, 6 missing method, 7 argument mismatch.
+; Arithmetic failure preserves operands and enters ordinary message lookup.
+; sends.uc owns that path, context allocation, and return to a sender.
 ;
 ; Every instruction boundary writes IP/SP into the context. Popped slots are
 ; cleared to guest nil. The whole context is scanned by the generic collector.
-; Returns currently terminate a root invocation (sender=nil); nested contexts
-; and block returns need the subsequent sends/contexts stage.
+; A nil sender terminates a diagnostic root invocation. Ordinary returns clear
+; the finished context and resume its sender. Blocks need the later VM stage.
 .equ NIL = 0xa000000001
 .equ FALSE = 0xa000000002
 .equ TRUE = 0xa000000003
@@ -30,7 +30,9 @@
 .root 26, ACTIVE_CONTEXT
 start:
     d=ACTIVE_CONTEXT, ldvr, vr=0
-    d=ACTIVE_CONTEXT, page=Fetch
+load_context:
+    read=Vr, vr=0
+    d=Object, page=Fetch
     read=Size, class=0xa00000000b
     d=Object, r=Bus, s=Branch, brch=7, alu=Sub, cin=One, rb=14, ldrb, flags
     seq=ConditionalJump, cc=Sign, brch=bad_state
@@ -74,11 +76,19 @@ start:
     seq=ConditionalJump, cc=Sign, brch=bad_state
     ra=14, rb=9, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=bad_state
+    ra=15, s=Branch, brch=16, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=resume_result
     seq=Jump, brch=boundary
 
 ; IP/SP materialization is also used on terminal paths. The writes use compact
 ; SmallIntegers. Descriptor word one remains raw and is never a guest field.
 boundary:
+    ; Release completed-op scratch roots after their values reach guest fields.
+    d=0, ldvr, vr=3
+    d=0, ldvr, vr=4
+    d=0, ldvr, vr=5
+    d=0, ldvr, vr=6
+    d=0, ldvr, vr=7
     d=0, r=Bus, rb=15, ldrb
 save_context:
     read=Vr, vr=0
@@ -271,7 +281,8 @@ pop_value:
     ra=9, s=Branch, brch=1, alu=Sub, cin=One, rb=9, ldrb
     seq=Jump, brch=boundary
 
-; Only a root activation may terminate here. The tagged result remains in VR5.
+; Keep the result rooted in VR5 before reading or refilling the sender.
+; A nil sender terminates the diagnostic root; sends.uc handles other returns.
 return_receiver:
     read=Vr, vr=2
     d=Object, ldsym, seq=Jump, brch=return_value
@@ -290,7 +301,7 @@ return_value:
     d=2, idx=Load
     mem=Read
     d=NIL, ldsym
-    d=Object, seq=ConditionalJump, cc=!Symbol, brch=unsupported
+    d=Object, seq=ConditionalJump, cc=!Symbol, brch=return_sender
     d=1, r=Bus, rb=15, ldrb, seq=Jump, brch=save_context
 
 short_jump:
@@ -443,7 +454,7 @@ arithmetic_result:
 unsupported:
     d=2, r=Bus, rb=15, ldrb, seq=Jump, brch=save_context
 primitive_failure:
-    d=3, r=Bus, rb=15, ldrb, seq=Jump, brch=save_context
+    seq=Jump, brch=send_special
 boolean_failure:
     d=4, r=Bus, rb=15, ldrb, seq=Jump, brch=save_context
 bad_state:
@@ -718,13 +729,13 @@ stopped:
 .nam 130, 130, 0
 .map 130, extended
 .nam 131, 131, 0
-.map 131, unsupported
+.map 131, send_single
 .nam 132, 132, 0
-.map 132, unsupported
+.map 132, send_double
 .nam 133, 133, 0
-.map 133, unsupported
+.map 133, send_single
 .nam 134, 134, 0
-.map 134, unsupported
+.map 134, send_double
 .nam 135, 135, 0
 .map 135, pop
 .nam 136, 136, 0
@@ -826,144 +837,144 @@ stopped:
 .nam 184, 184, 0
 .map 184, arithmetic
 .nam 185, 185, 0
-.map 185, unsupported
+.map 185, send_special
 .nam 186, 186, 0
-.map 186, unsupported
+.map 186, send_special
 .nam 187, 187, 0
-.map 187, unsupported
+.map 187, send_special
 .nam 188, 188, 0
-.map 188, unsupported
+.map 188, send_special
 .nam 189, 189, 0
-.map 189, unsupported
+.map 189, send_special
 .nam 190, 190, 0
 .map 190, arithmetic
 .nam 191, 191, 0
 .map 191, arithmetic
 .nam 192, 192, 0
-.map 192, unsupported
+.map 192, send_special
 .nam 193, 193, 0
-.map 193, unsupported
+.map 193, send_special
 .nam 194, 194, 0
-.map 194, unsupported
+.map 194, send_special
 .nam 195, 195, 0
-.map 195, unsupported
+.map 195, send_special
 .nam 196, 196, 0
-.map 196, unsupported
+.map 196, send_special
 .nam 197, 197, 0
-.map 197, unsupported
+.map 197, send_special
 .nam 198, 198, 0
-.map 198, unsupported
+.map 198, send_special
 .nam 199, 199, 0
-.map 199, unsupported
+.map 199, send_special
 .nam 200, 200, 0
-.map 200, unsupported
+.map 200, send_special
 .nam 201, 201, 0
-.map 201, unsupported
+.map 201, send_special
 .nam 202, 202, 0
-.map 202, unsupported
+.map 202, send_special
 .nam 203, 203, 0
-.map 203, unsupported
+.map 203, send_special
 .nam 204, 204, 0
-.map 204, unsupported
+.map 204, send_special
 .nam 205, 205, 0
-.map 205, unsupported
+.map 205, send_special
 .nam 206, 206, 0
-.map 206, unsupported
+.map 206, send_special
 .nam 207, 207, 0
-.map 207, unsupported
+.map 207, send_special
 .nam 208, 208, 0
-.map 208, unsupported
+.map 208, send_literal
 .nam 209, 209, 0
-.map 209, unsupported
+.map 209, send_literal
 .nam 210, 210, 0
-.map 210, unsupported
+.map 210, send_literal
 .nam 211, 211, 0
-.map 211, unsupported
+.map 211, send_literal
 .nam 212, 212, 0
-.map 212, unsupported
+.map 212, send_literal
 .nam 213, 213, 0
-.map 213, unsupported
+.map 213, send_literal
 .nam 214, 214, 0
-.map 214, unsupported
+.map 214, send_literal
 .nam 215, 215, 0
-.map 215, unsupported
+.map 215, send_literal
 .nam 216, 216, 0
-.map 216, unsupported
+.map 216, send_literal
 .nam 217, 217, 0
-.map 217, unsupported
+.map 217, send_literal
 .nam 218, 218, 0
-.map 218, unsupported
+.map 218, send_literal
 .nam 219, 219, 0
-.map 219, unsupported
+.map 219, send_literal
 .nam 220, 220, 0
-.map 220, unsupported
+.map 220, send_literal
 .nam 221, 221, 0
-.map 221, unsupported
+.map 221, send_literal
 .nam 222, 222, 0
-.map 222, unsupported
+.map 222, send_literal
 .nam 223, 223, 0
-.map 223, unsupported
+.map 223, send_literal
 .nam 224, 224, 0
-.map 224, unsupported
+.map 224, send_literal
 .nam 225, 225, 0
-.map 225, unsupported
+.map 225, send_literal
 .nam 226, 226, 0
-.map 226, unsupported
+.map 226, send_literal
 .nam 227, 227, 0
-.map 227, unsupported
+.map 227, send_literal
 .nam 228, 228, 0
-.map 228, unsupported
+.map 228, send_literal
 .nam 229, 229, 0
-.map 229, unsupported
+.map 229, send_literal
 .nam 230, 230, 0
-.map 230, unsupported
+.map 230, send_literal
 .nam 231, 231, 0
-.map 231, unsupported
+.map 231, send_literal
 .nam 232, 232, 0
-.map 232, unsupported
+.map 232, send_literal
 .nam 233, 233, 0
-.map 233, unsupported
+.map 233, send_literal
 .nam 234, 234, 0
-.map 234, unsupported
+.map 234, send_literal
 .nam 235, 235, 0
-.map 235, unsupported
+.map 235, send_literal
 .nam 236, 236, 0
-.map 236, unsupported
+.map 236, send_literal
 .nam 237, 237, 0
-.map 237, unsupported
+.map 237, send_literal
 .nam 238, 238, 0
-.map 238, unsupported
+.map 238, send_literal
 .nam 239, 239, 0
-.map 239, unsupported
+.map 239, send_literal
 .nam 240, 240, 0
-.map 240, unsupported
+.map 240, send_literal
 .nam 241, 241, 0
-.map 241, unsupported
+.map 241, send_literal
 .nam 242, 242, 0
-.map 242, unsupported
+.map 242, send_literal
 .nam 243, 243, 0
-.map 243, unsupported
+.map 243, send_literal
 .nam 244, 244, 0
-.map 244, unsupported
+.map 244, send_literal
 .nam 245, 245, 0
-.map 245, unsupported
+.map 245, send_literal
 .nam 246, 246, 0
-.map 246, unsupported
+.map 246, send_literal
 .nam 247, 247, 0
-.map 247, unsupported
+.map 247, send_literal
 .nam 248, 248, 0
-.map 248, unsupported
+.map 248, send_literal
 .nam 249, 249, 0
-.map 249, unsupported
+.map 249, send_literal
 .nam 250, 250, 0
-.map 250, unsupported
+.map 250, send_literal
 .nam 251, 251, 0
-.map 251, unsupported
+.map 251, send_literal
 .nam 252, 252, 0
-.map 252, unsupported
+.map 252, send_literal
 .nam 253, 253, 0
-.map 253, unsupported
+.map 253, send_literal
 .nam 254, 254, 0
-.map 254, unsupported
+.map 254, send_literal
 .nam 255, 255, 0
-.map 255, unsupported
+.map 255, send_literal

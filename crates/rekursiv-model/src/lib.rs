@@ -289,6 +289,12 @@ impl Model {
         let mut result_data = Word::NIL;
         let result = (|| {
             match s {
+                Service::ReserveIdentities(next) => {
+                    if next == 0 || next > 1 << 37 {
+                        return Err(Status::BadValue);
+                    }
+                    self.next_identity = self.next_identity.max(next);
+                }
                 Service::BeginRecovery => {
                     if self.maintenance {
                         return Err(Status::BadCommand);

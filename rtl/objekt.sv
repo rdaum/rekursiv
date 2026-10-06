@@ -31,7 +31,7 @@ module objekt #(
     input logic [3:0] read_i, input logic load_vr_i, input logic [2:0] vr_i,
     input logic [23:0] alloc_size_i, input logic alloc_scan_i,
     input logic [39:0] data_i, input logic check_type_i, input logic [39:0] expected_type_i,
-    input logic svc_valid_i, output logic svc_ready_o, input logic [2:0] svc_op_i,
+    input logic svc_valid_i, output logic svc_ready_o, input logic [3:0] svc_op_i,
     input logic [39:0] svc_ref_i, input logic [39:0] svc_class_i,
     input logic [23:0] svc_base_i, input logic [23:0] svc_size_i,
     input logic [39:0] svc_repr_i, input logic [2:0] svc_flags_i,
@@ -109,6 +109,9 @@ module objekt #(
         .seed_i(seed_transfer),.seed_ref_i(svc_ref_i),.seed_base_i(svc_base_i),.seed_size_i(svc_size_i),
         .cursor_set_i(gc_commit || (svc_valid_i && svc_ready_o && svc_op_i==6 && maintenance && cursor_safe)),
         .cursor_i(gc_commit ? gc_cursor : svc_repr_i[24:0]),
+        .identity_floor_valid_i(svc_valid_i && svc_ready_o && svc_op_i==8 &&
+            svc_repr_i!=0 && svc_repr_i<=40'h2000000000),
+        .identity_floor_i(svc_repr_i[37:0]),
         .allocation_limit_i(gc_enable_i ? (gc_space ? 25'(MEMORY_WORDS) : 25'(MEMORY_WORDS/2)) : 25'(MEMORY_WORDS)),
         .required_size_o(gc_needed),.required_class_o(gc_needed_class),.saved_victim_o(saved_victim),
         .next_identity_o(dbg_next_identity_o),.body_cursor_o(dbg_body_cursor_o),
@@ -446,6 +449,8 @@ module objekt #(
                                 if(!maintenance) rsp_status_o<=BAD_COMMAND;
                                 else maintenance<=0;
                             end
+                            8: if(svc_repr_i==0 || svc_repr_i>40'h2000000000)
+                                rsp_status_o<=BAD_VALUE;
                             default: rsp_status_o<=BAD_COMMAND;
                         endcase
                     end

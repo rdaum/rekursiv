@@ -1271,7 +1271,8 @@ The architecture must remain usable by other object-oriented languages.
 
 The runtime preserves guest VM semantics while adapting storage to the project machine.
 The offline image importer and initial RTL bytecode interpreter are implemented.
-Method calls, the complete runtime, and image startup remain later work.
+Method lookup, sends, context activation, and normal returns execute in microcode.
+The complete runtime and image startup remain later work.
 The interpreter uses the [machine collector](docs/recovery.md).
 Language microcode must expose its roots through the generic machine root contract.
 
@@ -1375,10 +1376,10 @@ the port adds no transactional execution semantics.
 ### Implementation stages
 
 These stages describe the Smalltalk port and workstation work. Their numbering is separate from
-the earlier processor stages. Stages 1 and 2 are implemented. Stages 3–7 remain planned.
+the earlier processor stages. Stages 1–3 are implemented. Stages 4–7 remain planned.
 All stages obey the hardware execution requirement.
-The next implementation scope is sends and contexts in stage 3.
-The first integrated milestone is stage 3: an imported message send and return that survives collection.
+The next implementation scope is the remaining interpreter and runtime semantics in stage 4.
+The stage 3 integration test sends messages, allocates guest objects, survives collection, and returns a live reference.
 
 #### ST-80 stage 1: Image contract and importer
 
@@ -1412,12 +1413,12 @@ The preserved Version 2 distribution includes reference traces, as described by 
 
 Implemented in [standalone interpreter microcode](microcode/smalltalk/interpreter.uc).
 The [execution contract](docs/smalltalk-execution.md) defines supported bytecodes, state locations,
-terminal results, and the boundary before method lookup. The simulator wrapper now has 512 control words.
+terminal results, and the boundary before method lookup. Stage 2 expanded the simulator wrapper to 512 control words.
 Independent guest tests compare context IP, temporaries, and stack contents at each bytecode boundary.
 Tests execute original Xerox `Object>>isNil` and `Object>>notNil` methods, plus converted fixtures.
 A forced refill exercises machine collection and retries while interpreter references remain live.
-Failed arithmetic preserves its operands and stops explicitly; later stages supply message-send fallback.
-Root-method return terminates the test activation. Calls and non-local returns remain subsequent work.
+Stage 2 preserved operands on arithmetic failure and supported root-method return.
+Stage 3 adds message-send fallback and normal calls. Non-local returns remain later work.
 
 - Write standalone interpreter sources under `microcode/smalltalk/`.
 - Fetch bytecodes from the active compiled-method object through OBJEKT.
@@ -1433,6 +1434,25 @@ Independent guest tests compare bytecode boundaries, stack contents, branches, a
 Rust callbacks must not execute unsupported bytecodes or arithmetic operations.
 
 #### ST-80 stage 3: Sends, contexts, and collection
+
+Implemented in [send microcode](microcode/smalltalk/sends.uc) and the
+[execution contract](docs/smalltalk-execution.md). The interpreter now uses 663 microinstructions,
+with the machine collector at address 896 in a 1024-word control store.
+The halted service interface reserves imported identities through a generic allocator-floor control.
+
+Method lookup probes the guest dictionary, handles hash collisions, and traverses superclasses.
+Super sends start above the defining class from the method's final Association literal.
+Activation allocates a guest MethodContext, initializes it with guest nil, and transfers receiver and arguments.
+Normal returns invalidate the completed context's sender and IP, restore the caller, and push the result.
+Arithmetic failures enter method lookup. Other primitive methods can execute their Smalltalk fallback body.
+Pointer-format primitive 70 supplies guest allocation; the remaining primitive set belongs to stage 4.
+
+Tests cover nested sender chains, argument order, large contexts, escaped context objects, quick methods,
+missing methods, and argument mismatches. A converted send path makes 32 allocations, including its
+callee context, and returns a reference after allocation recovery and dirty eviction.
+A separate test preserves the original Xerox object graph and adds an isolated test receiver/context.
+It executes the original `ExternalStream class>>new` and `Behavior>>basicNew` methods through RTL,
+including refill recovery. Neither path issues host maintenance commands during execution.
 
 - Implement method-dictionary lookup, superclass traversal, sends, activation, and normal method returns in microcode.
 - Preserve contexts as guest-visible objects, including sender links, arguments, temporaries, and evaluation stacks.
@@ -1473,7 +1493,7 @@ Bytecode execution, drawing algorithms, scheduling, and GC must remain on the ma
 
 This work can start alongside interpreter development. It must finish before the workstation stage.
 
-- Expand the current 512-word control-store configuration as the interpreter requires.
+- Expand the current 1024-word control-store configuration as the interpreter requires.
 - Map the enlarged control store and suitable resident arrays to FPGA block RAM.
 - Preserve fetch timing, programming behavior, root inspection, and recovery across memory implementation changes.
 - Expand the current 24-bit physical address path to cover the card's RAM with a documented word-packing scheme.

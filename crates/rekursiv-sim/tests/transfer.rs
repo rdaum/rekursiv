@@ -532,3 +532,39 @@ fn modified_clean_object_replaces_backing_record_only_after_commit() -> Result<(
     }
     Ok(())
 }
+
+#[test]
+fn imported_identity_reservation_is_monotonic_and_does_not_publish_an_object() -> eyre::Result<()> {
+    use rekursiv_asm::{Command, Service, Status, Word};
+    let rt = rekursiv_sim::runtime()?;
+    let mut h = rekursiv_sim::Harness::new(&rt, rekursiv_sim::Timing::default(), None)?;
+    for next in [32768, 1, 30000] {
+        assert_eq!(
+            h.service(Service::ReserveIdentities(next))?.status,
+            Status::Ok
+        );
+        assert_eq!(h.rtl.dbg_next_identity_o, 32768);
+        assert_eq!(h.rtl.dbg_body_cursor_o, 0);
+        assert!(h.oracle.entries.iter().all(Option::is_none));
+    }
+    for next in [0, (1 << 37) + 1] {
+        assert_eq!(
+            h.service(Service::ReserveIdentities(next))?.status,
+            Status::BadValue
+        );
+        assert_eq!(h.rtl.dbg_next_identity_o, 32768);
+    }
+    let result = h.execute(Command::allocate(Word::reference(17, true)?, 1, true)?)?;
+    assert_eq!(result.status, Status::Ok);
+    assert_eq!(result.data.identity()?, 32768);
+    assert_eq!(
+        h.service(Service::ReserveIdentities(1 << 37))?.status,
+        Status::Ok
+    );
+    assert_eq!(
+        h.execute(Command::allocate(Word::reference(17, true)?, 1, true)?)?
+            .status,
+        Status::IdentityExhausted
+    );
+    Ok(())
+}

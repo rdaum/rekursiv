@@ -3,7 +3,8 @@ use crate::{Error, Result};
 use rekursiv_asm::{text, Word};
 
 pub const SOURCE: &str = include_str!("../../../microcode/smalltalk/interpreter.uc");
-pub const COLLECTOR_ENTRY: u16 = 384;
+pub const SENDS_SOURCE: &str = include_str!("../../../microcode/smalltalk/sends.uc");
+pub const COLLECTOR_ENTRY: u16 = 896;
 
 /// Assemble a root activation whose context and object graph are already
 /// converted. Loading must finish while the processor is halted. The context
@@ -13,7 +14,7 @@ pub fn assemble(active_context: Word) -> Result<text::Assembly> {
         return Err(Error("active context must be a stored object".into()));
     }
     let assembly = text::assemble(
-        SOURCE,
+        &format!("{SOURCE}\n{SENDS_SOURCE}"),
         0,
         &[("ACTIVE_CONTEXT", active_context.bits() as i64)],
     )

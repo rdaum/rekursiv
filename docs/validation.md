@@ -71,12 +71,16 @@ work.
 `cargo test --locked -p rekursiv-smalltalk --test execution` compares guest instruction boundaries
 against an independent test interpreter. The target executes standalone microcode on actual RTL.
 The checks cover stack and variable operations, branches, integer arithmetic, explicit failure,
-and context-root retention during machine collection. See the [execution contract](smalltalk-execution.md).
-`scripts/check-smalltalk-image.sh` also executes two original methods from the pinned Xerox image.
+and context-root retention during machine collection.
+`cargo test --locked -p rekursiv-smalltalk --test sends` covers lookup, activation, normal returns,
+argument transfer, quick methods, primitive fallback, and guest allocation under memory pressure.
+See the [execution contract](smalltalk-execution.md).
+`scripts/check-smalltalk-image.sh` also executes original methods from the pinned Xerox image, including a send to `Behavior>>basicNew`.
 
 ## FPGA resource estimate
 
-The following estimate predates the stage 2 increase to 512 control words. It is not a current resource estimate.
+The following estimate uses the original 256-word control store. The current wrapper has 1024 words.
+These figures are not a current resource estimate. `scripts/synth.sh` now checks the 1024-word LOGIK configuration.
 
 On 2026-10-06, Yosys 0.33 mapped the combined `objekt_tb` wrapper to Xilinx 7-series primitives. The
 configuration had 16 pager entries, 32 words per stack, 256 microinstructions, 256 NAM words, and

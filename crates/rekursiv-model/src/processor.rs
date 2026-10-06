@@ -4,7 +4,7 @@
 use rekursiv_asm::{processor::*, Command, Word};
 
 // Matches the simulation wrapper. Individual RTL modules remain parameterized.
-pub const CODE_WORDS: usize = 512;
+pub const CODE_WORDS: usize = 1024;
 pub const STACK_WORDS: usize = 32;
 pub const NAM_WORDS: usize = 256;
 

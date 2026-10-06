@@ -33,6 +33,14 @@ fn fixture(bytes: &[u8], literals: &[u16], temps: &[u16]) -> source::Image {
             },
         );
     }
+    objects.insert(
+        48,
+        source::Object {
+            oop: 48,
+            class: 16,
+            body: source::Body::Pointers((0..32).flat_map(|_| [ASSOCIATION, 3]).collect()),
+        },
+    );
     let header =
         layout::MethodHeader(0x81 | ((literals.len() as u16) << 1) | ((temps.len() as u16) << 8));
     let mut context = vec![
@@ -172,7 +180,7 @@ fn run_source(source: source::Image, force_collection: bool) -> Result<(Vec<Boun
             .all(|&v| v == layout::reference(layout::NIL).unwrap()),
         "dead stack slot retains a reference"
     );
-    if matches!(processor.rf[15], 3 | 4) {
+    if matches!(processor.rf[15], 3 | 4 | 6) {
         let slots = body[7..7 + sp]
             .iter()
             .map(|&w| target::source_oop(w))
@@ -182,7 +190,11 @@ fn run_source(source: source::Image, force_collection: bool) -> Result<(Vec<Boun
             "failure changed operand stack"
         );
     }
-    let result = h.oracle.state.vr[5];
+    let result = if processor.rf[15] == 1 {
+        h.oracle.state.vr[5]
+    } else {
+        rekursiv_asm::Word::ZERO
+    };
     Ok((
         boundaries,
         processor.rf[15],
@@ -327,7 +339,7 @@ fn expected(bytes: &[u8], literals: &[u16], temps: &[u16]) -> (Vec<Boundary>, u3
                 let a = stack[stack.len() - 2];
                 let b = stack[stack.len() - 1];
                 if a & 1 == 0 || b & 1 == 0 {
-                    return (trace, 3, 0);
+                    return (trace, 6, 0);
                 }
                 let a = i32::from((a as i16) >> 1);
                 let b = i32::from((b as i16) >> 1);
@@ -353,7 +365,7 @@ fn expected(bytes: &[u8], literals: &[u16], temps: &[u16]) -> (Vec<Boundary>, u3
                     _ => unreachable!(),
                 };
                 let Ok(oop) = layout::integer_oop(result) else {
-                    return (trace, 3, 0);
+                    return (trace, 6, 0);
                 };
                 stack.pop();
                 *stack.last_mut().unwrap() = oop;
@@ -473,9 +485,7 @@ fn integer_fast_paths_preserve_arguments_on_type_and_range_failure() -> Result<(
 
 #[test]
 fn unsupported_operations_and_non_boolean_branches_stop_explicitly() -> Result<()> {
-    for opcode in [
-        125, 126, 127, 131, 132, 133, 134, 138, 143, 185, 186, 187, 188, 189, 192, 208, 255,
-    ] {
+    for opcode in [125, 126, 127, 138, 143] {
         compare(&[opcode], &[], &[])?;
     }
     for bytes in [&[117, 152][..], &[112, 168, 0], &[115, 172, 0]] {

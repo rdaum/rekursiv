@@ -417,6 +417,11 @@ impl<'a> Harness<'a> {
         self.rtl.svc_valid_i = 1;
         self.rtl.rsp_ready_i = 0;
         match s {
+            Service::ReserveIdentities(next) => {
+                ensure!(next < 1 << 40, "identity floor exceeds wire width");
+                self.rtl.svc_op_i = 8;
+                self.rtl.svc_repr_i = next;
+            }
             Service::ReadMemory { address } => {
                 ensure!(address < ADDRESS_LIMIT, "address exceeds wire width");
                 self.rtl.svc_op_i = 4;

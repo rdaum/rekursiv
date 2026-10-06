@@ -335,6 +335,9 @@ impl Entry {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Service {
+    /// Raise the allocator floor while stopped, without publishing an object.
+    /// The exhausted sentinel (2^37) is permitted; identities are never reused.
+    ReserveIdentities(u64),
     ReadMemory {
         address: u32,
     },

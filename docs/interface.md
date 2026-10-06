@@ -155,7 +155,7 @@ preserved backing store is not implemented.
 ## Halted service interface
 
 All service operations return through the same response channel as commands. Service inputs have the
-widths in `rtl/objekt.sv`. Only the inputs listed below affect each service operation.
+widths in `rtl/objekt.sv`. `svc_op_i` is four bits. Only the inputs listed below affect each service operation.
 
 | `svc_op_i` | Operation                                 | Inputs                                                                              |
 | ---------: | ----------------------------------------- | ----------------------------------------------------------------------------------- |
@@ -167,6 +167,7 @@ widths in `rtl/objekt.sv`. Only the inputs listed below affect each service oper
 |          5 | Begin recovery and lock the mutator       | None                                                                                |
 |          6 | Set the body cursor during recovery       | `svc_repr_i`, interpreted as an unsigned cursor                                     |
 |          7 | End recovery and release the lock         | None                                                                                |
+|          8 | Reserve existing identities               | `svc_repr_i`, interpreted as the next-identity floor |
 
 Install requires canonical object and class references. Empty objects must have nil representation.
 Installation publishes one complete entry and refreshes a matching selected snapshot. It also
@@ -175,11 +176,16 @@ reference leaves the selection unchanged; later uses must revalidate it. Invalid
 full reference match, including its scan bit. Updating a compact-class mapping also updates a
 matching selected compact value.
 
+ReserveIdentities raises the allocator floor without publishing an object or changing the body cursor.
+It accepts values from 1 through `2^37`, including the exhausted sentinel. Smaller requests never lower
+the current floor. Zero or larger values return `BadValue` without changing allocator state.
+The transfer engine applies this control only through an accepted halted service request.
+
 The initialization service is privileged. The host must install body words before metadata, supply
 the actual first word as representation, and avoid overlapping live object bodies. Class references
 need not themselves be resident. Boot code must account for all existing identities before
-allocation, including class objects and nonresident records. The current bootstrap installs existing
-objects before starting the mutator. Installation permits metadata with unavailable physical spans;
+allocation, including class objects and nonresident records. A halted loader can reserve their identity
+range with operation 8, then install only the initial resident objects before starting the mutator. Installation permits metadata with unavailable physical spans;
 field accesses reject such addresses when used. This supports explicit bounds testing without
 truncating metadata.
 
@@ -375,7 +381,7 @@ distinguish book evidence from project choices and explain timing at each state 
 
 ### Configuration and loading
 
-The simulation wrapper supplies 512 microinstructions, 256 NAM words, 1024 CSMAP entries, and 32
+The simulation wrapper supplies 1024 microinstructions, 256 NAM words, 1024 CSMAP entries, and 32
 words per stack. LOGIK parameters permit other capacities; control-store capacity ranges from 2
 through 65535 words. NAM capacity ranges from 2 through 65536 words. Stack capacity ranges from 2
 through 65536 words for the supplied debug interface. Addresses remain 16 bits for microcode and 24

@@ -19,6 +19,7 @@ module objekt_transfer #(
     input logic seed_i, input logic [39:0] seed_ref_i,
     input logic [23:0] seed_base_i, input logic [23:0] seed_size_i,
     input logic cursor_set_i, input logic [24:0] cursor_i,
+    input logic identity_floor_valid_i, input logic [37:0] identity_floor_i,
     input logic [24:0] allocation_limit_i,
     output logic [23:0] required_size_o, output logic [39:0] required_class_o, output logic saved_victim_o,
     output logic [37:0] next_identity_o, output logic [24:0] body_cursor_o,
@@ -105,6 +106,10 @@ module objekt_transfer #(
             // Seeding raises high-water marks; recovery can lower only the body
             // cursor after checking every surviving body's end address.
             if (cursor_set_i) body_cursor_o <= cursor_i;
+            // Boot reservation is monotonic and independent of heap residency.
+            // A sparse imported object table must not collide with allocation.
+            if (identity_floor_valid_i && next_identity_o < identity_floor_i)
+                next_identity_o <= identity_floor_i;
             if (seed_i) begin
                 if (next_identity_o <= {1'b0, seed_ref_i[36:0]})
                     next_identity_o <= {1'b0, seed_ref_i[36:0]} + 38'd1;

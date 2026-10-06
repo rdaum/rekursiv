@@ -109,7 +109,8 @@ Reversible `asOop`/`asObject` behavior for identities beyond the original oop ra
 runtime decision. It must not truncate a machine identity and silently alias another object.
 
 The output reserves the original 15-bit identity namespace and requires `next_identity = 32768`.
-The later halted loader must establish that allocator floor before guest allocation.
+The halted loader establishes this floor with `Service::ReserveIdentities(32768)` before guest allocation.
+The generic control reserves identities without creating a dummy object or loading the full heap.
 This metadata is not permission for a host callback to allocate identities during execution.
 
 New scanned machine fields initially contain machine nil. Runtime allocation routines must replace
@@ -221,5 +222,5 @@ method literals, primitive extensions, and all 32,768 SmallInteger values.
 Negative tests cover invalid flags, truncated files, bad extents, dangling references, unsupported
 profiles, malformed methods, and nonzero padding.
 
-Stage 1 ends at verified conversion. The [stage 2 interpreter](smalltalk-execution.md) executes converted
+Stage 1 ends at verified conversion. The [interpreter](smalltalk-execution.md) executes converted
 methods through RTL. A full image run still needs larger memory and the remaining runtime operations.
