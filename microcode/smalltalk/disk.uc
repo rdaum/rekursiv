@@ -1,3 +1,19 @@
+; Snapshot target registration only: primitive 135, two arguments, result self.
+; Despite the filename, no disk transfer or snapshot writer is implemented here.
+; Primitive 128 and unimplemented snapshot operations follow guest fallback in
+; sends.uc; registering a target does not make those operations succeed.
+;
+; Argument order: serial byte object, virtual leader address. unsigned40_value
+; in lowspace.uc decodes the leader, then this routine restricts it to 0..65535.
+; Serial requires exactly four raw bytes (descriptor 18, physical size 5), with
+; full-word comparisons rejecting tagged values that merely have byte payloads.
+;
+; Build Array class 8, physical size 7, descriptor 48; components 2..5 contain
+; serial bytes as SmallIntegers, 6/7 contain leader low14/high2. input_buffer_load
+; may allocate root29 state, so VR4 roots the new registration across that call.
+; R7 is its return address (different from unsigned40_value's R6). Store into
+; private-state component 40 only when complete, then clock_result returns self.
+;
 ; AltoFile storage policy belongs to the language runtime. Primitive 135
 ; selects the four-byte serial number and unsigned 16-bit virtual leader page
 ; for a later snapshot; it does not write an image or invoke a host filename

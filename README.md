@@ -129,7 +129,9 @@ cargo run --locked -p rekursiv-sim -- \
 
 Open the VCD file in a waveform viewer such as GTKWave. The [assembler guide](docs/assembler.md)
 describes the source syntax, labels, control fields, and image directives. The programs in
-[microcode/](microcode/) include both examples and the RAM collector.
+[microcode/](microcode/) include both examples and the RAM collector. The
+[microcode program guide](microcode/README.md) maps every runtime module and documents calling
+conventions, object layouts, roots, and execution paths.
 
 Run all examples, including the individual object-memory demonstrations:
 

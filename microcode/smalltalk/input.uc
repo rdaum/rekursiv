@@ -1,3 +1,25 @@
+; Entry map: 90 mousePoint (no arguments), 91 cursor position (Point),
+; 92 cursor link (Boolean), 94 sample interval (0..16383), 95 next input word
+; (no arguments). Primitive 93 registration and boundary dispatch are in events.uc.
+; Successful setters return receiver through clock_result; empty word reads and
+; invalid primitive operands take R15 fallback. Malformed external packets halt.
+;
+; The same module owns a 16-word ring and translates device packets into guest
+; 16-bit words: type 1 motion -> 0x1000|x, 0x2000|y; type 2 down -> 0x3000|code;
+; type 3 up -> 0x4000|code. Prepend elapsed milliseconds (0..4095), or absolute
+; 0x5000, high16, low16. Coordinates clamp to 0..4095; key codes must fit 12 bits.
+; The saved timestamp determines when to rebase, keeping guest accumulated deltas
+; within SmallInteger range. Up to five words require reservation before dequeue.
+;
+; input_buffer_load lazily creates/returns selected root29 state in VR3 via R7;
+; R0, SYMBOL, IDX/Object and selection are scratch. It preserves other numeric
+; registers and VR4..VR7, allowing bitmap and snapshot registration to share it.
+; input_append stores R2's unsigned word at tail R5 and advances modulo 16;
+; return via R6, clobber R0/R5/R7/ESTKR/IDX/Object, preserve packet fields and Q.
+; It writes data only; input_packet_publish updates counts before consuming the
+; physical packet and acknowledging its notification. A full ring defers input
+; while allowing timer/storage events and guest execution to proceed.
+;
 ; Pointer primitives use generic signed 32-bit device registers. This runtime
 ; represents Point coordinates as signed 15-bit SmallIntegers; out-of-range
 ; coordinates enter guest fallback. Validation precedes allocation or writes.
@@ -34,8 +56,9 @@ mouse_allocate:
     d=Estk, mem=Write
     seq=Jump, brch=send_result
 
-; Fetch the one argument into VR3 and select it. Preserve the send receiver in
-; VR6; use numeric R6 as the continuation. No host decodes a Point or Boolean.
+; Fetch the one argument into VR3 and return it in Object. The caller context
+; stays selected; cursor_point fetches the argument when needed. Preserve the
+; send receiver in VR6; R6 is the continuation. No host decodes guest values.
 input_argument:
     ra=1, s=Branch, brch=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed

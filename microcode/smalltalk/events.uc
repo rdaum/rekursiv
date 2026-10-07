@@ -1,3 +1,21 @@
+; Boundary dispatcher and primitive 93 input semaphore registration.
+; check_device_events runs after pending switches and low-space checks. Drain
+; already-buffered input notifications first, then inspect counted device IRQs.
+; Input packet handling lives in input.uc. Timer delivery releases root28 once;
+; storage notification uses root29 component 2 (currently a reserved recipient).
+;
+; For a non-nil recipient, scheduler_load receives VR6, R0=85 and R1=1. It must
+; return to event_delivered, not send_result: an asynchronous signal has no caller
+; operands. event_delivered clears scratch VRs and revisits check_process_switch
+; before checking more events. Unknown status bits or inconsistent input IRQs
+; stop through bad_state. Device faults remain machine faults.
+;
+; If no events remain, root31 chooses cycle versus scheduler_idle. Idle polls
+; Interrupt while retiring microinstructions, allowing debugger stops and device
+; progress. Primitive 93 accepts one Semaphore-or-nil argument and returns the
+; receiver; it replaces root27 only after validation. It does not clear queued
+; input words; subsequent notification delivery uses the new registration.
+;
 ; Machine event delivery. Devices expose counted notifications, never guest
 ; references. Status 0x100 has bits input/timer/storage. A write to
 ; 0x104 consumes one notification from each selected source. A simultaneous

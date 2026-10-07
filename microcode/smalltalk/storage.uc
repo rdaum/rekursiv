@@ -1,3 +1,24 @@
+; Heap construction and binding exchange; this file does not perform disk I/O.
+; Primitive 70 new takes no arguments; 71 new: takes an indexed count; 72 become:
+; takes the other object; 79 newMethod:header: takes byte count then header.
+; Success uses VR5/send_result; validation failures use R15/primitive_failed.
+;
+; Class component 4 is the tagged instance specification: low 11 bits fixed
+; fields, bit 12 indexable, bit 13 words, bit 14 pointers. new requires a fixed
+; class; new: requires indexability and accepts an unsigned 16-bit count through
+; positive_value. R2 selects descriptor kind, R4 total fields, R6 physical size
+; including descriptor, R7 initialization cursor, R10 fixed count.
+; All guest allocations here use scan=1. Raw descriptors/digits do not look like
+; references, while pointers must be replaced with stored guest NIL before use.
+;
+; newMethod requires specification 0x1000 (indexable bytes, no fixed fields).
+; VR3 roots the tagged header, R11 its literal count, R4 byte count. Allocate
+; 2+literal_count+byte_count components; initialize literals to NIL and bytes to
+; zero. Header-derived guest length still reserves two bytes per tagged prefix
+; word, despite wider physical components. VR6 itself supplies the allocated
+; object's class, allowing compatible subclasses. become delegates atomic publication
+; to generic Exchange; it does not walk or rewrite references in microcode.
+;
 ; Object allocation uses class instance specifications from guest memory. The
 ; allocator sees only a class reference, physical size, and generic scan flag.
 ; Pointer fields start at guest nil; byte/word fields start at raw zero.
@@ -65,6 +86,8 @@ new_allocate:
     ra=2, s=Branch, brch=2, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=new_descriptor
     ra=0, shift=Left, rb=0, ldrb
+; R0 holds encoded byte length: pointer/word counts contribute 8 per field,
+; byte counts 4. OR in kind R2, then initialize components 2 through R6.
 new_descriptor:
     ra=0, rb=2, alu=Or, ldq
     d=1, idx=Load
@@ -122,6 +145,8 @@ primitive_new_method:
     mem=Read
     d=Object, ldsym
     d=new_method_count, r=Bus, rb=6, ldrb, seq=Jump, brch=positive_value
+; Keep the rooted header VR3 while allocation may collect. Physical prefix
+; is descriptor+header+literals, while guest prefix counts two bytes per word.
 new_method_count:
     ra=4, rb=11, alu=Add, ldq
     d=Q, r=Bus, s=Branch, brch=2, alu=Add, rb=6, ldrb

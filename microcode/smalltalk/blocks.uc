@@ -1,3 +1,24 @@
+; Shared context resolution, block primitives, and invalid-return sends.
+; primitive_block_copy implements 80 (one arity argument) and special bytecode
+; 200. primitive_value implements 81 and special 201/202 (arity comes from the
+; BlockContext). primitive_value_array implements 82 (one argument Array).
+;
+; A block owns caller/IP/SP/argument slots but shares its home MethodContext's
+; method, receiver and temporaries. blockCopy allocates the home's physical size
+; and starts at caller IP+2 to skip the compiler's long jump around the body.
+; value reuses the existing block, clears old slots, copies arguments, restores
+; initial IP, links caller, and enters load_context with VR0 set to the block.
+; The caller operands are consumed only after copying succeeds. valueWithArguments:
+; uses R2=1 and VR3=Array; ordinary value uses R2=0 and reads caller stack slots.
+;
+; context_home takes VR0 and returns VR3 via R6; it changes selection, Object,
+; SYMBOL and IDX but preserves arithmetic registers. It validates context classes;
+; malformed state stops through bad_state rather than ordinary primitive fallback.
+; cannot_return takes intended result VR5, appends active context plus result to
+; the guest stack, and sends fixed selector identity 22 via send_prepare. Room
+; for both entries is required. Method/nonlocal return target selection begins
+; in interpreter.uc, and sends.uc resumes a valid sender.
+;
 ; Blue Book contexts and block primitives. Guest blocks retain their home
 ; MethodContext; they own a separate caller/IP/SP/evaluation stack. The home
 ; supplies method, receiver, and temporary variables. All references remain in
@@ -157,6 +178,8 @@ block_store_argument:
     d=Symbol, mem=Write
     ra=7, s=Branch, brch=1, alu=Add, rb=7, ldrb
     seq=Jump, brch=block_copy_arguments
+; Reset block IP from initial IP, set SP to copied argument count, and link
+; the current caller. Only then clear caller operands and replace active VR0.
 block_activate:
     read=Vr, vr=5
     d=Object, page=Fetch

@@ -1,3 +1,25 @@
+; SmallInteger primitive dispatch and extended integer algorithms.
+; Primitive numbers: 1 +, 2 -, 3 <, 4 >, 5 <=, 6 >=, 7 =, 8 ~=, 9 *,
+; 10 exact /, 11 floor remainder, 12 floor //, 13 truncating quotient,
+; 14 bitAnd:, 15 bitOr:, 16 bitXor:, 17 bitShift:, 18 make Point (@).
+; All take one argument. Except @, operands must be compact signed integers;
+; numeric results must fit -16384..16383 or the guest method handles fallback.
+;
+; 1..9 and 14..15 select the arithmetic kernels in interpreter.uc through
+; R13's special-bytecode codes. R13=0 selects integer_extended after the same
+; tag checks. That entry receives decoded receiver R4 and argument R5.
+; Q carries numeric results to integer_result, which range-checks, tags, and
+; returns through send_result when R15 is a primitive failure continuation.
+;
+; Division uses magnitudes for a fixed 15 steps, then restores signs. Exact /
+; fails on a remainder. Floor quotient decrements a negative truncated quotient
+; when division was inexact; modulo has the divisor's sign. Division by zero
+; fails before mutation. Right shifts sign-extend and saturate the count at 31;
+; left shifts of nonzero operands reject counts above 14 and check final range.
+; Scratch R2..R7/R10/R13 is numeric only; VR0/VR6/VR7 keep caller and fallback
+; roots. R8/R9 and R1 survive. Point construction additionally roots its second
+; coordinate in VR3 before allocation and accepts noninteger coordinates too.
+;
 ; SmallInteger primitives 1..18. Arithmetic stays in NUMERIK microcode. R0 is
 ; the primitive number, R1 the send arity, R15 the failure continuation. The
 ; shared arithmetic path validates full compact tags and signed 15-bit results.
@@ -45,6 +67,8 @@ integer_divide_start:
     d=0, r=Bus, rb=4, ldrb
     d=0, r=Bus, rb=5, ldrb
     d=15, r=Bus, rb=10, ldrb
+; Shift one dividend bit into the remainder; subtract divisor when it fits
+; and set the new quotient bit. The 15-bit guest magnitude bounds the loop.
 integer_divide_bit:
     ra=4, shift=Left, rb=4, ldrb
     ra=5, shift=Left, rb=5, ldrb
@@ -78,6 +102,8 @@ integer_quotient_sign:
     ra=4, s=Branch, brch=1, alu=Sub, cin=One, rb=4, ldrb
 integer_quotient_result:
     ra=4, ldq, seq=Jump, brch=integer_result
+; For opposite signs and nonzero remainder use |divisor|-remainder, then
+; apply divisor sign (R2 XOR original dividend R3 recovers that sign).
 integer_modulo:
     ra=5, flags
     seq=ConditionalJump, cc=Zero, brch=integer_remainder_result

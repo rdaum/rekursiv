@@ -1,3 +1,30 @@
+; Execution phases and continuation contracts:
+;   primitive_bitblt/bb_fields  save caller, decode fourteen receiver fields;
+;   bb_form                    validate Form metadata and bitmap extent;
+;   bb_clip                    intersect x then y intervals; empty => success;
+;   bb_pass_start              pass 0 checks every accessed raw pixel word;
+;   bb_preflight_done          choose direct pass 1 or alias snapshot pass 2;
+;   bb_staged/bb_merge_word    merge saved sources after alias snapshot;
+;   bb_refresh                 patch matching registrations or replace frame;
+;   bb_success/bb_failed       restore IP/SP and release private frame roots.
+;
+; The Boolean dispatch is address arithmetic: bb_rule0 + 3*rule. Each rule MUST
+; occupy exactly three instructions; seq=Continue lines are intentional padding.
+; Inputs there are R2 source, R3 old destination; Q returns the combined word.
+; The edge mask then merges only covered pixels before a prepared launched write.
+;
+; During traversal R8/R9 are row/word counters (caller values are saved),
+; R10 scratch cursor, R11 destination component or source column, R12 aligned
+; source, R13 shift/rule address, R14 halftone row. Helpers reuse R2..R7; their
+; local contracts below specify continuations. Frame slot21 is reused after
+; drawing to root destination bits while refresh repurposes VR3/VR4.
+;
+; Failures before drawing restore the original primitive call via bb_failed.
+; Once destination writes have completed, invalid refresh metadata must halt
+; through bad_state: guest fallback could otherwise repeat a destructive rule.
+; See ../../docs/smalltalk-primitives.md#bitblt for the Boolean truth table and
+; ../README.md for the frame slot map and formulas used in traversal.
+;
 ; BitBlt primitive 96. All decoding, clipping, source staging, Boolean
 ; operations and device refresh execute here. OBJEKT has no Form knowledge.
 ;
@@ -301,6 +328,8 @@ bb_stage_mask:
     ra=3, s=Bus, d=0xffff0000, alu=And, flags
     seq=ConditionalJump, cc=!Zero, brch=bb_invalid
     seq=Jump, brch=bb_stage_next
+; Read rule from rooted frame and branch into fixed-width rule table. Keep
+; prepared destination address across all local Boolean and edge-mask work.
 bb_direct_merge:
     d=4, esp=Bus
     estk=Read
@@ -419,6 +448,8 @@ bb_merge_word:
     mem=Read, prepared
     d=Object, r=Bus, rb=3, ldrb
     d=Register, ra=13, seq=Bus
+; Three words per rule, including explicit no-ops. Never remove padding:
+; both direct and snapshot paths compute this table address rather than lookup.
 bb_rule0:
     d=0, r=Bus, ldq
     seq=Continue
@@ -731,6 +762,8 @@ bb_source_zero:
 ; 32-bit groups when geometry matches, otherwise a complete frame. The
 ; external endpoint accepts pixel words and knows nothing about guest Forms.
 ; R1 scans private-state components 38/39 and survives validation/upload.
+; Drawing is complete. Repurpose scratch slot21 for the destination bitmap
+; identity, then inspect cursor/display registrations independently.
 bb_refresh:
     read=Vr, vr=3
     d=21, esp=Bus

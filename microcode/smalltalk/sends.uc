@@ -1,3 +1,25 @@
+; Message-send engine shared by bytecode handlers and runtime-generated sends.
+; Entry send_prepare needs VR4 selector, R1 arity, R2 super flag, R13 opcode,
+; and valid caller caches R8..R14. It finds VR6 at component R9-R1+7 of VR0.
+; Set R13=0 for synthetic sends so a stale opcode cannot select a fast primitive.
+;
+; Flow: decode selector -> save caller -> optional special primitive -> class
+; lookup -> header decoding -> quick result / primitive / context activation.
+; Lookup is bounded per dictionary, then follows superclass links. Dictionaries
+; must have power-of-two selector capacity; this code assumes a valid class
+; hierarchy. No method cache is maintained, so flushCache is a successful no-op.
+;
+; Primitive ABI: R0 number, R1 arity, VR6 receiver, VR7 fallback method,
+; R8/R9 advanced caller IP/SP, R15 failure microaddress. Success normally places
+; a rooted value in VR5 and enters send_result; failure enters primitive_failed,
+; which jumps via R15. Special sends fail back to lookup; method primitives fail
+; to primitive_method_failed, which reloads the header before activation.
+;
+; send_result consumes receiver plus R1 arguments, reloads the caller caches,
+; and pushes VR5. Block activation, perform, and system stops have their own
+; completion paths. No validation failure may discard the original operands.
+; See ../README.md for the primitive-to-module map and common helper contracts.
+;
 ; Sends, lookup, activation and ordinary MethodContext returns.
 ; This source is assembled together with interpreter.uc. All guest reads and
 ; writes use OBJEKT; the host neither traverses dictionaries nor builds frames.
@@ -16,6 +38,7 @@
 ; Failed lookup constructs a guest Message through messages.uc. Only a missing
 ; doesNotUnderstand: handler stops with status 6. Argument mismatch uses status 7.
 
+; Opcodes 208..255: low nibble selects literal; (opcode-208)>>4 is arity.
 send_literal:
     ra=13, s=Bus, d=15, alu=And, rb=4, ldrb
     ra=13, s=Branch, brch=208, alu=Sub, cin=One, shift=Right, rb=1, ldrb
@@ -23,6 +46,7 @@ send_literal:
     ra=1, shift=Right, rb=1, ldrb
     ra=1, shift=Right, rb=1, ldrb
     d=0, r=Bus, rb=2, ldrb, seq=Jump, brch=send_selector
+; 131/133 use one extension: low5 literal index, high3 arity; 133 is super.
 send_single:
     ra=13, s=Branch, brch=133, alu=Sub, cin=One, flags
     d=0, r=Bus, rb=2, ldrb
@@ -38,6 +62,7 @@ single_descriptor:
     ra=1, shift=Right, rb=1, ldrb
     ra=1, shift=Right, rb=1, ldrb
     seq=Jump, brch=send_selector
+; 132/134 use two extension bytes: arity then literal index; 134 is super.
 send_double:
     ra=13, s=Branch, brch=134, alu=Sub, cin=One, flags
     d=0, r=Bus, rb=2, ldrb
@@ -144,6 +169,9 @@ super_class:
 ; Linear probing starts at identity_hash & (capacity-1), and wraps exactly
 ; once. The dictionary has two fixed fields followed by a power-of-two table.
 ; Its parallel method Array starts at guest field zero (physical component 2).
+; Class component 2 is superclass, 3 dictionary. Dictionary component 2 is
+; its tally (unused here), 3 method Array, 4 onward selectors. Capacity is
+; physical size-3. R0=mask, R3=capacity, R4=probe, R5=remaining probes.
 lookup_class:
     read=Vr, vr=3
     d=NIL, ldsym
@@ -186,6 +214,9 @@ superclass:
     d=2, idx=Load
     mem=Read
     d=Object, ldvr, vr=3, seq=Jump, brch=lookup_class
+; Use the same zero-based probe in the parallel method Array (component +2).
+; VR7 replaces that temporary array role with the selected method. perform
+; intercepts here before any quick method or primitive can change operands.
 method_found:
     d=3, idx=Load
     mem=Read
@@ -241,10 +272,14 @@ method_found:
 quick_self:
     read=Vr, vr=6
     d=Object, ldvr, vr=5, seq=Jump, brch=send_result
+; Flags 0..4 encode argument count directly. Flags 5/6 are zero-argument
+; quick self/field returns; flag 7 uses the next-to-last literal extension.
 normal_header:
     ra=2, rb=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=argument_mismatch
     seq=Jump, brch=activate
+; Extension payload low8 is primitive number; bits 8..12 are arity.
+; At least two literals are needed: extension and defining-class Association.
 extended_header:
     ra=5, s=Bus, d=63, alu=And, rb=4, ldrb
     ra=4, s=Branch, brch=2, alu=Sub, cin=One, flags
@@ -393,6 +428,9 @@ primitive_method_failed:
     d=Object, r=Bus, rb=5, ldrb
     seq=Jump, brch=activate
 
+; R5 is the method header, VR7 the method, VR6 the receiver. Decode literal
+; count bits 0..5, frame-size bit 6, temporary count bits 7..11. Context sizes
+; 19/39 include descriptor and six fixed fields plus 12/32 stack slots.
 activate:
     ra=5, s=Bus, d=63, alu=And, rb=10, ldrb
     ra=5, shift=Right, rb=4, ldrb
@@ -417,6 +455,9 @@ context_size:
     d=Object, ldvr, vr=5
     ; Initializing all pointer fields replaces the allocator's machine NIL.
     d=2, r=Bus, rb=7, ldrb
+; Initialize through the final physical component before copying arguments.
+; Initial IP=2*literal_count+3 and initial SP=temporary_count; temporaries
+; include arguments, which must fit both the declared count and chosen frame.
 initialize_context:
     d=Register, ra=7, idx=Load
     d=NIL, mem=Write
@@ -494,6 +535,8 @@ clear_send_operands:
     d=Estk, mem=Write
     seq=Jump, brch=load_context
 
+; Object is the proposed sender/caller. A nil saved IP marks an inactive
+; return target and routes to cannot_return before modifying the outgoing frame.
 return_sender:
     ; Result and destination must both survive a destination refill.
     d=Object, ldvr, vr=7

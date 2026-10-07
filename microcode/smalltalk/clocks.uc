@@ -1,3 +1,22 @@
+; Primitive 98 writes the low32 seconds since 1901 into a byte argument;
+; 99 writes low32 monotonic milliseconds. Both take one argument and return the
+; receiver. clock_byte_target takes VR4, requires byte kind with at least four
+; physical byte components, and returns selected target via R6 (R7 scratch).
+; clock_store writes components 2..5 least-significant byte first, leaving any
+; trailing bytes untouched. R4 holds the count and R3 the four-byte countdown.
+; clock_result is shared with other modules: copy VR6 to VR5 then send_result.
+;
+; Primitive 100 takes Semaphore (or nil) and four-byte modular millisecond
+; deadline. VR3 roots recipient, VR4 byte target; R2 low deadline, R4/R5 sampled
+; low/high time. Reading 0x208 latches time for paired high read at 0x20c.
+; Use signed modular delta to interpret deadlines within half a 32-bit period.
+; A nonpositive delta arms at now; a positive wrap increments the high epoch.
+;
+; After validation, cancel old expiry (0x218=0), publish root28, write 64-bit
+; deadline at 0x210/214, arm (0x218=1). Nil cancels and clears the root without
+; validating the deadline object. No boundary dispatch can interleave these
+; steps. events.uc acknowledges expiry once and releases the registration.
+;
 ; Guest clock primitives use little-endian byte objects. The external device
 ; knows only UTC seconds, monotonic milliseconds, and an absolute 64-bit timer.
 ; Epoch conversion, byte packing, deadline expansion, and semaphore roots are

@@ -37,6 +37,9 @@ Overlapping code produces an error.
 
 ## Reading a microcode routine
 
+The [microcode program guide](../microcode/README.md) lists every source file, its entry points,
+shared helper contracts, and the runtime's physical object layouts and root conventions.
+
 Start with [the allocation example](../microcode/allocation.uc), then read
 [the Smalltalk interpreter](../microcode/smalltalk/interpreter.uc). Read its register convention
 before following the labels. [Message sends](../microcode/smalltalk/sends.uc) reuse several
@@ -244,8 +247,9 @@ The return path shown assumes a non-nil sender. A return from the diagnostic roo
 Quick methods and supported primitives can produce a result without allocating a new context.
 
 Keep [the interpreter's state and root conventions](smalltalk-execution.md) beside the source when
-tracing sends. The Smalltalk library assembles `interpreter.uc` and `sends.uc` together and installs
-the collector. Use its integration tests to execute complete examples:
+tracing sends. The Smalltalk library assembles all files under `microcode/smalltalk/` together; the
+processor image installs the collector alongside them. Use its integration tests to execute complete
+examples:
 
 ```sh
 cargo test --locked -p rekursiv-smalltalk --test execution

@@ -1,3 +1,26 @@
+; Primitive map: 75 asOop, 76 asObject, 77 someInstance, 78 nextInstance;
+; all take zero arguments. Results use VR5/send_result; absent identities and
+; end-of-enumeration use primitive_failed so guest fallback can supply policy.
+;
+; For asOop, require a stored reference (top tag bits 10). Split its identity
+; into R2 low32 and R3 high5; references themselves stay in SYMBOL/VRs.
+; asObject accepts a guest SmallInteger or up to five little-endian bytes of a
+; LargePositiveInteger. Codes 32768..65535 reconstruct immediate integers;
+; extended stored codes subtract 32768 and must fit the 37-bit identity range.
+; FindObject resolves identity to a canonical reference without fetching a body.
+;
+; identity_count is also a shared unsigned result constructor used by system.uc
+; and input.uc: enter with R2 low32/R3 high8, R1 original arity, R8/R9 caller
+; state. It chooses 1..5 digits, allocates class 14, writes descriptor 4*n+2 and
+; little-endian bytes, then returns through send_result. R4=digit count,
+; R5=count scratch, R6=physical size, R7=write cursor. identity_small_number
+; instead tags R2 directly; callers must already know it fits the guest range.
+;
+; Enumeration roots the desired class in VR3 and each candidate in VR5;
+; NextObject returns its class in VR4. It visits identities in ascending order,
+; including committed nonresident objects, and compares complete class values.
+; Machine nil 0xc000000000 is the directory miss sentinel, distinct from guest NIL.
+;
 ; Language identity conversion and instance enumeration. Generic directory
 ; commands return a canonical reference and its class without reading bodies.
 ; Full references are held in VRs/SYMBOL, never solely in NUMERIK registers.
@@ -96,6 +119,8 @@ identity_large_input:
     ra=4, s=Branch, brch=1, alu=Add, rb=7, ldrb
     d=0, r=Bus, rb=2, ldrb
     d=0, r=Bus, rb=3, ldrb
+; Consume digits most-significant first while shifting the 40-bit pair left
+; by eight; storage itself is little-endian. R7 counts physical components down.
 identity_read_byte:
     d=Register, ra=7, idx=Load
     mem=Read
@@ -131,6 +156,8 @@ identity_decode_extended:
     ra=2, s=Bus, d=32768, alu=Sub, cin=One, rb=2, ldrb, flags
     seq=ConditionalJump, cc=Carry, brch=identity_find
     ra=3, s=Branch, brch=1, alu=Sub, cin=One, rb=3, ldrb
+; Reject identity bits above bit 36. estk=Wide combines R3 high bits with
+; Q low bits as a numeric lookup key; FindObject supplies the canonical tag.
 identity_find:
     ra=3, s=Branch, brch=31, alu=SubReverse, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=primitive_failed

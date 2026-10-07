@@ -1,3 +1,24 @@
+; Primitive registration and shared presentation transport.
+; 101 beCursor and 102 beDisplay take no arguments and return the Form receiver.
+; Nonzero dimensions must fit positive SmallInteger range. Cursor dimensions
+; must equal its device capabilities; display dimensions may be at most maxima.
+; Malformed operands take R15 fallback before publication. Device I/O errors
+; fault the machine; they are not a request to run the guest method twice.
+;
+; Flow: decode Form -> validate all used bitmap words -> check capability ->
+; ensure private state -> bitmap_upload -> publish -> retain Form in root29.
+; Component 38 is cursor registration, 39 display. Full uploads preserve caller
+; R8/R9; R10..R14 are scratch caches later restored by send_result.
+;
+; Shared helpers bitmap_upload/bitmap_patch take R0 bank (0x410 or 0x510),
+; R2 width, R3 height, VR4 bits, R10 source stride, R11 device stride, R15 return.
+; R1 survives for BitBlt's registration cursor. Patch also requires BitBlt frame
+; slots 5..8; it clobbers R8/R9 and slot22. R6=0 replacement, R6=2 patch.
+; Pair high16 then low16, zero any absent half and mask final padding. Writes
+; go to staged device storage; control 1 publishes atomically after all rows.
+; After primitive validation has committed to upload, malformed transferred data
+; stops at bad_state. BitBlt invokes these helpers only after drawing completes.
+;
 ; Cursor/display registration (101/102). The receiver is a pointer Form whose
 ; first fields are bits, width, height, offset. Offset belongs to guest drawing
 ; policy and is not a hardware hotspot. Compatible Form subclasses work without

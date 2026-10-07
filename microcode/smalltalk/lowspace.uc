@@ -1,3 +1,23 @@
+; Primitive 116 takes Semaphore-or-nil, identity threshold, word threshold.
+; Validate both nonnegative integers before allocating/publishing the replacement
+; root30 Array. Identity threshold fits 37 bits, word threshold 32. Nil cancels
+; without inspecting thresholds. Success returns receiver through clock_result.
+; VR3/4/5 initially root semaphore/identity argument/word argument; R10/R11 keep
+; identity limbs and R12 word count during construction. VR5 then roots the Array.
+;
+; unsigned40_value is shared with disk.uc: SYMBOL -> R2 low32/R3 high8, return
+; via R6, scratch R4/R5/R7/Q/SYMBOL/ESTKR and object state. It accepts canonical
+; nonnegative SmallIntegers or a byte-format LargePositiveInteger of 1..5 raw
+; digits, with descriptor and physical length agreeing. Failure goes through R15.
+;
+; check_low_space is a boundary hook: preserve activation caches R8..R14 and
+; VR0..VR2. Compare identities first (no collection can recover monotonic IDs).
+; For insufficient free words, collect once via gc=Collect and reload thresholds
+; before resampling; R6 remembers that attempt across recovery. If still below,
+; root recipient in VR6, clear registration before signalling, and enter the
+; ordinary asynchronous scheduler path. Equality does not signal. No device IRQ
+; or host heap traversal is involved; low-space checks precede device events.
+;
 ; Low-space registration is a seven-field guest Array rooted in slot30:
 ; semaphore, identity threshold in three 14-bit chunks (low first), then word
 ; threshold in three chunks. Every chunk is an ordinary positive SmallInteger.

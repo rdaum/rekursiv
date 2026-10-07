@@ -1,3 +1,23 @@
+; Primitive map: 40 asFloat (SmallInteger receiver); 41 +, 42 -;
+; 43..48 <, >, <=, >=, =, ~=; 49 *, 50 /; 51 truncated, 52 fractionPart,
+; 53 exponent, 54 timesTwoPower:. Binary operations and 54 take one argument;
+; 40 and 51..53 take none. Binary operands require the exact Float class.
+;
+; Converted Float layout: component 1 descriptor 17 (four guest bytes, word
+; kind), component 2 high16 and component 3 low16 of the binary32 bits. float_load
+; checks that layout and excludes exponent 255 (infinities/NaNs). float_result
+; rejects FPU status bits 2..4 (overflow, divide-by-zero, invalid); underflow and
+; inexact results are permitted. Default rounding is nearest-even. Conversion
+; to integer truncates toward zero and then uses the guest SmallInteger bound.
+;
+; float_load returns R4 via R6; it clobbers R5, Q, SYMBOL, ESTKR and object state.
+; Compare produces relation bits less=1, equal=2, greater=4, used for Booleans.
+; Exponent extraction normalizes subnormals; exponent of zero is -1. Scaling
+; constructs exact normal results directly and uses one final FPU multiplication
+; for subnormal rounding. Zero scaling preserves its sign; fractionPart's zero
+; path constructs positive zero. Results allocate a scanned three-word Float
+; with raw numeric body fields; the generic collector ignores those raw words.
+;
 ; Smalltalk Float wrappers for generic NUMERIK binary32 operations. Object
 ; layout and primitive failure stay here. The FPU receives only raw bits.
 ; VR6 roots the receiver, VR7 the fallback method, VR5 the allocated result.
@@ -35,6 +55,8 @@ float_receiver_ready:
     mem=Read
     d=Object, ldsym
     d=float_argument_ready, r=Bus, rb=6, ldrb, seq=Jump, brch=float_load
+; Both finite operands are decoded. Arithmetic returns through float_result;
+; comparisons return guest Booleans and allocate no Float result.
 float_argument_ready:
     ra=4, rb=3, ldrb
     ra=0, s=Branch, brch=41, alu=Sub, cin=One, flags
@@ -206,6 +228,8 @@ float_result:
     alu=FloatStatus, rb=4, ldrb
     ra=4, s=Branch, brch=28, alu=And, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
+; R2 contains already-validated IEEE bits, even on direct scaling/zero paths
+; that bypass float_result. Root result before filling its descriptor and halves.
 float_allocate:
     d=0xa00000000a, page=Allocate, size=3, scan=1
     d=Object, ldvr, vr=5

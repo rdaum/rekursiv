@@ -1,3 +1,28 @@
+; Entries: primitives 85 signal, 86 wait, 87 resume, 88 suspend, 89 flushCache
+; (all zero arguments); scheduler_load also accepts asynchronous signal with
+; R0=85, R1=1, VR6=Semaphore. R1 distinguishes event delivery from guest sends.
+; For ordinary success return receiver, except suspend returns guest nil.
+; flushCache is a no-op because lookup has no cache. Invalid async state halts;
+; it has no guest primitive fallback. Some queue invariants are trusted.
+;
+; Processor association identity 4, component 3, roots the ProcessScheduler.
+; Queues are FIFO; priorities are one-based indices into its list Array. Signal
+; removes the first waiter or increments excessSignals; wait consumes an excess
+; signal or queues the active process. Resume queues equal/lower priority and
+; defers a higher-priority switch. Suspend accepts only the active process.
+; scheduler_choose scans priorities from highest to lowest, or marks root31 idle.
+;
+; queue_append: VR7 queue, VR5 process, R6 continuation; link at tail and set the
+; process's list. queue_remove: nonempty VR7 queue, return removed head in VR5
+; via R6; clear its next/list links and clear queue tail when the queue empties.
+; Both use SYMBOL/Object/IDX/selection and preserve caller numeric caches.
+;
+; check_process_switch consumes rooted ESTK slot1 only after caller IP/SP were
+; saved: save VR0 into old Process.context, replace Scheduler.active, take and
+; clear new Process.context, set VR0, reload caches. With no pending switch it
+; continues to low-space/event checks. Do not call it while a primitive's private
+; ESTK frame is active; SP is interpreted here as a pending-process indicator.
+;
 ; Guest ProcessScheduler, LinkedList, Process and Semaphore objects implement
 ; scheduling policy. Their pointer fields are ordinary OBJEKT components.
 ; Scheduler fields: lists=2, active=3. Process: next=2, context=3, priority=4,
@@ -206,6 +231,8 @@ scheduler_choose:
     d=Object, page=Fetch
     read=Size
     d=Object, r=Bus, s=Branch, brch=1, alu=Sub, cin=One, rb=3, ldrb
+; R3 descends through one-based priorities. An empty queue advances to the
+; next lower priority; queue_remove is called only after finding a head.
 scheduler_choose_priority:
     ra=3, flags
     seq=ConditionalJump, cc=Zero, brch=scheduler_no_runnable

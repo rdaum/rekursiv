@@ -1,3 +1,20 @@
+; Message construction for doesNotUnderstand: after a superclass-chain miss.
+; Entry lookup_failed inherits send state: selector VR4, receiver VR6, arity R1,
+; caller VR0, IP/SP R8/R9. perform lookup is special: before rewriting operands,
+; a miss redirects to perform_transform so Message gets the actual target args.
+;
+; Allocate Array class 8 with 1+arity physical words (descriptor 8*arity), copy
+; arguments in source order, then allocate Message class 16 with descriptor 16,
+; selector in component 2 and Array in component 3. VR7/VR5 root both allocations.
+; Only after both objects are initialized does this path clear original argument
+; slots, leave the receiver, and push the Message as the sole new argument.
+;
+; Restart send_prepare with selector identity 21, R1=1 and R2=R13=0. The original
+; selector survives in the Message. A miss for doesNotUnderstand: itself stops
+; with R15=6 through recursive_not_understood, preventing recursive error sends.
+; R6 allocation size and R7 copy/clear cursor are scratch; no host constructs
+; these guest objects or supplies a fallback answer.
+;
 ; Failed lookup constructs the guest Message and argument Array. No host error
 ; callback participates. Only a second miss for doesNotUnderstand: terminates.
 ; VR0/1/2 remain caller/method/receiver, VR4 selector, VR6 send receiver, VR7

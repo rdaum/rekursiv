@@ -1,3 +1,16 @@
+; Entries: primitive_stream for 65 next, 66 nextPut:, 67 atEnd. Arity is
+; zero except nextPut: (one). Physical stream components 2/3/4/5 hold collection,
+; position, readLimit, writeLimit; position counts already consumed elements.
+; The next item is collection component position+2, then position increments.
+;
+; next returns an Array element or the Character table entry for a String byte.
+; nextPut: returns its argument after storing the pointer or Character's byte.
+; Only those two concrete collection classes take this path. next/nextPut:
+; validate position against the operation's limit, physical collection length,
+; and SmallInteger capacity before storing. atEnd compares position>=readLimit
+; without advancing. Collection writes precede the position update; machine I/O
+; faults are processor faults, not transactional primitive fallback.
+;
 ; Blue Book stream primitives 65/66/67. The guest owns collection, position,
 ; readLimit, and writeLimit at fields 0/1/2/3. Only Array and String use this
 ; fast path. A failed check leaves both collection and position unchanged.

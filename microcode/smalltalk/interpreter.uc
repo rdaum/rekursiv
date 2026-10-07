@@ -1,3 +1,25 @@
+; Runtime entry and bytecode dispatch. This file and the other .uc files in
+; this directory form ONE assembly; none is an independently bootable image.
+; crates/rekursiv-smalltalk/src/interpreter.rs concatenates them, supplies
+; ACTIVE_CONTEXT, and reserves control addresses 8064 onward for the collector.
+; See ../README.md for the source map, physical layouts, and calling conventions.
+;
+; Control flow: start -> load_context -> boundary -> save_context -> scheduler
+; checks -> cycle -> fetch_byte -> decoded -> handler -> boundary. Sends and
+; returns may replace VR0 before reentering load_context. R15=16 is an internal
+; resume-result marker: reload caches, then push the result rooted in VR5.
+; R15 otherwise carries a stop status here, but a failure continuation in sends.
+;
+; Physical MethodContext components: 1 descriptor, 2 sender, 3 IP, 4 SP,
+; 5 method, 6 unused, 7 receiver, 8 onward temporaries/evaluation stack.
+; BlockContext uses 2 caller, 3 IP, 4 SP, 5 arity, 6 initial IP, 7 home.
+; R9 counts slots after component 7; top is component R9+7. Guest field zero
+; is normally component 2. Method literal zero is component 3, and bytecode
+; component = guest IP - literal count. Do not apply one offset to every kind.
+;
+; The map at the end covers all 256 bytes. Reserved bytes halt through
+; unsupported; missing primitive implementations instead execute guest methods.
+;
 ; Smalltalk-80 bytecode interpreter, Blue Book chapters 27-29.
 ; Language policy lives here; OBJEKT only sees generic tagged components.
 ;
@@ -23,8 +45,8 @@
 ; Every instruction boundary writes IP/SP into the context. Popped slots are
 ; cleared to guest nil. The whole context is scanned by the generic collector.
 ; A nil sender terminates a diagnostic root invocation. Ordinary returns clear
-; the finished context and resume its sender. blocks.uc supplies home/caller
-; resolution; messages.uc supplies failed-send and cannotReturn: delivery.
+; the finished context's sender/IP and resume its sender. blocks.uc supplies
+; home/caller resolution and cannotReturn:; messages.uc supplies failed sends.
 .equ NIL = 0xa000000001
 .equ FALSE = 0xa000000002
 .equ TRUE = 0xa000000003
@@ -37,6 +59,8 @@
 .root 31, 0   ; raw idle flag, never a guest reference
 start:
     d=ACTIVE_CONTEXT, ldvr, vr=0
+; Rebuild all activation caches from the rooted context. Only R15=16 preserves
+; VR5 for a pending result; a normal reload reaches boundary and releases it.
 load_context:
     read=Vr, vr=0
     d=Object, page=Fetch
@@ -52,6 +76,8 @@ load_context:
     d=Object, ldsym, r=Bus, rb=9, ldrb, estk=Compact, compact=2
     d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bad_state
     d=context_home_ready, r=Bus, rb=6, ldrb, seq=Jump, brch=context_home
+; VR3 is the home MethodContext. Its method and receiver supply block caches
+; as well as method caches. Descriptor length is guest bytes, not RAM words.
 context_home_ready:
     read=Vr, vr=3
     d=Object, page=Fetch
@@ -179,6 +205,8 @@ store_temporary:
     d=1, r=Bus, rb=2, ldrb
     d=2, r=Bus, rb=3, ldrb
     seq=Jump, brch=variable
+; Opcodes 128/129/130 become mode 0 push / 1 store / 2 store-and-pop.
+; The extension byte supplies kind in bits 6..7 and zero-based index in 0..5.
 extended:
     ra=13, s=Branch, brch=128, alu=Sub, cin=One, rb=3, ldrb
     d=extended_decoded, r=Bus, rb=7, ldrb, seq=Jump, brch=fetch_byte
@@ -190,6 +218,8 @@ extended_decoded:
     ra=2, shift=Right, rb=2, ldrb
     ra=2, shift=Right, rb=2, ldrb
     ra=2, shift=Right, rb=2, ldrb
+; R2 kind: 0 receiver, 1 home temporary, 2 literal, 3 literal Association.
+; Resolve and root a writable target in VR3; literals themselves are read-only.
 variable:
     ra=2, flags
     seq=ConditionalJump, cc=Zero, brch=receiver_target
@@ -251,6 +281,8 @@ access_variable:
     seq=ConditionalJump, cc=!Zero, brch=write_variable
     mem=Read
     d=Object, ldsym, seq=Jump, brch=push
+; peek selects the caller, so preserve the target index in R1 first. VR3
+; keeps the target alive and VR4 keeps the value alive while refetching it.
 write_variable:
     read=Index
     d=Object, r=Bus, rb=1, ldrb
@@ -345,6 +377,8 @@ return_home_ready:
 return_local:
     read=Vr, vr=0
     d=Object, page=Fetch
+; Selected object is the home method for nonlocal returns, active context
+; for bytecode 125. Component 2 supplies sender/caller; validate before unlinking.
 return_target:
     d=2, idx=Load
     mem=Read
@@ -357,6 +391,9 @@ return_target:
     d=Object, seq=ConditionalJump, cc=!Symbol, brch=cannot_return
     d=1, r=Bus, rb=15, ldrb, seq=Jump, brch=save_context
 
+; Short offsets are (opcode & 7)+1. Long unconditional offsets are
+; ((opcode & 7)-4)*256+extension, allowing backward branches. Conditional long
+; offsets are (opcode & 3)*256+extension; all are relative to advanced IP.
 short_jump:
     ra=13, s=Bus, d=7, alu=And, rb=1, ldrb
     ra=1, s=Branch, brch=1, alu=Add, rb=1, ldrb
@@ -388,6 +425,8 @@ scale_offset:
     d=Q, r=Bus, rb=1, ldrb
     ra=13, s=Branch, brch=168, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=apply_jump
+; peek leaves selected caller/top slot intact. Only full TRUE/FALSE identities
+; are accepted. A non-Boolean sends mustBeBoolean (identity 26) without popping.
 conditional:
     d=condition_value, r=Bus, rb=6, ldrb, seq=Jump, brch=peek
 condition_value:
@@ -500,6 +539,9 @@ false_result:
     d=FALSE, ldsym, seq=Jump, brch=arithmetic_result
 true_result:
     d=TRUE, ldsym
+; With R15=0 this is a bytecode fast path: arithmetic left IDX on receiver,
+; so replace it and clear the argument. Otherwise use the general primitive
+; result path to refetch caller state and consume exactly R1 arguments.
 arithmetic_result:
     ra=15, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_arithmetic_result

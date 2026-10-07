@@ -1,3 +1,21 @@
+; Dynamic sends: primitive 83 perform: with selector plus zero or more direct
+; arguments; 84 perform:withArguments: with selector and one Array. VR6 remains
+; the eventual receiver. R11 holds target arity; R12 temporarily holds primitive
+; 83/84; R10 later holds the old SP; R7 is the argument-copy cursor.
+;
+; Save the original primitive method and optional Array, then reuse sends.uc's
+; lookup with R15=perform_found as a sentinel. Read the found method's header,
+; including extended arity, before any caller operand changes. Arity mismatch
+; restores VR7 and the stack floor and activates the original primitive method.
+; A lookup miss instead enters perform_transform via messages.uc and lets an
+; ordinary send construct doesNotUnderstand: with the transformed arguments.
+;
+; Transformation removes the selector slot: copy direct args one slot downward
+; or expand Array contents into the caller, update R9 and R1, clear surplus slots,
+; restore R12, release private ESTK roots, and reenter send_prepare with R13=0.
+; The Array form checks available caller capacity before lookup. After operand
+; rewriting starts, failure cannot return to the original perform call.
+;
 ; Dynamic sends validate the target arity before changing caller operands.
 ; During lookup, expression-stack slot1 roots the original primitive method and
 ; slot2 roots the argument Array. ESP returns to zero so compact scratch writes
@@ -52,6 +70,8 @@ perform_save:
     d=perform_found, r=Bus, rb=15, ldrb
     d=0, r=Bus, rb=2, ldrb
     seq=Jump, brch=lookup_receiver_class
+; Lookup found VR7 without invoking it. Decode arity even for quick and
+; extended methods; on mismatch the original primitive stack is still intact.
 perform_found:
     read=Vr, vr=7
     d=Object, page=Fetch
@@ -133,6 +153,8 @@ perform_store_element:
     d=Symbol, mem=Write
     ra=7, s=Branch, brch=1, alu=Add, rb=7, ldrb
     seq=Jump, brch=perform_copy
+; New SP = old SP - original primitive arity + target arity. Clear only
+; slots above the new SP, then drop the private hardware-stack roots.
 perform_copied:
     ra=9, rb=1, alu=Sub, cin=One, ldq
     d=Q, r=Bus, s=Register, rb=11, alu=Add, ldq

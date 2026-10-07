@@ -1,3 +1,18 @@
+; Primitive 112 word capacity query uses FreeWords; primitive
+; 115 identity capacity uses FreeIdentities. Both require zero arguments and
+; return an unsigned guest integer. R2/R3 hold low32/high8; large results share
+; identity_count in identities.uc, so even a 37-bit count retains every bit.
+; FreeWords counts the allocator's available tail, not all reclaimable garbage.
+; Capacity primitives do not request collection just to measure free space.
+;
+; Primitives 113 quit and 114 debugger also take zero arguments. They materialize
+; the already-advanced caller IP/SP, root the receiver in VR5, and stop with R15
+; 10 (halt) or 11 (resumable Service). The receiver already occupies its zero-arg
+; send result slot. system_debugger_resume resets R15 and enters load_context;
+; it must continue after the completed send, not dispatch the primitive again.
+; These status values are language runtime diagnostics, separate from OBJEKT
+; command error codes. See ../../docs/smalltalk-execution.md for stop inspection.
+;
 ; System primitives retain the hardware/language boundary: capacity comes from
 ; generic OBJEKT reads; guest integer construction executes here. Counts are a
 ; snapshot before allocating any LargePositiveInteger used to return the value.

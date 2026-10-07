@@ -1,3 +1,23 @@
+; Primitive map: 60 at:, 61 at:put:, 62 size, 63/64 String at:/at:put:,
+; 68/69 CompiledMethod objectAt:/objectAt:put:, 73/74 instVarAt:/instVarAt:put:.
+; Guest indices are one-based. Ordinary indexed access skips the fixed-field
+; count from class component 4; instVar access starts at the first body field.
+; Pointer reads preserve all 40 bits. Word results are unsigned 16-bit integers;
+; String reads use Character table identity 25 and writes extract Character code.
+;
+; The descriptor is (guest_byte_length << 2) | kind: pointers=0, words=1,
+; bytes=2, method=3. For pointer/word kinds divide guest bytes by two for length.
+; R11 becomes the translated physical component after preserving the fixed count
+; across positive_value. For method bytes require index >= 2*literal_count+3,
+; then component=index-literal_count. The reserved header/literal byte prefix has
+; no byte view. objectAt: uses full tagged components and header writes fail.
+;
+; Helpers exported here: positive_value takes SYMBOL and returns unsigned
+; 0..65535 in R4 via R6 (R7 scratch); errors use primitive_failed/R15.
+; positive_result takes R4, returns VR5 through send_result, allocating a
+; LargePositiveInteger for 16384..65535. It is a final primitive result path,
+; not a subroutine. Its two raw little-endian bytes follow descriptor 10.
+;
 ; Indexed access translates guest indices through the language-owned descriptor.
 ; R0 primitive, R1 arity, R2 physical kind, R3 logical length, R4 index/value,
 ; R10 read(0)/write(1)/size(2), R11 physical index. Caller caches are restored by
@@ -66,6 +86,8 @@ indexed_method_fields:
     d=0, r=Bus, rb=2, ldrb
 indexed_fixed_zero:
     d=0, r=Bus, rb=7, ldrb
+; R3 is logical total length, R7 fixed count. Size returns their difference.
+; For access, save fixed count in R11 because positive_value may overwrite R7.
 indexed_length_ready:
     ra=3, rb=7, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=primitive_failed
@@ -113,6 +135,8 @@ indexed_translate:
     seq=ConditionalJump, cc=Sign, brch=primitive_failed
     ra=4, rb=7, alu=Sub, cin=One, ldq
     d=Q, r=Bus, rb=11, ldrb
+; The class/specification and integer checks changed selection. Always refetch
+; VR6 before reading the translated component. R10 chooses read versus write.
 indexed_access:
     ra=10, flags
     seq=ConditionalJump, cc=!Zero, brch=indexed_write
@@ -139,6 +163,8 @@ indexed_character_result:
 indexed_size:
     ra=3, rb=7, alu=Sub, cin=One, ldq
     d=Q, r=Bus, rb=4, ldrb, seq=Jump, brch=positive_result
+; Root the last caller argument before examining Character/digit representation.
+; Do not write receiver storage until all type, index, and value checks finish.
 indexed_write:
     read=Vr, vr=0
     d=Object, page=Fetch
@@ -192,6 +218,8 @@ positive_value:
     ra=4, s=Branch, brch=16383, alu=SubReverse, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=primitive_failed
     d=Register, ra=6, seq=Bus
+; Require exactly descriptor+one/two digits. Size and raw descriptor must
+; agree; full 40-bit equality prevents a reference/tag from passing as a byte.
 positive_large:
     d=Symbol, page=Fetch
     read=Type
