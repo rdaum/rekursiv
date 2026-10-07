@@ -375,3 +375,15 @@ These observations identify optimization candidates, not measured gains from cha
 The emulator now reports retired microinstructions per second against active execution time and total elapsed time.
 A local 20-million-step headless run reported approximately 9.52 million microinstructions/s, including collector execution.
 Zero-step and Hold-only CLI checks report zero retired instructions/s. Window-title throughput remains unverified on a live display in this session.
+
+### Native pending writes
+
+The native executor now prepares pending writes instead of copying the whole processor per instruction.
+Directed tests check simultaneous register, root, stack, pointer, and scalar destinations after success and after local, object, or device failure.
+All 25 processor RTL tests and four original-image emulator tests pass, including the Xerox bytecode trace and low-space recovery.
+
+A deterministic headless benchmark uses the original image, 16,777,216 memory words, and release builds on a Cortex-X925 pinned to CPU 5.
+It measures 50 million startup steps, then 50 million steps after an equal warmup, excluding image loading.
+Across three runs, median throughput increases from 8.46 to 10.27 million microinstructions/s at startup and from 8.68 to 10.70 million afterward.
+Both intervals preserve their final PCs, retired counts, collections, object commands, device requests, and framebuffer hash.
+These rates describe native execution without external input; they do not predict FPGA or interactive display performance.

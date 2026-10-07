@@ -184,6 +184,107 @@ fn device_failure_does_not_retire_local_writes() -> Result<()> {
     Ok(())
 }
 
+// Exercise every indexed destination together: pending writes must neither
+// become visible on a failed request nor use a newly written pointer/register.
+fn simultaneous_writes() -> Instruction {
+    Instruction {
+        data: Word::raw(12).unwrap(),
+        ra: 0,
+        rb: 0,
+        r: Source::Bus,
+        write_register: true,
+        write_root: true,
+        load_q: true,
+        flags: true,
+        symbol: true,
+        mark: true,
+        sp: Pointer::Increment,
+        esp: Address::Sp,
+        csp: Pointer::Increment,
+        estk: Estk::Bus,
+        cstk: Cstk::Ap,
+        load_ap: true,
+        apc: Apc::Bus,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn failed_operations_discard_all_pending_destinations() -> Result<()> {
+    for failure in 0..3 {
+        let mut instruction = simultaneous_writes();
+        match failure {
+            0 => instruction.device = Device::Write,
+            1 => instruction.object = Some(Command::read_field()),
+            _ => instruction.fetch = Fetch::Nam, // Unpopulated NAM: late local fault.
+        }
+        instruction.validate()?;
+        let mut m = Machine::new(Image::program(&[instruction]), 0, 16, 512)?;
+        m.cpu.rf[0] = 4;
+        m.cpu.esp = 7;
+        m.cpu.csp = 9;
+        m.cpu.ap = 6;
+        m.cpu.flags = 31;
+        m.cpu.estk.fill(123);
+        m.cpu.cstk.fill(456);
+        m.devices.fail_next = true;
+        let mut expected = m.cpu.clone();
+        expected.halted = true;
+        assert!(m.step().is_err());
+        assert_eq!(m.cpu, expected, "failure {failure}");
+        assert_eq!(m.stats.retired, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn pending_destinations_use_original_operands_and_addresses() -> Result<()> {
+    let mut m = Machine::new(Image::program(&[simultaneous_writes()]), 0, 16, 512)?;
+    m.cpu.rf[0] = 4;
+    m.cpu.esp = 7;
+    m.cpu.csp = 9;
+    m.cpu.ap = 6;
+    let mut expected = m.cpu.clone();
+    expected.pc = 1;
+    expected.rf[0] = 12;
+    expected.roots.as_mut().unwrap()[4] = Word::raw(12)?;
+    expected.q = 12;
+    expected.symbol = 12;
+    expected.lastcc = true;
+    expected.sp = 1;
+    expected.esp = 1;
+    expected.csp = 10;
+    expected.estk[7] = 12;
+    expected.estkr = 12;
+    expected.cstk[9] = 6;
+    expected.cstkr = 6;
+    expected.ap = 12;
+    expected.apc = 12;
+    assert_eq!(m.step()?, Step::Retired);
+    assert_eq!(m.cpu, expected);
+    Ok(())
+}
+
+#[test]
+fn first_root_read_and_write_are_deferred_until_commit() -> Result<()> {
+    let mut image = Image::program(&[Instruction {
+        bus: Bus::Root,
+        write_root: true,
+        write_register: true,
+        r: Source::Bus,
+        rb: 1,
+        ..Default::default()
+    }]);
+    image.roots[0] = Word::signed(27);
+    let mut cpu = Processor::default();
+    let (writes, _) = cpu.prepare_writes(&image, false).unwrap();
+    assert!(cpu.roots.is_none());
+    writes.commit(&mut cpu, &image);
+    assert_eq!(cpu.roots, Some(image.roots));
+    assert_eq!(cpu.rf[1], 27);
+    Ok(())
+}
+
 #[test]
 fn collector_failure_preserves_source_heap_and_interrupted_registers() -> Result<()> {
     let class = Word::reference(100, true)?;

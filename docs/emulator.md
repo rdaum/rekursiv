@@ -168,7 +168,9 @@ Collector microcode chooses every root, mark, pager pass, body read, body write,
 
 `rekursiv-devices` supplies the same external peripheral models to both executors.
 The Verilator adapter drives their request/reply handshakes. The emulator waits for device completion before instruction retirement.
-A failed device reply preserves the instruction's local destinations.
+The executor prepares scalar values and indexed writes before it issues an object or device request.
+It commits these writes only after success, preserving all local destinations on failure.
+Each indexed write uses the original operand and address; preparation does not copy the register file, stacks, or roots.
 The GUI uses [winit](https://docs.rs/winit/0.30/winit/) for window events and [softbuffer](https://docs.rs/softbuffer/0.4/softbuffer/) for pixel presentation.
 Presentation needs no GPU renderer. Guest microcode still performs all drawing and supplies the published bitmap.
 It has no access to guest objects through the presentation helpers.

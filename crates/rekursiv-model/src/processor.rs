@@ -159,6 +159,128 @@ impl Image {
         image
     }
 }
+/// A validated instruction's local writes, held until external operations
+/// succeed. Arrays stay in Processor: a control word can write at most one
+/// register, one cell in each stack, and one root. Dropping this value aborts
+/// all local effects, including flags, sequencer state, and cached stack tops.
+///
+/// Scalar next-values are small and allow simultaneous destinations to use
+/// the old operands. Object/device results are supplied by the executor before
+/// commit. The image supplies initial roots only on the first successful commit.
+#[derive(Debug)]
+pub struct PendingWrites {
+    pc: u16,
+    upcor: u16,
+    mark: u16,
+    ucar: u16,
+    sp: u32,
+    esp: u32,
+    csp: u32,
+    ap: u32,
+    apc: u32,
+    estkr: u64,
+    cstkr: u32,
+    symbol: u64,
+    pub object: u64,
+    pub device: u32,
+    q: u32,
+    product: u64,
+    flags: u8,
+    fp_flags: u8,
+    lastcc: bool,
+    opcode: usize,
+    namarg: u32,
+    halted: bool,
+    service: bool,
+    service_code: u8,
+    register: Option<(usize, u32)>,
+    estk: Option<(usize, u64)>,
+    cstk: Option<(usize, u32)>,
+    root: Option<(usize, Word)>,
+    held: bool,
+}
+impl PendingWrites {
+    fn unchanged(cpu: &Processor) -> Self {
+        Self {
+            pc: cpu.pc,
+            upcor: cpu.upcor,
+            mark: cpu.mark,
+            ucar: cpu.ucar,
+            sp: cpu.sp,
+            esp: cpu.esp,
+            csp: cpu.csp,
+            ap: cpu.ap,
+            apc: cpu.apc,
+            estkr: cpu.estkr,
+            cstkr: cpu.cstkr,
+            symbol: cpu.symbol,
+            object: cpu.object,
+            device: cpu.device,
+            q: cpu.q,
+            product: cpu.product,
+            flags: cpu.flags,
+            fp_flags: cpu.fp_flags,
+            lastcc: cpu.lastcc,
+            opcode: cpu.opcode,
+            namarg: cpu.namarg,
+            halted: cpu.halted,
+            service: cpu.service,
+            service_code: cpu.service_code,
+            register: None,
+            estk: None,
+            cstk: None,
+            root: None,
+            held: false,
+        }
+    }
+    /// Apply to the processor used during preparation, after its object/device
+    /// operation succeeds. No fallible work or operand reads occur here.
+    pub fn commit(self, cpu: &mut Processor, image: &Image) {
+        if cpu.roots.is_none() {
+            cpu.roots = Some(image.roots);
+        }
+        if self.held {
+            return;
+        }
+        cpu.pc = self.pc;
+        cpu.upcor = self.upcor;
+        cpu.mark = self.mark;
+        cpu.ucar = self.ucar;
+        cpu.sp = self.sp;
+        cpu.esp = self.esp;
+        cpu.csp = self.csp;
+        cpu.ap = self.ap;
+        cpu.apc = self.apc;
+        cpu.estkr = self.estkr;
+        cpu.cstkr = self.cstkr;
+        cpu.symbol = self.symbol;
+        cpu.object = self.object;
+        cpu.device = self.device;
+        cpu.q = self.q;
+        cpu.product = self.product;
+        cpu.flags = self.flags;
+        cpu.fp_flags = self.fp_flags;
+        cpu.lastcc = self.lastcc;
+        cpu.opcode = self.opcode;
+        cpu.namarg = self.namarg;
+        cpu.halted = self.halted;
+        cpu.service = self.service;
+        cpu.service_code = self.service_code;
+        if let Some((index, value)) = self.register {
+            cpu.rf[index] = value;
+        }
+        if let Some((index, value)) = self.estk {
+            cpu.estk[index] = value;
+        }
+        if let Some((index, value)) = self.cstk {
+            cpu.cstk[index] = value;
+        }
+        if let Some((index, value)) = self.root {
+            cpu.roots.as_mut().unwrap()[index] = value;
+        }
+    }
+}
+
 impl Processor {
     pub fn bus(&self, i: Instruction) -> u64 {
         match i.bus {
@@ -178,12 +300,24 @@ impl Processor {
             Bus::Device => self.device as u64,
             Bus::Root => self
                 .roots
+                .as_ref()
                 .and_then(|roots| roots.get(self.rf[i.ra as usize] as usize).copied())
                 .unwrap_or(Word::ZERO)
                 .bits(),
         }
     }
     pub fn prepare(&self, image: &Image, irq: bool) -> Result<(Self, Option<Command>), u8> {
+        let (writes, command) = self.prepare_writes(image, irq)?;
+        let mut next = self.clone();
+        writes.commit(&mut next, image);
+        Ok((next, command))
+    }
+    /// Prepare local writes without copying stacks, roots, or the register file.
+    pub fn prepare_writes(
+        &self,
+        image: &Image,
+        irq: bool,
+    ) -> Result<(PendingWrites, Option<Command>), u8> {
         self.prepare_mode(image, irq, false)
     }
     /// Local retirement while LOGIK runs privileged collector microcode.
@@ -193,6 +327,17 @@ impl Processor {
         image: &Image,
         irq: bool,
     ) -> Result<(Self, Option<Command>), u8> {
+        let (writes, command) = self.prepare_recovery_writes(image, irq)?;
+        let mut next = self.clone();
+        writes.commit(&mut next, image);
+        Ok((next, command))
+    }
+    /// Collector variant of prepare_writes; applies the same privilege checks.
+    pub fn prepare_recovery_writes(
+        &self,
+        image: &Image,
+        irq: bool,
+    ) -> Result<(PendingWrites, Option<Command>), u8> {
         self.prepare_mode(image, irq, true)
     }
     fn prepare_mode(
@@ -200,12 +345,7 @@ impl Processor {
         image: &Image,
         irq: bool,
         recovering: bool,
-    ) -> Result<(Self, Option<Command>), u8> {
-        if self.roots.is_none() {
-            let mut initialized = self.clone();
-            initialized.roots = Some(image.roots);
-            return initialized.prepare_mode(image, irq, recovering);
-        }
+    ) -> Result<(PendingWrites, Option<Command>), u8> {
         let i = image
             .code
             .get(self.pc as usize)
@@ -241,9 +381,15 @@ impl Processor {
             return Err(1);
         }
         if i.seq == Seq::Hold {
-            return Ok((self.clone(), None));
+            let mut pending = PendingWrites::unchanged(self);
+            pending.held = true;
+            return Ok((pending, None));
         }
-        let d = self.bus(i);
+        let d = if i.bus == Bus::Root {
+            self.roots.as_ref().unwrap_or(&image.roots)[self.rf[i.ra as usize] as usize].bits()
+        } else {
+            self.bus(i)
+        };
         let source = |src: Source, reg: u8| match src {
             Source::Register => self.rf[reg as usize],
             Source::Bus => d as u32,
@@ -258,10 +404,9 @@ impl Processor {
             Carry::One => 1,
             Carry::ZeroFlag => (self.flags & 1) as u64,
         };
-        let mut n = self.clone();
+        let mut n = PendingWrites::unchanged(self);
         if i.write_root {
-            n.roots.as_mut().unwrap()[self.rf[i.ra as usize] as usize] =
-                Word::from_bits(d).unwrap();
+            n.root = Some((self.rf[i.ra as usize] as usize, Word::from_bits(d).unwrap()));
         }
         let (f, carry, overflow) = match i.alu {
             Alu::Add | Alu::Sub | Alu::SubReverse => {
@@ -455,7 +600,7 @@ impl Processor {
         }
         n.lastcc = cc;
         if i.write_register {
-            n.rf[i.rb as usize] = y;
+            n.register = Some((i.rb as usize, y));
         }
         if i.load_q {
             n.q = y;
@@ -479,7 +624,7 @@ impl Processor {
                     Estk::Compact => Word::compact(i.compact_code, y).map_err(|_| 1u8)?.bits(),
                     _ => unreachable!(),
                 };
-                n.estk[self.esp as usize] = data;
+                n.estk = Some((self.esp as usize, data));
                 n.estkr = data;
             }
         }
@@ -487,7 +632,7 @@ impl Processor {
             Cstk::Hold => (),
             Cstk::Read => n.cstkr = self.cstk[self.csp as usize],
             _ => {
-                n.cstk[self.csp as usize] = cd as u32;
+                n.cstk = Some((self.csp as usize, cd as u32));
                 n.cstkr = cd as u32;
             }
         }

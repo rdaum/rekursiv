@@ -160,7 +160,7 @@ impl Machine {
             // Validate even the return word; it cannot smuggle a stack write or
             // a device operation into the frozen mutator state.
             self.cpu
-                .prepare_recovery(&self.image, false)
+                .prepare_recovery_writes(&self.image, false)
                 .map_err(|code| self.fail(code, None))?;
             if !self.recovery.as_ref().unwrap().committed {
                 return Err(self.fail(1, None).into());
@@ -179,9 +179,9 @@ impl Machine {
                 .is_some_and(|e| e.status() != 0)
         });
         let prepared = if self.recovering() {
-            self.cpu.prepare_recovery(&self.image, irq)
+            self.cpu.prepare_recovery_writes(&self.image, irq)
         } else {
-            self.cpu.prepare(&self.image, irq)
+            self.cpu.prepare_writes(&self.image, irq)
         };
         let (mut next, command) = prepared.map_err(|code| self.fail(code, None))?;
         if instruction.recovery == Recovery::Collect && self.retry_irq.is_none() {
@@ -254,7 +254,7 @@ impl Machine {
         } else {
             self.devices.tick(None, false)?;
         }
-        self.cpu = next;
+        next.commit(&mut self.cpu, &self.image);
         if self.recovering() {
             self.stats.collector_retired += 1;
         } else {
