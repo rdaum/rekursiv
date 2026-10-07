@@ -386,9 +386,9 @@ mod tests {
     #[test]
     fn worker_finishes_without_a_render_consumer_and_matches_direct_execution() -> Result<()> {
         let source = include_str!("../../../microcode/collection.uc");
-        let mut direct = boot::microcode(source, 512)?.machine;
+        let mut direct = boot::microcode_with_pager(source, 512, 16)?.machine;
         while !matches!(direct.step()?, Step::Halted | Step::Service(_)) {}
-        let mut threaded = boot::microcode(source, 512)?.machine;
+        let mut threaded = boot::microcode_with_pager(source, 512, 16)?.machine;
         let exchange = Exchange::default();
         let (_input, receive) = mpsc::sync_channel(1);
         let (done, finished) = mpsc::channel();

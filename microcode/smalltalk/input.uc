@@ -125,6 +125,8 @@ sample_interval_value:
 ;   components 6..37: sixteen (low14, high2) word pairs
 ;   components 38/39: registered cursor/display Forms
 ;   component 40: copied snapshot serial number and virtual leader address.
+;   components 41..43: previous input timestamp, low14/mid14/high4.
+; Component 41 is nil until the first packet establishes absolute time.
 ; Each component is a canonical guest SmallInteger or reference. No unrooted
 ; pointer or host queue contains converted guest words. R7 supplies the return
 ; microaddress for lazy allocation; VR3 retains the buffer through collection.
@@ -135,20 +137,22 @@ input_buffer_load:
     d=Symbol, page=Fetch
     d=Register, ra=7, seq=Bus
 input_buffer_allocate:
-    d=0xa000000008, page=Allocate, size=40, scan=1
+    d=0xa000000008, page=Allocate, size=43, scan=1
     d=Object, ldvr, vr=3
     d=1, idx=Load
-    d=312, mem=Write
+    d=336, mem=Write
     d=2, r=Bus, rb=0, ldrb
 input_buffer_zero:
     d=Register, ra=0, idx=Load
     d=0xc200000000, mem=Write
     ra=0, s=Branch, brch=1, alu=Add, rb=0, ldrb
-    ra=0, s=Branch, brch=41, alu=Sub, cin=One, flags
+    ra=0, s=Branch, brch=44, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=input_buffer_zero
     d=2, idx=Load
     d=NIL, mem=Write
     d=38, idx=Load
+    d=NIL, mem=Write
+    idx=Increment
     d=NIL, mem=Write
     idx=Increment
     d=NIL, mem=Write
@@ -243,8 +247,54 @@ input_packet_time:
     mem=Read
     ra=5, s=Bus, d=Object, alu=Add, rb=5, ldrb
     ra=5, s=Branch, brch=15, alu=And, rb=5, ldrb
-    ; An absolute-time escape avoids losing precision through delta rounding:
-    ; 0x5000, high16, low16, followed by one key or two coordinate words.
+    ; Most packets need only the Blue Book's twelve-bit elapsed-time word.
+    ; Sending absolute time on every movement makes InputState reconstruct a
+    ; LargePositiveInteger on every sample, starving the lower-priority UI.
+    ; Keep all timestamp pieces as canonical SmallIntegers in rooted state.
+    d=input_time_absolute, r=Bus, rb=6, ldrb
+    d=41, idx=Load
+    mem=Read
+    d=Object, ldsym, r=Bus, rb=2, ldrb
+    d=NIL, seq=ConditionalJump, cc=Symbol, brch=input_time_remember
+    idx=Increment
+    mem=Read
+    d=Object, r=Bus, s=Branch, brch=14, alu=Rotate, rb=0, ldrb
+    ra=0, rb=2, alu=Or, ldrb
+    idx=Increment
+    mem=Read
+    d=Object, r=Bus, s=Branch, brch=28, alu=Rotate, rb=0, ldrb
+    ra=0, rb=2, alu=Or, ldrb
+    ; Rebase whenever the upper timestamp bits change. This also handles
+    ; midnight, wrap, and clock corrections, and bounds the guest's accumulated
+    ; deltaTime to 16383 so its arithmetic stays in the SmallInteger range.
+    r=Q, rb=2, alu=Sub, cin=One, ldrb
+    ra=2, s=Bus, d=0xfffff000, alu=And, flags
+    seq=ConditionalJump, cc=!Zero, brch=input_time_remember
+    r=Q, s=Branch, brch=16383, alu=And, rb=0, ldrb
+    ra=0, rb=2, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Carry, brch=input_time_remember
+    d=input_time_delta, r=Bus, rb=6, ldrb
+input_time_remember:
+    ; R2 retains delta, R6 selects absolute/delta, Q retains the new time.
+    d=41, idx=Load
+    r=Q, s=Branch, brch=16383, alu=And, rb=0, ldrb
+    ra=0, estk=Compact, compact=2
+    d=Estk, mem=Write
+    idx=Increment
+    r=Q, s=Branch, brch=18, alu=Rotate, rb=0, ldrb
+    ra=0, s=Branch, brch=16383, alu=And, rb=0, ldrb
+    ra=0, estk=Compact, compact=2
+    d=Estk, mem=Write
+    idx=Increment
+    r=Q, s=Branch, brch=4, alu=Rotate, rb=0, ldrb
+    ra=0, s=Branch, brch=15, alu=And, rb=0, ldrb
+    ra=0, estk=Compact, compact=2
+    d=Estk, mem=Write
+    d=Register, ra=6, seq=Bus
+input_time_delta:
+    d=input_first_value, r=Bus, rb=6, ldrb, seq=Jump, brch=input_append
+input_time_absolute:
+    ; First packet, long gap, or clock rebase: 0x5000, high16, low16.
     d=0x5000, r=Bus, rb=2, ldrb
     d=input_time_high, r=Bus, rb=6, ldrb, seq=Jump, brch=input_append
 input_time_high:
@@ -272,10 +322,15 @@ input_motion_y:
     ra=4, s=Bus, d=0x2000, alu=Or, rb=2, ldrb
     d=input_packet_publish, r=Bus, rb=6, ldrb, seq=Jump, brch=input_append
 input_packet_publish:
-    d=4, r=Bus, rb=2, ldrb
-    ra=1, s=Branch, brch=1, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=!Zero, brch=input_packet_count
-    d=5, r=Bus, rb=2, ldrb
+    ; Derive the appended length from the new tail and old head/count.
+    ; Absolute packets append 4/5 words; elapsed-time packets append 2/3.
+    d=3, idx=Load
+    mem=Read
+    ra=5, s=Bus, d=Object, alu=Sub, cin=One, rb=2, ldrb
+    idx=Increment
+    mem=Read
+    ra=2, s=Bus, d=Object, alu=Sub, cin=One, rb=2, ldrb
+    ra=2, s=Branch, brch=15, alu=And, rb=2, ldrb
 input_packet_count:
     d=4, idx=Load
     mem=Read

@@ -15,6 +15,7 @@ use rekursiv_model::{
     Model,
 };
 pub mod boot;
+pub mod metrics;
 pub mod presentation;
 mod recovery;
 mod scalar;
@@ -63,6 +64,7 @@ pub struct Statistics {
     pub collections: u64,
     pub object_commands: u64,
     pub device_requests: u64,
+    pub objekt: metrics::ObjectStatistics,
 }
 impl Statistics {
     /// Retired mutator plus collector instructions per elapsed second. Hold
@@ -98,6 +100,8 @@ pub struct Machine {
     pub objekt: Model,
     pub devices: Device,
     pub stats: Statistics,
+    /// Optional detailed observations; leave disabled for normal execution.
+    pub objekt_metrics_enabled: bool,
     pub fault: Option<Fault>,
     recovery: Option<RecoveryState>,
     retry_irq: Option<bool>,
@@ -145,6 +149,7 @@ impl Machine {
             objekt,
             devices: Device::default(),
             stats: Statistics::default(),
+            objekt_metrics_enabled: false,
             fault: None,
             recovery: None,
             retry_irq: None,
@@ -246,17 +251,52 @@ impl Machine {
         }
         if !matches!(instruction.recovery, Recovery::None | Recovery::Collect) {
             let data = Word::from_bits(self.cpu.bus(instruction))?;
+            let before_commit = (self.objekt_metrics_enabled
+                && instruction.recovery == Recovery::Commit)
+                .then(|| {
+                    (
+                        self.objekt.body_cursor,
+                        self.objekt.allocation_limit,
+                        self.objekt.entries.iter().flatten().count(),
+                    )
+                });
             let result = self
                 .recovery
                 .as_mut()
                 .unwrap()
                 .execute(instruction.recovery, data, &mut self.objekt)
                 .map_err(|status| self.fail(4, Some(status)))?;
+            if self.objekt_metrics_enabled {
+                match instruction.recovery {
+                    Recovery::ReadBody => self.stats.objekt.gc_reads += 1,
+                    Recovery::WriteBody => self.stats.objekt.gc_writes += 1,
+                    _ => {}
+                }
+            }
+            if let Some((cursor, limit, entries)) = before_commit {
+                let half = self.objekt.memory.len() as u32 / 2;
+                let old_used = cursor - (limit - half);
+                let new_used = self.objekt.body_cursor - (self.objekt.allocation_limit - half);
+                self.stats.objekt.gc_reclaimed_words +=
+                    u64::from(old_used.saturating_sub(new_used));
+                self.stats.objekt.gc_discarded_entries +=
+                    (entries - self.objekt.entries.iter().flatten().count()) as u64;
+            }
             next.object(result.bits());
         }
         if let Some(command) = command {
             self.stats.object_commands += 1;
-            let response = self.objekt.execute(command, false).response;
+            let before = self
+                .objekt_metrics_enabled
+                .then(|| metrics::Observation::capture(&self.objekt, command));
+            let outcome = self.objekt.execute(command, false);
+            if let Some(before) = before {
+                self.stats
+                    .objekt
+                    .observe(command, before, &outcome, &self.objekt);
+            }
+            let response = outcome.response;
+            drop(outcome);
             if response.status == Status::OutOfSpace
                 && self.image.collector_entry.is_some()
                 && self.retry_irq.is_none()
@@ -367,6 +407,13 @@ impl Machine {
             &self.objekt,
         ));
         self.cpu.pc = self.image.collector_entry.unwrap();
+        if self.objekt_metrics_enabled {
+            match command.map(|c| c.pager) {
+                Some(Pager::Allocate) => self.stats.objekt.gc_allocation += 1,
+                Some(Pager::Fetch) => self.stats.objekt.gc_refill += 1,
+                _ => self.stats.objekt.gc_explicit += 1,
+            }
+        }
         Ok(())
     }
 }

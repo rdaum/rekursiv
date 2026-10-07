@@ -65,51 +65,63 @@ const TRACE_SHA256: &str = "b6b42ecdc4e52381e85ef30fde9669656ae1e665604819dd3ab0
 #[ignore = "requires the pinned Xerox distribution; set REKURSIV_ST80_DIR"]
 fn native_default_display_draws_at_1024_by_768() -> Result<()> {
     let directory = std::path::PathBuf::from(std::env::var("REKURSIV_ST80_DIR")?);
-    let mut loaded = boot::smalltalk(&std::fs::read(directory.join("VirtualImage"))?, 1_048_576)?;
-    let m = &mut loaded.machine;
-    m.devices = presentation::workstation(0, 1000);
-    let mut copies = 0;
-    for _ in 0..30_000_000 {
-        ensure!(
-            !m.cpu.halted && !m.cpu.service,
-            "unexpected stop at {}",
-            m.cpu.pc
-        );
-        if m.step()? != Step::Retired || m.recovering() {
-            continue;
-        }
-        ensure!(
-            m.cpu.pc != loaded.symbols["bb_failed"] as u16,
-            "BitBlt failed"
-        );
-        if m.cpu.pc == loaded.symbols["bb_success"] as u16 {
-            copies += 1;
-            if copies == 32 {
-                break;
+    let bytes = std::fs::read(directory.join("VirtualImage"))?;
+    let mut reference = None;
+    for entries in [16, boot::DEFAULT_PAGER_ENTRIES] {
+        let mut loaded = boot::smalltalk_with_pager(&bytes, 16_777_216, entries)?;
+        let m = &mut loaded.machine;
+        m.devices = presentation::workstation(0, 1000);
+        m.objekt_metrics_enabled = true;
+        let started = std::time::Instant::now();
+        let mut copies = 0;
+        for _ in 0..30_000_000 {
+            ensure!(
+                !m.cpu.halted && !m.cpu.service,
+                "unexpected stop at {}",
+                m.cpu.pc
+            );
+            if m.step()? != Step::Retired || m.recovering() {
+                continue;
+            }
+            ensure!(
+                m.cpu.pc != loaded.symbols["bb_failed"] as u16,
+                "BitBlt failed"
+            );
+            if m.cpu.pc == loaded.symbols["bb_success"] as u16 {
+                copies += 1;
+                if copies == 32 {
+                    break;
+                }
             }
         }
+        assert_eq!(copies, 32, "guest did not draw the desktop");
+        let frame = m
+            .devices
+            .display_bitmap
+            .as_ref()
+            .unwrap()
+            .visible
+            .as_ref()
+            .unwrap();
+        assert_eq!((frame.width, frame.height), (1024, 768));
+        assert_eq!(frame.stride, 32);
+        assert_eq!(frame.words.len(), 32 * 768);
+        // The expanded area must be drawn by guest BitBlt, not just blank padding
+        // around the former 640x480 display.
+        assert!(frame.words[32 * 480..].iter().any(|word| *word != 0));
+        assert!(frame
+            .words
+            .as_chunks::<32>()
+            .0
+            .iter()
+            .any(|row| row[20..].iter().any(|word| *word != 0)));
+        if let Some(previous) = &reference {
+            assert_eq!(frame, previous, "pager capacity changed the drawing result");
+        } else {
+            reference = Some(frame.clone());
+        }
+        eprintln!("drawing checkpoint: pager={entries}, {:.6} s, {} mutator, {} collector instructions, {} collections\n{}", started.elapsed().as_secs_f64(), m.stats.retired, m.stats.collector_retired, m.stats.collections, m.stats.objekt.report(&m.objekt));
     }
-    assert_eq!(copies, 32, "guest did not draw the desktop");
-    let frame = m
-        .devices
-        .display_bitmap
-        .as_ref()
-        .unwrap()
-        .visible
-        .as_ref()
-        .unwrap();
-    assert_eq!((frame.width, frame.height), (1024, 768));
-    assert_eq!(frame.stride, 32);
-    assert_eq!(frame.words.len(), 32 * 768);
-    // The expanded area must be drawn by guest BitBlt, not just blank padding
-    // around the former 640x480 display.
-    assert!(frame.words[32 * 480..].iter().any(|word| *word != 0));
-    assert!(frame
-        .words
-        .as_chunks::<32>()
-        .0
-        .iter()
-        .any(|row| row[20..].iter().any(|word| *word != 0)));
     Ok(())
 }
 
@@ -317,5 +329,83 @@ fn native_saved_image_cursor_tracks_mouse_without_an_explicit_link_request() -> 
         assert_eq!(pixels[index], plain[index] ^ 0xffffff);
         assert_eq!(pixels[0], plain[0], "cursor must not remain at the origin");
     }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires the pinned Xerox distribution; set REKURSIV_ST80_DIR"]
+fn startup_motion_burst_drains_and_the_guest_can_open_a_menu() -> Result<()> {
+    let directory = std::path::PathBuf::from(std::env::var("REKURSIV_ST80_DIR")?);
+    let mut loaded = boot::smalltalk(&std::fs::read(directory.join("VirtualImage"))?, 16_777_216)?;
+    let m = &mut loaded.machine;
+    // Daytime forces a LargePositiveInteger for absolute timestamps. These
+    // 600 samples arrive while the image is still rebuilding the desktop.
+    // Encoding every sample as absolute time used to occupy the high-priority
+    // InputState process until ~175M instructions, delaying UI work and clicks.
+    m.devices = presentation::workstation(36_000, 10_000);
+    for n in 0..600 {
+        m.devices
+            .pointer
+            .as_mut()
+            .unwrap()
+            .schedule
+            .insert(10_000_000 + n * 50_000, (300 + (n % 50) as i32, 100));
+    }
+    let mut drained_at = None;
+    for n in 0..70_000_000 {
+        ensure!(m.step()? == Step::Retired, "guest stopped at {}", m.cpu.pc);
+        if n >= 40_000_000
+            && n % 1_000_000 == 0
+            && drained_at.is_none()
+            && m.devices.input.as_ref().unwrap().is_empty()
+        {
+            let buffer = m.objekt.resolve(m.cpu.roots.unwrap()[29])?;
+            if m.objekt.memory[buffer.base as usize + 3] == rekursiv_asm::Word::signed(0) {
+                drained_at = Some(n);
+            }
+        }
+    }
+    eprintln!("600 startup motion packets drained after {drained_at:?} instructions");
+    assert!(drained_at.is_some());
+    assert_eq!(m.stats.collections, 0);
+    assert!(m.devices.input.as_ref().unwrap().is_empty());
+    assert_eq!(m.devices.input.as_ref().unwrap().overruns, 0);
+    let buffer = m.objekt.resolve(m.cpu.roots.unwrap()[29])?;
+    // Physical FIFO drained is insufficient: the guest must have consumed
+    // the converted ring, including every semaphore notification.
+    assert_eq!(
+        m.objekt.memory[buffer.base as usize + 3],
+        rekursiv_asm::Word::signed(0)
+    );
+    assert_eq!(
+        m.objekt.memory[buffer.base as usize + 4],
+        rekursiv_asm::Word::signed(0)
+    );
+    let before = m
+        .devices
+        .display_bitmap
+        .as_ref()
+        .unwrap()
+        .visible
+        .clone()
+        .unwrap();
+    assert!(presentation::key(&mut m.devices, 129, true)?); // yellow/menu button
+    let mut copies = 0;
+    for _ in 0..20_000_000 {
+        ensure!(m.step()? == Step::Retired, "guest stopped at {}", m.cpu.pc);
+        if m.cpu.pc == loaded.symbols["bb_success"] as u16 {
+            copies += 1;
+        }
+    }
+    assert!(copies > 0, "guest did not draw a menu after the burst");
+    let after = m
+        .devices
+        .display_bitmap
+        .as_ref()
+        .unwrap()
+        .visible
+        .as_ref()
+        .unwrap();
+    assert_ne!(&before, after, "button input did not change the display");
     Ok(())
 }

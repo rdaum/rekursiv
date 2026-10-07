@@ -168,14 +168,19 @@ It clamps motion coordinates to 0–4095 for the image's twelve-bit coordinate f
 Unknown kinds and unsupported key codes stop with runtime status 5.
 
 A packet occupies one FIFO entry and raises one input notification.
-Microcode produces an absolute-time marker `0x5000`, timestamp high word, and timestamp low word for every packet.
+Microcode establishes time with an absolute marker `0x5000`, timestamp high word, and timestamp low word.
+Subsequent packets use a single elapsed-time word for gaps of 0–4095 milliseconds within the same 16384-millisecond epoch.
+Larger gaps, epoch changes, and backward clock changes use absolute time again.
+Periodic rebasing keeps the guest's accumulated delta within its SmallInteger range.
 Motion adds `0x1000 | X` and `0x2000 | Y`. Key transitions add `0x3000 | code` or `0x4000 | code`.
-Thus, motion produces five guest words; a key transition produces four.
+With elapsed time, motion produces three guest words and a key transition produces two.
+Absolute time requires five and four words, respectively.
 Only microcode defines this encoding. The external device contains no guest words or references.
 
 Root 29 retains a lazily allocated private Array with sixteen word slots.
 Each word uses two canonical SmallInteger fields, containing its low fourteen bits and high two bits.
-The Array also stores the read index, occupied count, unsignalled count, reserved storage semaphore, registered cursor/display Forms, and snapshot target metadata.
+The Array also stores the read index, occupied count, unsignalled count, reserved storage semaphore, registered cursor/display Forms, snapshot target metadata, and the previous input timestamp.
+The timestamp occupies three SmallInteger fields (14, 14, and 4 bits); the first is nil until a packet arrives.
 Microcode publishes all words before it consumes and acknowledges their raw packet.
 It then signals the registered guest input semaphore once per word, using the ordinary scheduler.
 The pending count survives collection and process switches, including preemption during delivery.

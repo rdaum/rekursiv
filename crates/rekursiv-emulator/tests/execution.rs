@@ -26,7 +26,7 @@ fn native_retirements_and_heaps_match_rtl_across_collection_and_paging() -> Resu
          d=Object, r=Bus, rb=4, ldrb
          halt",
     ] {
-        let mut loaded = boot::microcode(source, 512)?;
+        let mut loaded = boot::microcode_with_pager(source, 512, 16)?;
         let machine = &mut loaded.machine;
         let mut h = Harness::new(
             &runtime,

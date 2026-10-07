@@ -45,13 +45,15 @@ Run the allocation and collection examples without a window:
 cargo run --release --locked -p rekursiv-emulator --no-default-features -- \
   --headless --microcode microcode/allocation.uc
 cargo run --release --locked -p rekursiv-emulator --no-default-features -- \
-  --headless --microcode microcode/collection.uc --memory-words 512
+  --headless --microcode microcode/collection.uc --memory-words 512 --pager-entries 16
 ```
 
 The second example executes seven allocations and five collections.
 The emulator executes the existing `ram-collector.uc` instructions for each collection.
-The `--memory-words` value includes both semispaces. Each word carries 40 bits in a Rust `u64`.
-The pager has 16 entries, matching the standard RTL test configuration.
+Smalltalk defaults to 16,777,216 RAM words; standalone microcode defaults to 131,072.
+An explicit `--memory-words` value overrides either default and includes both semispaces. Each word carries 40 bits in a Rust `u64`.
+The native pager defaults to 65,536 entries. `--pager-entries N` selects a power of two from 2 through 65,536.
+The loader assembles the collector for that capacity. RTL comparison tests explicitly use the 16-entry hardware test configuration.
 
 A microcode file can supply its own `.collector` directive.
 Otherwise, the loader installs the standard collector at microaddress 8064 and rejects overlap.
@@ -73,14 +75,14 @@ Run its saved process and watch it draw the desktop:
 
 ```sh
 cargo run --release --locked -p rekursiv-emulator -- \
-  --smalltalk artifacts/st80/VirtualImage --memory-words 1048576
+  --smalltalk artifacts/st80/VirtualImage --memory-words 16777216
 ```
 
 For a reproducible run without a window, use:
 
 ```sh
 cargo run --release --locked -p rekursiv-emulator --no-default-features -- \
-  --headless --smalltalk artifacts/st80/VirtualImage --memory-words 1048576 \
+  --headless --smalltalk artifacts/st80/VirtualImage --memory-words 16777216 \
   --steps 300000000 --frame artifacts/startup.ppm
 ```
 
@@ -108,9 +110,11 @@ The window presents complete published frames. It does not read a live Form from
 | `--smalltalk FILE` | Convert and start the pinned Xerox V2 `VirtualImage` |
 | `--headless` | Disable the window and use deterministic device time |
 | `--steps N` | Stop after N instruction steps, including collection and Hold steps |
-| `--memory-words N` | Set external RAM capacity; default 131072 words |
+| `--pager-entries N` | Set pager capacity; default 65536, power of two from 2 through 65536 |
+| `--memory-words N` | Set external RAM capacity; default 16777216 for Smalltalk, otherwise 131072 words |
 | `--stop-at LABEL` | Stop before an instruction at the named label |
 | `--when Rn=VALUE` | Add a register condition to `--stop-at`; decimal or `0x` hexadecimal |
+| `--objekt-metrics` | Collect and report detailed OBJEKT counters |
 | `--trace FILE` | Record retired micro-PCs, collector mode, object result, and numeric registers |
 | `--frame FILE` | Save the last published display as a PPM, without cursor composition |
 | `--frames N` | Close after N presentation iterations, including those that skip uploads |
@@ -128,6 +132,35 @@ Window work runs concurrently with CPU execution, so their measured durations ov
 The window title updates approximately once per second with the recent active execution rate.
 Headless runs with fixed memory and step counts provide repeatable workloads. Trace output affects throughput.
 
+With `--objekt-metrics`, the exit report includes OBJEKT counters. `--pager-entries` changes pager capacity; `--memory-words` changes RAM capacity only.
+
+- Fetch and probe counts describe explicit selections, excluding internal metadata revalidation and collector lookups.
+  A collision miss finds an occupied slot with a different full reference. An empty miss finds no mapping.
+  Hit rates exclude compact values and invalid operands. Retries count as additional attempts.
+- Completed evictions count successful allocation/refill replacements. Victims are classified as new, modified persistent, or clean persistent objects.
+  A failed miss is not a completed eviction. Collector discards are counted separately.
+- Allocations and refills report completed objects and body words. Refill words consume RAM space even when the guest creates no new objects.
+- Field counters report successful accesses, including reads served by the cached first word.
+- RAM and backing counters report issued requests, including requests from failed commands.
+  Backing traffic includes identity exchange and directory operations. Save commits count requests, not durable disk commits.
+  Payload sizes use five bytes per 40-bit word, excluding metadata, protocol overhead, and physical bus padding.
+- Collector reads and writes are separate from mutator RAM requests. Collection entries distinguish explicit requests, allocation pressure, and refill pressure.
+  Reclaimed words and discarded mappings count successful collector commits. Reclaimed space includes abandoned copies from earlier evictions.
+
+These counters exclude image loading and bootstrap services. They measure logical machine activity, not FPGA cycles or disk latency.
+Detailed counters are disabled by default and require no per-object history. Collection adds execution overhead; use the same setting when comparing implementations.
+Library callers enable `machine.objekt_metrics_enabled` before execution and read `machine.stats.objekt`.
+
+For a reproducible run with the original image:
+
+```sh
+cargo run --release --locked -p rekursiv-emulator -- \
+  --headless --smalltalk artifacts/st80/VirtualImage \
+  --memory-words 16777216 --steps 100000000 --objekt-metrics
+```
+
+Add `--pager-entries 16` to reproduce the former capacity. Equal step budgets can include different amounts of collection and guest work.
+The drawing regression compares identical pixels after 32 completed BitBlt operations at both capacities.
 
 The initial keyboard profile uses unshifted US ASCII and separate modifier transitions.
 The frontend maps left/right Shift to 136/137, Control to 138, and Caps Lock to 139.

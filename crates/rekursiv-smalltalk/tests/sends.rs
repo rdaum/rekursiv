@@ -3548,6 +3548,71 @@ fn buffered_input_converts_packets_wraps_the_ring_and_falls_back_when_empty() ->
 }
 
 #[test]
+fn buffered_input_uses_deltas_and_rebases_across_gaps_and_clock_boundaries() -> Result<()> {
+    use rekursiv_sim::device::InputKind::*;
+    // Equal timestamps, the largest delta, a larger gap, and a 14-bit epoch
+    // crossing. The latter keeps InputState's accumulated delta a SmallInteger.
+    // Daytime, midnight, and u32 wrap exercise all three saved timestamp pieces.
+    let cases: &[(u32, &[u16])] = &[
+        (1000, &[0x5000, 0, 1000]),
+        (1000, &[0]),
+        (5095, &[4095]),
+        (9191, &[0x5000, 0, 9191]),
+        (13000, &[3809]),
+        (16383, &[3383]),
+        (16384, &[0x5000, 0, 16384]),
+        (16385, &[1]),
+        (36_000_000, &[0x5000, 549, 20736]),
+        (36_000_001, &[1]),
+        (36_000_000, &[0x5000, 549, 20736]),
+        (86_399_999, &[0x5000, 1318, 23551]),
+        (0, &[0x5000, 0, 0]),
+        (u32::MAX - 1, &[0x5000, 65535, 65534]),
+        (u32::MAX, &[1]),
+        (0, &[0x5000, 0, 0]),
+    ];
+    let mut packets = Vec::new();
+    let mut expected = Vec::new();
+    for (n, &(time, words)) in cases.iter().enumerate() {
+        let down = n % 2 == 0;
+        packets.push(input_packet(
+            if down { KeyDown } else { KeyUp },
+            129,
+            0,
+            time,
+        ));
+        expected.extend_from_slice(words);
+        expected.push(if down { 0x3081 } else { 0x4081 });
+    }
+    let mut code = Vec::new();
+    for _ in &expected {
+        code.extend([112, 208, 135]);
+    }
+    code.extend([112, 208, 124]);
+    let mut image = fixture(&code, &[SELECTOR]);
+    primitive_method(&mut image, 95, 0, &[116, 124]);
+    let e = execute_with_device(image, ROOT, true, 1024, |_| {}, input_device(packets))?;
+    assert_eq!((e.status, e.result), (1, i(-1)));
+    for (n, &word) in expected.iter().enumerate() {
+        let frame = e
+            .trace
+            .iter()
+            .find(|f| f.method == r(CALLER) && f.ip == 7 + 3 * n as i32)
+            .unwrap();
+        assert_eq!(frame.unsigned_top, Some(u64::from(word)), "word {n}");
+    }
+    assert_eq!(e.input_remaining, Some(0));
+    assert_eq!(e.event_acknowledgements, [cases.len() as u64, 0, 0, 0]);
+    let buffer = &e.records[&e.roots[29].identity()?];
+    assert_eq!(&buffer.body[40..43], &[i(0), i(0), i(0)]);
+    assert!(
+        e.collections > 1,
+        "timestamp history must survive collection"
+    );
+    Ok(())
+}
+
+#[test]
 fn buffered_input_empty_and_wrong_arity_preserve_send_operands() -> Result<()> {
     for args in [0, 1] {
         let mut image = if args == 0 {
@@ -3672,12 +3737,14 @@ fn buffered_input_pressure_does_not_starve_timer_delivery() -> Result<()> {
         },
     );
     let packet = input_packet(rekursiv_sim::device::InputKind::KeyDown, 65, 0, 100);
-    let mut device = input_device(vec![packet; 5]);
+    // Four absolute words plus four two-word delta packets fill the ring
+    // past its five-word reservation limit; two packets remain backpressured.
+    let mut device = input_device(vec![packet; 7]);
     device.clocks = Some(rekursiv_sim::device::Clocks::new(0, 0, 1000));
     let e = execute_with_device(image, ROOT, true, 512, |_| {}, device)?;
     assert_eq!((e.status, e.result, e.allocations), (1, i(2), 1));
     assert!(e.idle_visits > 0);
-    assert_eq!(e.event_acknowledgements, [3, 1, 0, 0]);
+    assert_eq!(e.event_acknowledgements, [5, 1, 0, 0]);
     assert_eq!(e.input_remaining, Some(2));
     assert_eq!(e.input_overruns, Some(0));
     let buffer = &e.records[&e.roots[29].identity()?];

@@ -8,7 +8,7 @@ use rekursiv_model::{
 };
 use rekursiv_smalltalk::{interpreter, layout, source, target};
 use std::collections::BTreeMap;
-pub const PAGER_ENTRIES: usize = 16;
+pub const DEFAULT_PAGER_ENTRIES: usize = 65_536;
 pub const COLLECTOR_ENTRY: u16 = 8064;
 pub const DEFAULT_DISPLAY_SIZE: (u32, u32) = (1024, 768);
 pub struct Loaded {
@@ -17,13 +17,22 @@ pub struct Loaded {
 }
 
 pub fn microcode(source: &str, memory_words: usize) -> Result<Loaded> {
+    microcode_with_pager(source, memory_words, DEFAULT_PAGER_ENTRIES)
+}
+
+pub fn microcode_with_pager(
+    source: &str,
+    memory_words: usize,
+    pager_entries: usize,
+) -> Result<Loaded> {
+    validate_pager_entries(pager_entries)?;
     let assembly = text::assemble(
         source,
         0,
         &[
             ("CODE_WORDS", CODE_WORDS as i64),
             ("STACK_WORDS", STACK_WORDS as i64),
-            ("PAGER_ENTRIES", PAGER_ENTRIES as i64),
+            ("PAGER_ENTRIES", pager_entries as i64),
             (
                 "ROOT_COUNT",
                 (20 + STACK_WORDS + 2 * CODE_WORDS + 32) as i64,
@@ -32,13 +41,13 @@ pub fn microcode(source: &str, memory_words: usize) -> Result<Loaded> {
     )?;
     let mut image = Image::from_assembly(&assembly)?;
     if image.collector_entry.is_none() {
-        image = image.with_ram_collector(COLLECTOR_ENTRY, PAGER_ENTRIES)?;
+        image = image.with_ram_collector(COLLECTOR_ENTRY, pager_entries)?;
     }
     Ok(Loaded {
         machine: Machine::new(
             image,
             assembly.entry.unwrap_or(0),
-            PAGER_ENTRIES,
+            pager_entries,
             memory_words,
         )?,
         symbols: assembly.symbols,
@@ -48,15 +57,37 @@ pub fn microcode(source: &str, memory_words: usize) -> Result<Loaded> {
 /// Convert and verify before starting execution, then seed external storage.
 /// Subsequent object faults, allocation, and collection execute in the machine.
 pub fn smalltalk(bytes: &[u8], memory_words: usize) -> Result<Loaded> {
-    load_smalltalk(bytes, memory_words, true)
+    smalltalk_with_pager(bytes, memory_words, DEFAULT_PAGER_ENTRIES)
 }
 
-/// Preserve the saved display configuration for Xerox trace/RTL comparisons.
+pub fn smalltalk_with_pager(
+    bytes: &[u8],
+    memory_words: usize,
+    pager_entries: usize,
+) -> Result<Loaded> {
+    load_smalltalk(bytes, memory_words, pager_entries, true)
+}
+
+/// Preserve the saved display and 16-entry RTL test configuration for trace comparisons.
 pub fn smalltalk_saved_display(bytes: &[u8], memory_words: usize) -> Result<Loaded> {
-    load_smalltalk(bytes, memory_words, false)
+    load_smalltalk(bytes, memory_words, 16, false)
 }
 
-fn load_smalltalk(bytes: &[u8], memory_words: usize, configure_display: bool) -> Result<Loaded> {
+pub fn validate_pager_entries(entries: usize) -> Result<()> {
+    ensure!(
+        entries.is_power_of_two() && (2..=65_536).contains(&entries),
+        "pager entries must be a power of two between 2 and 65536"
+    );
+    Ok(())
+}
+
+fn load_smalltalk(
+    bytes: &[u8],
+    memory_words: usize,
+    pager_entries: usize,
+    configure_display: bool,
+) -> Result<Loaded> {
+    validate_pager_entries(pager_entries)?;
     ensure!(
         rekursiv_smalltalk::checksum(bytes) == rekursiv_smalltalk::IMAGE_SHA256,
         "Smalltalk loader requires the pinned Xerox V2 image"
@@ -70,12 +101,12 @@ fn load_smalltalk(bytes: &[u8], memory_words: usize, configure_display: bool) ->
     converted.verify_against(&source)?;
     let assembly = interpreter::assemble(layout::reference(context)?)?;
     let mut program =
-        Image::from_assembly(&assembly)?.with_ram_collector(COLLECTOR_ENTRY, PAGER_ENTRIES)?;
+        Image::from_assembly(&assembly)?.with_ram_collector(COLLECTOR_ENTRY, pager_entries)?;
     program.roots[..26].copy_from_slice(&converted.roots[..26]);
     let mut machine = Machine::new(
         program,
         assembly.entry.unwrap_or(0),
-        PAGER_ENTRIES,
+        pager_entries,
         memory_words,
     )?;
     for r in &converted.records {

@@ -16,12 +16,14 @@ fn main() -> Result<()> {
     let mut smalltalk = None;
     let mut headless = false;
     let mut limit = None;
-    let mut memory = 131072usize;
+    let mut memory = None;
+    let mut pager_entries = boot::DEFAULT_PAGER_ENTRIES;
     let mut trace = None;
     let mut frame = None;
     let mut stop = None;
     let mut when = None;
     let mut frames = None;
+    let mut objekt_metrics = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--microcode" => {
@@ -36,6 +38,14 @@ fn main() -> Result<()> {
                 })?))
             }
             "--headless" => headless = true,
+            "--objekt-metrics" => objekt_metrics = true,
+            "--pager-entries" => {
+                pager_entries = args
+                    .next()
+                    .ok_or_else(|| eyre::eyre!("--pager-entries requires a count"))?
+                    .parse()?;
+                boot::validate_pager_entries(pager_entries)?;
+            }
             "--steps" => {
                 limit = Some(
                     args.next()
@@ -44,10 +54,11 @@ fn main() -> Result<()> {
                 )
             }
             "--memory-words" => {
-                memory = args
-                    .next()
-                    .ok_or_else(|| eyre::eyre!("--memory-words requires a count"))?
-                    .parse()?
+                memory = Some(
+                    args.next()
+                        .ok_or_else(|| eyre::eyre!("--memory-words requires a count"))?
+                        .parse::<usize>()?,
+                );
             }
             "--trace" => {
                 trace = Some(PathBuf::from(
@@ -95,7 +106,7 @@ fn main() -> Result<()> {
                 )
             }
             "--help" | "-h" => {
-                println!("rekursiv-emulator [--microcode FILE | --smalltalk VirtualImage]\n  No program: run the interactive workstation microcode demo.\n  --headless          Run without a window (deterministic device clock)\n  --steps N           Stop after N steps (headless default 10000000; window unlimited)\n  --memory-words N    External RAM words (default 131072; two semispaces)\n  --trace FILE        Write retired micro-PCs and numeric state\n  --stop-at LABEL     Stop before the named microinstruction\n  --when Rn=VALUE     Stop only when this register also matches\n  --frame FILE        Save the last published display as a PPM\n  --frames N          Close after N presentation checks (smoke tests)\nClose the window to exit. Escape is delivered to the guest.");
+                println!("rekursiv-emulator [--microcode FILE | --smalltalk VirtualImage]\n  No program: run the interactive workstation microcode demo.\n  --headless          Run without a window (deterministic device clock)\n  --steps N           Stop after N steps (headless default 10000000; window unlimited)\n  --memory-words N    External RAM words (Smalltalk default 16777216; otherwise 131072)\n  --pager-entries N   Pager slots, power of two from 2 to 65536 (default 65536)\n  --objekt-metrics   Report pager, transfer, allocation, and collector counters\n  --trace FILE        Write retired micro-PCs and numeric state\n  --stop-at LABEL     Stop before the named microinstruction\n  --when Rn=VALUE     Stop only when this register also matches\n  --frame FILE        Save the last published display as a PPM\n  --frames N          Close after N presentation checks (smoke tests)\nClose the window to exit. Escape is delivered to the guest.");
                 return Ok(());
             }
             _ => bail!("unknown option {arg}; use --help"),
@@ -110,18 +121,27 @@ fn main() -> Result<()> {
         "--when requires --stop-at"
     );
     ensure!(!headless || frames.is_none(), "--frames requires a window");
-    let mut loaded = if let Some(path) = smalltalk {
-        boot::smalltalk(&std::fs::read(path)?, memory)?
+    // A full pager keeps the image's working set resident. The small peripheral
+    // demo heap cannot hold it; explicit --memory-words still wins for tests.
+    let memory = memory.unwrap_or(if smalltalk.is_some() {
+        16_777_216
     } else {
-        boot::microcode(
+        131_072
+    });
+    let mut loaded = if let Some(path) = smalltalk {
+        boot::smalltalk_with_pager(&std::fs::read(path)?, memory, pager_entries)?
+    } else {
+        boot::microcode_with_pager(
             &if let Some(path) = program {
                 std::fs::read_to_string(path)?
             } else {
                 include_str!("../../../microcode/workstation.uc").into()
             },
             memory,
+            pager_entries,
         )?
     };
+    loaded.machine.objekt_metrics_enabled = objekt_metrics;
     // Headless clocks advance by device ticks for reproducible replay. The
     // window adapter supplies elapsed wall time and uses an effectively stopped
     // divider; the same timer/FIFO registers and acknowledgement rules apply.
@@ -220,6 +240,12 @@ fn main() -> Result<()> {
         loaded.machine.stats.instructions_per_second(execution_time),
         loaded.machine.stats.instructions_per_second(elapsed),
     );
+    if objekt_metrics {
+        eprintln!(
+            "{}",
+            loaded.machine.stats.objekt.report(&loaded.machine.objekt)
+        );
+    }
     if let Some(path) = frame {
         let visible = loaded
             .machine
