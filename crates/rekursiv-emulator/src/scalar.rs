@@ -237,7 +237,8 @@ impl ScalarInstruction {
     }
 }
 
-#[repr(C)]
+// Generated code uses offset_of! from this build, so this record can retain
+// Rust's compact field layout. It is passed by pointer, never by value over C.
 pub(crate) struct ScalarWrites {
     pub(super) pc: u16,
     pub(super) upcor: u16,

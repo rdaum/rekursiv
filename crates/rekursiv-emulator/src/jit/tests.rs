@@ -1,4 +1,5 @@
 use super::*;
+use crate::execution::WriteSet;
 
 #[test]
 fn compiled_datapath_matches_the_processor_oracle() -> Result<()> {
@@ -168,13 +169,16 @@ fn compiled_datapath_matches_the_processor_oracle() -> Result<()> {
             }
             let irq = case % 2 == 0;
             let expected = cpu.prepare_writes(&image, irq);
-            let actual = jit.prepare(&cpu, i, irq).expect("eligible instruction");
+            let actual = jit
+                .prepare(&cpu, i, irq, &image)
+                .expect("eligible instruction");
             match (expected, actual) {
-                (Ok((mut expected, command)), Ok((mut actual, jit_command))) => {
+                (Ok((mut expected, command)), Ok((actual, jit_command))) => {
+                    let mut actual = crate::execution::NativeWrites::from(actual);
                     assert_eq!(command, jit_command, "PC {pc}, case {case}: {i:?}");
                     if command.is_some() {
                         expected.object = 123;
-                        actual.object = 123;
+                        actual.object(123);
                     }
                     let mut oracle = cpu.clone();
                     expected.commit(&mut oracle, &image);
@@ -192,6 +196,154 @@ fn compiled_datapath_matches_the_processor_oracle() -> Result<()> {
     }
     assert!(successes > 10_000);
     for code in [1, 2, 3, 5] {
+        assert!(faults[code] > 0, "missing fault {code}");
+    }
+    Ok(())
+}
+
+#[test]
+fn stack_fetch_preparations_match_the_oracle_for_valid_and_invalid_state() -> Result<()> {
+    let estks = [
+        Estk::Hold,
+        Estk::Read,
+        Estk::Bus,
+        Estk::Alu,
+        Estk::Compact,
+        Estk::Wide,
+    ];
+    let cstks = [
+        Cstk::Hold,
+        Cstk::Read,
+        Cstk::Bus,
+        Cstk::Upcor,
+        Cstk::Apc,
+        Cstk::Ap,
+        Cstk::Sp,
+        Cstk::Increment,
+        Cstk::Decrement,
+    ];
+    let pointers = [
+        Pointer::Hold,
+        Pointer::Bus,
+        Pointer::Increment,
+        Pointer::Decrement,
+    ];
+    let addresses = [Address::Hold, Address::Bus, Address::Sp, Address::Argument];
+    let apcs = [Apc::Hold, Apc::Bus, Apc::Increment, Apc::Step];
+    let fetches = [Fetch::Hold, Fetch::Nam, Fetch::Map, Fetch::Both];
+    let mut image = Image::default();
+    for n in 0..512 {
+        let mut i = Instruction {
+            data: Word::raw((n % 34) as u64)?,
+            r: Source::Bus,
+            s: Source::Q,
+            alu: Alu::Add,
+            write_register: true,
+            load_q: true,
+            flags: true,
+            symbol: true,
+            compact_code: (n % 4) as u8,
+            branch: (n % 3) as u16,
+            ..Instruction::default()
+        };
+        // Isolated controls supply good coverage; combined controls check
+        // simultaneous old-state reads, forwarding, and validation precedence.
+        match n % 10 {
+            0 => i.estk = estks[(n / 10) % estks.len()],
+            1 => i.cstk = cstks[(n / 10) % cstks.len()],
+            2 => i.sp = pointers[(n / 10) % pointers.len()],
+            3 => i.csp = pointers[(n / 10) % pointers.len()],
+            4 => i.esp = addresses[(n / 10) % addresses.len()],
+            5 => i.load_ap = true,
+            6 => i.apc = apcs[(n / 10) % apcs.len()],
+            7 => i.fetch = fetches[(n / 10) % fetches.len()],
+            _ => {
+                i.estk = estks[n % estks.len()];
+                i.cstk = cstks[n % cstks.len()];
+                i.sp = pointers[(n / 7) % pointers.len()];
+                i.csp = pointers[(n / 11) % pointers.len()];
+                i.esp = addresses[(n / 13) % addresses.len()];
+                i.apc = apcs[(n / 17) % apcs.len()];
+                i.fetch = fetches[(n / 19) % fetches.len()];
+                i.load_ap = n % 2 == 0;
+            }
+        }
+        if n % 7 == 0 {
+            i.object = Some(Command::default());
+        }
+        image.code[n] = Some(i);
+    }
+    for (n, word) in image.nam.iter_mut().enumerate() {
+        *word = Some(((n as u64) << 30) | 123);
+    }
+    for (n, target) in image.map.iter_mut().enumerate() {
+        *target = Some((n * 3) as u16);
+    }
+    let jit = Jit::compile(&image)?;
+    // Live table changes must not require retranslation.
+    image.nam[1] = None;
+    image.map[1] = None;
+    let mut successes = 0;
+    let mut faults = [0; 7];
+    for pc in 0..512 {
+        let i = image.code[pc].unwrap();
+        for case in 0..32 {
+            let mut cpu = Processor {
+                pc: pc as u16,
+                sp: (case % 33) as u32,
+                esp: if case == 3 {
+                    u32::MAX
+                } else {
+                    (case % 32) as u32
+                },
+                csp: if case == 4 {
+                    32
+                } else {
+                    ((case + 1) % 32) as u32
+                },
+                ap: (case % 5) as u32,
+                apc: [0, 1, 255, 256, 0xffffff, 0x1000000][case % 6],
+                opcode: [0, 1, 1023, 1024, usize::MAX][case % 5],
+                q: [0, 1, u32::MAX, 0x80000000][case % 4],
+                cstkr: [0, 1, 0xffffff, u32::MAX][case % 4],
+                estkr: 0x123456789a,
+                ucar: 71,
+                namarg: 0x12345,
+                upcor: 17,
+                ..Processor::default()
+            };
+            for n in 0..32 {
+                cpu.estk[n] = 0x4000000000 + n as u64;
+                cpu.cstk[n] = n as u32 + 7;
+            }
+            let before = cpu.clone();
+            let expected = cpu.prepare_writes(&image, false);
+            let actual = jit.prepare(&cpu, i, false, &image).unwrap();
+            match (expected, actual) {
+                (Ok((mut expected, c)), Ok((actual, jc))) => {
+                    let mut actual = crate::execution::NativeWrites::from(actual);
+                    assert_eq!(c, jc);
+                    if c.is_some() {
+                        expected.object = 123;
+                        actual.object(123);
+                    }
+                    let mut oracle = cpu.clone();
+                    expected.commit(&mut oracle, &image);
+                    actual.commit(&mut cpu, &image, i);
+                    assert_eq!(cpu, oracle, "PC {pc}, case {case}: {i:?}");
+                    successes += 1;
+                }
+                (Err(a), Err(b)) => {
+                    assert_eq!(a, b, "PC {pc}, case {case}: {i:?}");
+                    faults[a as usize] += 1;
+                    assert_eq!(cpu, before);
+                }
+                _ => panic!("PC {pc}, case {case}: {i:?}"),
+            }
+        }
+    }
+    assert!(successes > 1000);
+    for code in [1, 3, 5] {
         assert!(faults[code] > 0, "missing fault {code}");
     }
     Ok(())

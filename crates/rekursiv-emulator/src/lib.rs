@@ -22,33 +22,10 @@ mod recovery;
 pub use jit::JitStatistics;
 mod scalar;
 use recovery::RecoveryState;
-use scalar::{ScalarInstruction, ScalarWrites};
+use scalar::ScalarInstruction;
 
-enum Writes {
-    Scalar(ScalarWrites),
-    General(rekursiv_model::processor::PendingWrites),
-}
-impl Writes {
-    fn object(&mut self, value: u64) {
-        match self {
-            Self::Scalar(w) => w.object = value,
-            Self::General(w) => w.object = value,
-        }
-    }
-    fn device(&mut self, value: u32) {
-        let Self::General(w) = self else {
-            unreachable!("device words use general preparation")
-        };
-        w.device = value;
-    }
-    #[inline(always)]
-    fn commit(self, cpu: &mut Processor, image: &Image, i: rekursiv_asm::processor::Instruction) {
-        match self {
-            Self::Scalar(w) => w.commit(cpu, image, i),
-            Self::General(w) => w.commit(cpu, image),
-        }
-    }
-}
+mod execution;
+use execution::{Execution, Interpreted, Native, WriteSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -190,6 +167,8 @@ impl Machine {
         self.cpu.service = false;
         Ok(())
     }
+    #[cold]
+    #[inline(never)]
     fn fail(&mut self, code: u8, status: Option<Status>) -> Fault {
         // Failed recovery restores the interrupted context. It does not publish
         // an incomplete relocation plan or retire the failed instruction.
@@ -209,6 +188,19 @@ impl Machine {
     /// blocks retain each instruction's device tick and precise fault boundary.
     /// Use `step` for tracing or breakpoints that inspect every retirement.
     pub fn run_steps(&mut self, budget: u64) -> Result<u64> {
+        // Engine selection cannot change within a batch. Keep JIT block guards
+        // and native write records out of the interpreter's inner loop.
+        if self.jit.is_none() {
+            for step in 0..budget {
+                if matches!(
+                    self.step_with::<Interpreted>()?,
+                    Step::Halted | Step::Service(_)
+                ) {
+                    return Ok(step + 1);
+                }
+            }
+            return Ok(budget);
+        }
         let mut steps = 0;
         while steps < budget {
             if self.fault.is_none()
@@ -237,7 +229,7 @@ impl Machine {
                     continue;
                 }
             }
-            let step = self.step()?;
+            let step = self.step_with::<Native>()?;
             steps += 1;
             if matches!(step, Step::Halted | Step::Service(_)) {
                 break;
@@ -246,6 +238,13 @@ impl Machine {
         Ok(steps)
     }
     pub fn step(&mut self) -> Result<Step> {
+        if self.jit.is_some() {
+            self.step_with::<Native>()
+        } else {
+            self.step_with::<Interpreted>()
+        }
+    }
+    fn step_with<E: Execution>(&mut self) -> Result<Step> {
         if let Some(fault) = self.fault {
             return Err(fault.into());
         }
@@ -282,30 +281,7 @@ impl Machine {
                 .as_ref()
                 .is_some_and(|e| e.status() != 0)
         });
-        let prepared = if self.recovering() {
-            self.cpu
-                .prepare_recovery_writes(&self.image, irq)
-                .map(|(w, c)| (Writes::General(w), c))
-        } else if let Some(compiled) = self
-            .jit
-            .as_ref()
-            .and_then(|jit| jit.prepare(&self.cpu, instruction, irq))
-        {
-            compiled.map(|(w, c)| (Writes::Scalar(w), c))
-        } else if let Some(decoded) = self
-            .scalar_code
-            .get(self.cpu.pc as usize)
-            .and_then(Option::as_ref)
-            .filter(|d| d.matches(&instruction))
-        {
-            decoded
-                .prepare(&self.cpu, irq)
-                .map(|(w, c)| (Writes::Scalar(w), c))
-        } else {
-            self.cpu
-                .prepare_writes(&self.image, irq)
-                .map(|(w, c)| (Writes::General(w), c))
-        };
+        let prepared = E::prepare(self, instruction, irq);
         let (mut next, command) = match prepared {
             Ok(p) => p,
             Err(code) => {
@@ -439,6 +415,8 @@ impl Machine {
         }
         Ok(())
     }
+    #[cold]
+    #[inline(never)]
     fn enter_recovery(&mut self, command: Option<Command>, irq: bool) -> Result<()> {
         // Proactive collection has no pending transfer, required allocation,
         // or extra class root. It uses the same collector instructions.

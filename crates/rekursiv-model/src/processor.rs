@@ -550,6 +550,13 @@ impl Processor {
         if n.esp as usize >= STACK_WORDS {
             return Err(3);
         }
+        // Accesses use OLD addresses even when this word replaces pointers.
+        // Reject malformed public CPU state before indexing either stack.
+        if (i.estk != Estk::Hold && self.esp as usize >= STACK_WORDS)
+            || (i.cstk != Cstk::Hold && self.csp as usize >= STACK_WORDS)
+        {
+            return Err(3);
+        }
         if i.load_ap {
             if d >= STACK_WORDS as u64 {
                 return Err(3);
@@ -590,7 +597,7 @@ impl Processor {
             n.namarg = (word & 0x3fffffff) as u32;
         }
         if matches!(i.fetch, Fetch::Map | Fetch::Both) {
-            n.ucar = image.map[self.opcode].ok_or(5u8)?;
+            n.ucar = image.map.get(self.opcode).copied().flatten().ok_or(5u8)?;
         }
         if i.mark {
             n.mark = self.pc;

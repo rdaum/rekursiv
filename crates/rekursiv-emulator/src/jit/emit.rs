@@ -4,7 +4,7 @@ use crate::scalar::{ScalarInstruction, ScalarWrites};
 use cranelift_codegen::ir::{condcodes::IntCC, types::*, InstBuilder, MemFlagsData, Type, Value};
 use cranelift_frontend::FunctionBuilder;
 use rekursiv_asm::processor::*;
-use rekursiv_model::processor::{Processor, CODE_WORDS, STACK_WORDS};
+use rekursiv_model::processor::{Processor, CODE_WORDS};
 use std::mem::offset_of;
 
 #[derive(Clone, Copy)]
@@ -23,6 +23,10 @@ pub(super) struct Emit<'a> {
     pub(super) out: Value,
     pub(super) irq: Value,
     pub(super) mode: Mode,
+    pub(super) image: Value,
+    pub(super) pointer: Type,
+    pub(super) nam: cranelift_codegen::ir::FuncRef,
+    pub(super) map: cranelift_codegen::ir::FuncRef,
 }
 macro_rules! load {
     ($e:expr, $ty:expr, $field:ident) => {
@@ -40,17 +44,17 @@ macro_rules! store {
     };
 }
 impl Emit<'_> {
-    fn cpu_store(&mut self, offset: usize, value: Value) {
+    pub(super) fn cpu_store(&mut self, offset: usize, value: Value) {
         self.b
             .ins()
             .store(MemFlagsData::trusted(), value, self.cpu, offset as i32);
     }
-    fn load(&mut self, ty: Type, offset: usize) -> Value {
+    pub(super) fn load(&mut self, ty: Type, offset: usize) -> Value {
         self.b
             .ins()
             .load(ty, MemFlagsData::trusted(), self.cpu, offset as i32)
     }
-    fn wide(&mut self, value: Value) -> Value {
+    pub(super) fn wide(&mut self, value: Value) -> Value {
         self.b.ins().uextend(I64, value)
     }
     fn rf(&mut self, index: u8) -> Value {
@@ -91,7 +95,7 @@ impl Emit<'_> {
             Source::Branch => self.b.ins().iconst(I32, i.branch as i16 as i64),
         }
     }
-    fn reject(&mut self, condition: Value, code: i64) {
+    pub(super) fn reject(&mut self, condition: Value, code: i64) {
         let failed = self.b.create_block();
         let good = self.b.create_block();
         self.b.ins().brif(condition, failed, &[], good, &[]);
@@ -295,24 +299,7 @@ impl Emit<'_> {
                 .ins()
                 .icmp_imm_s(IntCC::UnsignedGreaterThanOrEqual, target, CODE_WORDS as i64);
         self.reject(bad_pc, 2);
-        for offset in [
-            offset_of!(Processor, sp),
-            offset_of!(Processor, csp),
-            offset_of!(Processor, esp),
-        ] {
-            let v = self.load(I32, offset);
-            let bad =
-                self.b
-                    .ins()
-                    .icmp_imm_s(IntCC::UnsignedGreaterThanOrEqual, v, STACK_WORDS as i64);
-            self.reject(bad, 3);
-        }
-        let apc = load!(self, I32, apc);
-        let bad_apc = self
-            .b
-            .ins()
-            .icmp_imm_s(IntCC::UnsignedGreaterThan, apc, 0xffffff);
-        self.reject(bad_apc, 5);
+        let stack_fetch = self.stack_fetch(i, d, y);
         if i.allocation_dynamic {
             let size = self.rf(i.ra);
             let bad = self
@@ -369,7 +356,13 @@ impl Emit<'_> {
             if i.flags {
                 self.cpu_store(offset_of!(Processor, flags), flags);
             }
+            if let Some(values) = stack_fetch {
+                self.publish_stack_fetch(i, values, true);
+            }
             return;
+        }
+        if let Some(values) = stack_fetch {
+            self.publish_stack_fetch(i, values, false);
         }
         let object = load!(self, I64, object);
         store!(self, pc, next_pc);

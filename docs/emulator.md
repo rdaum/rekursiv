@@ -9,7 +9,7 @@ throughput. Verilator remains necessary for handshake, pipeline, stall, reset, a
 validation.
 
 The CLI uses a [Cranelift](https://docs.wasmtime.dev/api/cranelift_jit/index.html) JIT by default.
-It translates scalar microinstructions into native arithmetic, flag calculations, branches, and validation checks.
+It translates arithmetic, flag calculations, branches, stack controls, fetch controls, and validation checks into native code.
 Native blocks execute up to 32 local instructions per call.
 Each instruction retains its device tick, retirement boundary, and fault checks.
 
@@ -19,7 +19,18 @@ A `launch` instruction publishes local writes at command acceptance and defers i
 [object barrier](interface.md#retirement-conditions-and-errors).
 A fault inside a native block retains earlier retirements and drains any older object reply first.
 
-Stack, fetch, floating-point, root-access, and collector instructions use the checked interpreter.
+Expression-stack and control-stack accesses use their old addresses, even when the same instruction changes a pointer.
+`ESP=SP` forwards the new stack pointer.
+Compact-value construction and stack bounds remain checked before retirement.
+`Fetch::Both` fetches a new NAM word while mapping the old opcode.
+The sequencer also uses the old dispatch target.
+
+Fetch reads live NAM and opcode-map entries through small Rust ABI adapters.
+These adapters handle optional table slots without assumptions about Rust enum layouts.
+Native code extracts the fields and updates fetch state.
+Replacing or resizing either table takes effect on the next access without JIT recompilation.
+
+Floating-point, device, root-access, and collector instructions use the checked interpreter.
 Interrupt-sensitive instructions execute individually so each condition uses the correct device state.
 Microcode still implements Smalltalk operations and collection.
 The JIT changes host execution speed without changing the hardware control words or replacing guest operations.
@@ -170,8 +181,10 @@ Each run executes 50 million steps with deterministic device time.
 The script compares final processor counters and framebuffer hashes, then reports median execution rates.
 Logs, frames, and a JSON summary go to `artifacts/jit-benchmark`.
 Compilation time is separate from execution time.
-On an ARM Cortex-X925 host, five pairs measured median rates of 19.9 million interpreted and 22.2 million JIT microinstructions per second.
-That workload gained 11.4% throughput, with about 0.4 seconds of compilation before execution.
+On an ARM Cortex-X925 core, five pairs measured median rates of 20.2 million interpreted and 25.4 million JIT microinstructions per second.
+That workload gained 25.8% throughput, with about 0.7 seconds of compilation before execution.
+The measurements pinned both engines to the same core with `taskset -c 7 python3 scripts/bench-emulator.py`.
+Choose a suitable CPU number on your host; mixed CPU types can affect comparisons.
 Each engine produced the same final counters and framebuffer hash.
 These measurements describe native emulation, not FPGA throughput.
 
@@ -272,8 +285,8 @@ bandwidth costs.
 ## Architecture and validation
 
 `rekursiv-model` supplies instruction and object-command semantics, including SoftFloat arithmetic.
-The interpreter and RTL oracle share those semantics. The JIT independently emits scalar arithmetic
-and checks it against the processor oracle in differential tests.
+The interpreter and RTL oracle share those semantics. The JIT independently emits arithmetic, stack, and fetch operations.
+Differential tests compare those operations with the processor oracle.
 The emulator adds an execution loop and a separate model of the OBJEKT maintenance datapath. It never calls the graph-walking `collect_ram` oracle. Collector
 microcode chooses every root, mark, pager pass, body read, body write, and commit.
 
@@ -310,9 +323,10 @@ REKURSIV_ST80_DIR="$PWD/artifacts/st80" \
   --test startup --test jit -- --ignored --nocapture
 ```
 
-JIT tests compare 49,152 instruction/state combinations with the processor oracle.
+JIT tests compare 49,152 scalar and 16,384 stack/fetch instruction-state combinations with the processor oracle.
 Other cases cover simultaneous destinations, block budgets, source edits, deferred object errors, and device errors before retirement.
 The pipeline tests compare JIT execution with RTL through stalls and collection.
+A combined stack/fetch program checks old-state reads and pointer forwarding against RTL at each retirement.
 An original-image regression compares JIT blocks with the interpreter through 5.12 million steps, including GC, BitBlt, and mouse input.
 
 The allocation and paging tests compare registers and object state with RTL after each mutator
