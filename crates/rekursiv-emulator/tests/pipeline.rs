@@ -13,14 +13,14 @@ fn compare_program(source: &str, timing: Timing) -> Result<(u64, rekursiv_emulat
     // One external scratch register for the device-barrier case.
     m.devices.registers.insert(0, 0);
     h.device.registers.insert(0, 0);
-    h.load_processor(&m.image)?;
+    h.load_processor(m.image())?;
     h.start_processor(m.cpu.pc)?;
     let start = h.stats.cycles;
     let mut oracle = Processor {
         pc: m.cpu.pc,
         ..Default::default()
     };
-    h.run_processor_observed(&m.image.clone(), &mut oracle, 5_000_000, |h, expected| {
+    h.run_processor_observed(&m.image().clone(), &mut oracle, 5_000_000, |h, expected| {
         for _ in 0..200_000 {
             if m.step()? == Step::Retired && !m.recovering() {
                 ensure!(m.cpu == *expected, "CPU mismatch at {}", expected.pc);
@@ -116,7 +116,7 @@ fn launch_defers_bounds_fault_until_barrier_and_keeps_intervening_work() -> Resu
         },
         None,
     )?;
-    h.load_processor(&m.image)?;
+    h.load_processor(m.image())?;
     h.start_processor(0)?;
     for _ in 0..1000 {
         if h.rtl.cpu_halted_o != 0 {
@@ -209,7 +209,7 @@ fn local_fault_drains_the_launched_access_and_preserves_error_priority() -> Resu
             },
             None,
         )?;
-        h.load_processor(&m.image)?;
+        h.load_processor(m.image())?;
         h.start_processor(0)?;
         for cycle in 0..1000 {
             if h.rtl.cpu_halted_o != 0 {

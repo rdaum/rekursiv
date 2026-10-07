@@ -195,6 +195,38 @@ impl Model {
             },
         )
     }
+    /// Execute a native command when the caller only needs its response.
+    /// Architectural effects, faults, and backing-store traffic are unchanged.
+    /// Common resident commands avoid allocating a one-element memory log.
+    pub fn execute_response(&mut self, command: Command, memory_error: bool) -> Response {
+        let command = match command.validate() {
+            Ok(command) => command,
+            Err(status) => return Response::error(status),
+        };
+        if self.maintenance {
+            return Response::error(Status::BadCommand);
+        }
+        match command.pager {
+            Pager::NextObject
+            | Pager::FindObject
+            | Pager::Exchange
+            | Pager::Fetch
+            | Pager::Allocate => {
+                self.execute_validated(
+                    command,
+                    Faults {
+                        memory_at: memory_error.then_some(0),
+                        store_at: None,
+                    },
+                )
+                .response
+            }
+            _ => match self.transition(command, memory_error, &mut None) {
+                Ok(data) => Response::ok(data),
+                Err(status) => Response::error(status),
+            },
+        }
+    }
     pub fn execute_raw(&mut self, ports: Ports, memory_error: bool) -> Outcome {
         self.execute_faults(
             ports,
@@ -215,7 +247,7 @@ impl Model {
             Err(status) => Outcome::error(status),
         }
     }
-    // Both entry points have checked the command and maintenance lock. Keep
+    // Callers have checked the command and maintenance lock. Keep
     // dispatch and all memory/store effects shared; only wire conversion differs.
     fn execute_validated(&mut self, command: Command, faults: Faults) -> Outcome {
         match command.pager {
@@ -617,10 +649,17 @@ mod tests {
             for memory_error in [true, false] {
                 let mut native = model.clone();
                 let mut wire = model.clone();
+                let mut unrecorded = model.clone();
+                let response = unrecorded.execute_response(command, memory_error);
                 let actual = native.execute(command, memory_error);
                 let expected = wire.execute_raw(command.encode().unwrap(), memory_error);
                 assert_eq!(actual, expected, "{command:?}, fault={memory_error}");
                 assert_eq!(native, wire, "{command:?}, fault={memory_error}");
+                assert_eq!(
+                    response, actual.response,
+                    "{command:?}, fault={memory_error}"
+                );
+                assert_eq!(unrecorded, native, "{command:?}, fault={memory_error}");
                 if !memory_error {
                     assert_eq!(actual.response.status, Status::Ok, "{command:?}");
                     model = native;
@@ -656,6 +695,10 @@ mod tests {
                 model.maintenance = maintenance;
                 let before = model.clone();
                 assert_eq!(model.execute(command, true), Outcome::error(expected));
+                assert_eq!(
+                    model.execute_response(command, true),
+                    Response::error(expected)
+                );
                 assert_eq!(model, before);
                 // The public transfer entry point must still validate itself.
                 assert_eq!(
@@ -686,6 +729,10 @@ mod tests {
         assert_eq!(
             model.execute_raw(ports, false),
             Outcome::error(Status::BadCommand)
+        );
+        assert_eq!(
+            model.execute_response(command, false),
+            Response::error(Status::BadCommand)
         );
         assert_eq!(model, before);
         model.maintenance = false;

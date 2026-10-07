@@ -74,7 +74,7 @@ impl std::fmt::Display for Fault {
 impl std::error::Error for Fault {}
 
 pub struct Machine {
-    pub image: Image,
+    image: Image,
     pub cpu: Processor,
     pub objekt: Model,
     pub devices: Device,
@@ -88,9 +88,10 @@ pub struct Machine {
     pending_object: Option<Response>,
     recovery: Option<RecoveryState>,
     retry_irq: Option<bool>,
-    // Snapshot of eligible words, not an alternate program. The image remains
-    // writable: each use checks the complete source word, and edits fall back
-    // to general preparation. Collector privilege checks always use that path.
+    // image_mut marks caches dirty before exposing a mutable reference. Public
+    // execution entry points refresh them once, before borrowing cached code.
+    // Collector privilege checks always use general preparation.
+    code_dirty: bool,
     scalar_code: Vec<Option<ScalarInstruction>>,
     jit: Option<jit::Jit>,
 }
@@ -139,8 +140,33 @@ impl Machine {
             recovery: None,
             retry_irq: None,
             scalar_code,
+            code_dirty: false,
             jit: None,
         })
+    }
+    /// Read the loaded image without invalidating instruction caches.
+    pub fn image(&self) -> &Image {
+        &self.image
+    }
+    /// Edit or replace the image. Before the next execution, changed words
+    /// invalidate every overlapping native block and refresh scalar decoding.
+    /// NAM/map-only edits preserve translations and take effect on access.
+    pub fn image_mut(&mut self) -> &mut Image {
+        self.code_dirty = true;
+        &mut self.image
+    }
+    #[cold]
+    fn refresh_code(&mut self) {
+        self.scalar_code = self
+            .image
+            .code
+            .iter()
+            .map(|i| i.and_then(ScalarInstruction::decode))
+            .collect();
+        if let Some(jit) = &mut self.jit {
+            jit.invalidate_changed(&self.image);
+        }
+        self.code_dirty = false;
     }
     /// Compile the current control store. Modified or unsupported words keep
     /// using the interpreter. Repeating this call rebuilds the translation.
@@ -188,6 +214,9 @@ impl Machine {
     /// blocks retain each instruction's device tick and precise fault boundary.
     /// Use `step` for tracing or breakpoints that inspect every retirement.
     pub fn run_steps(&mut self, budget: u64) -> Result<u64> {
+        if self.code_dirty {
+            self.refresh_code();
+        }
         // Engine selection cannot change within a batch. Keep JIT block guards
         // and native write records out of the interpreter's inner loop.
         if self.jit.is_none() {
@@ -238,6 +267,9 @@ impl Machine {
         Ok(steps)
     }
     pub fn step(&mut self) -> Result<Step> {
+        if self.code_dirty {
+            self.refresh_code();
+        }
         if self.jit.is_some() {
             self.step_with::<Native>()
         } else {
@@ -281,7 +313,7 @@ impl Machine {
                 .as_ref()
                 .is_some_and(|e| e.status() != 0)
         });
-        let prepared = E::prepare(self, instruction, irq);
+        let prepared = E::prepare(self, irq);
         let (mut next, command) = match prepared {
             Ok(p) => p,
             Err(code) => {
@@ -335,17 +367,16 @@ impl Machine {
         }
         if let Some(command) = command {
             self.stats.object_commands += 1;
-            let before = self
-                .objekt_metrics_enabled
-                .then(|| metrics::Observation::capture(&self.objekt, command));
-            let outcome = self.objekt.execute(command, false);
-            if let Some(before) = before {
+            let response = if self.objekt_metrics_enabled {
+                let before = metrics::Observation::capture(&self.objekt, command);
+                let outcome = self.objekt.execute(command, false);
                 self.stats
                     .objekt
                     .observe(command, before, &outcome, &self.objekt);
-            }
-            let response = outcome.response;
-            drop(outcome);
+                outcome.response
+            } else {
+                self.objekt.execute_response(command, false)
+            };
             if response.status == Status::OutOfSpace
                 && self.image.collector_entry.is_some()
                 && self.retry_irq.is_none()

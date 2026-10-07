@@ -109,8 +109,8 @@ fn fetch_uses_live_tables_and_missing_slots_do_not_publish_writes() -> Result<()
     m.enable_jit()?;
     // Both tables were empty when compiled. Populate/replace their allocations
     // afterward: generated code must never embed their data pointers or values.
-    m.image.nam = vec![Some((3 << 30) | 123), Some((5 << 30) | 999)];
-    m.image.map = vec![Some(31), None, None, Some(41)];
+    m.image_mut().nam = vec![Some((3 << 30) | 123), Some((5 << 30) | 999)];
+    m.image_mut().map = vec![Some(31), None, None, Some(41)];
     m.run_steps(2)?;
     assert_eq!((m.cpu.opcode, m.cpu.namarg, m.cpu.ucar), (5, 999, 41));
     assert_eq!(m.cpu.estk[0], 17);
@@ -121,7 +121,7 @@ fn fetch_uses_live_tables_and_missing_slots_do_not_publish_writes() -> Result<()
         m.fault = None;
         m.cpu.halted = false;
         if missing_nam {
-            m.image.nam.clear();
+            m.image_mut().nam.clear();
         }
         let before = m.cpu.clone();
         assert!(m.run_steps(2).is_err());

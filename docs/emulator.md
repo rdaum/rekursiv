@@ -35,9 +35,14 @@ Interrupt-sensitive instructions execute individually so each condition uses the
 Microcode still implements Smalltalk operations and collection.
 The JIT changes host execution speed without changing the hardware control words or replacing guest operations.
 
-The control store remains writable.
-Before each native call, the executor compares its source words with the current image.
+The control store remains writable through `Machine::image_mut()`.
+`Machine::image()` supplies read access without invalidation.
+A mutable image borrow marks the instruction caches dirty before it exposes the image.
+Before the next `step` or `run_steps`, the executor refreshes scalar decoding and invalidates changed native translations.
+This check includes every block that overlaps a changed or removed word.
+Unchanged translations remain available, including after NAM/map-only edits.
 Changed words use the interpreter until a library caller recompiles the image.
+Execution performs no repeated source comparisons between edits.
 JIT code belongs to the machine and is freed when the machine drops or disables the JIT.
 
 ## Run the workstation demo
@@ -181,11 +186,20 @@ Each run executes 50 million steps with deterministic device time.
 The script compares final processor counters and framebuffer hashes, then reports median execution rates.
 Logs, frames, and a JSON summary go to `artifacts/jit-benchmark`.
 Compilation time is separate from execution time.
-On an ARM Cortex-X925 core, five pairs measured median rates of 20.2 million interpreted and 25.4 million JIT microinstructions per second.
-That workload gained 25.8% throughput, with about 0.7 seconds of compilation before execution.
-The measurements pinned both engines to the same core with `taskset -c 7 python3 scripts/bench-emulator.py`.
+A separate before/after comparison used three alternating pairs on an ARM Cortex-X925 core, pinned to CPU 7.
+Both versions used the JIT, deterministic device time, and 16,777,216 RAM words.
+The baseline was commit `28c324a`, before explicit cache invalidation and the OBJEKT response-only path.
+
+| Step budget | Baseline | Current | Throughput gain |
+| --- | --- | --- | --- |
+| 50 million | 25.5 million/s | 33.6 million/s | 31.6% |
+| 500 million | 20.4 million/s | 25.7 million/s | 25.6% |
+
+Rates are medians and exclude image loading and compilation.
+Each pair produced the same final counters and framebuffer hash.
+These runs had no collections; collection-heavy workloads need separate measurements.
+On Linux, `taskset -c 7 python3 scripts/bench-emulator.py` pins an engine comparison to that core.
 Choose a suitable CPU number on your host; mixed CPU types can affect comparisons.
-Each engine produced the same final counters and framebuffer hash.
 These measurements describe native emulation, not FPGA throughput.
 
 A library caller starts with the interpreter and enables translation through `Machine::enable_jit()`.
@@ -297,8 +311,11 @@ object or device request. Blocking instructions commit these writes only after s
 all local destinations on failure. Launched prepared accesses commit local writes at acceptance and
 defer object errors to the next barrier. Each indexed write uses the original operand and address;
 preparation does not copy the register file, stacks, or roots. Native OBJEKT commands are validated
-directly; they need no wire encoding and decoding. External wire requests retain numeric-field
-validation and share the same command execution and fault handling. The GUI uses
+directly; they need no wire encoding and decoding.
+With metrics disabled, resident OBJEKT commands return responses without allocating memory-access records.
+Metrics and RTL comparisons retain those records through the observed command path.
+Both paths share the same state transitions and fault checks.
+External wire requests retain numeric-field validation and share the same command execution and fault handling. The GUI uses
 [winit](https://docs.rs/winit/0.30/winit/) for window events and
 [softbuffer](https://docs.rs/softbuffer/0.4/softbuffer/) for pixel presentation. Presentation needs
 no GPU renderer. Guest microcode still performs all drawing and supplies the published bitmap. It
@@ -324,7 +341,7 @@ REKURSIV_ST80_DIR="$PWD/artifacts/st80" \
 ```
 
 JIT tests compare 49,152 scalar and 16,384 stack/fetch instruction-state combinations with the processor oracle.
-Other cases cover simultaneous destinations, block budgets, source edits, deferred object errors, and device errors before retirement.
+Other cases cover simultaneous destinations, block budgets, overlapping code edits, image replacement, deferred object errors, and device errors before retirement.
 The pipeline tests compare JIT execution with RTL through stalls and collection.
 A combined stack/fetch program checks old-state reads and pointer forwarding against RTL at each retirement.
 An original-image regression compares JIT blocks with the interpreter through 5.12 million steps, including GC, BitBlt, and mouse input.

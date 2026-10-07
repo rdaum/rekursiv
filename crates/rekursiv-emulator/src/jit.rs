@@ -313,6 +313,28 @@ impl Jit {
         Ok(jit)
     }
 
+    // Called once after a mutable image borrow, before any execution resumes.
+    // Blocks can start before an edited word: inspect their entire source range.
+    // Missing/shortened stores also invalidate translations. Unchanged tables
+    // retain compiled code and its statistics; invalid entries use the interpreter.
+    pub(crate) fn invalidate_changed(&mut self, image: &Image) {
+        for (pc, entry) in self.entries.iter_mut().enumerate() {
+            if entry
+                .as_ref()
+                .is_some_and(|e| image.code.get(pc) != Some(&Some(e.source)))
+            {
+                *entry = None;
+            }
+        }
+        for (pc, block) in self.blocks.iter_mut().enumerate() {
+            if block.as_ref().is_some_and(|b| {
+                image.code.get(pc..pc + b.source.len()) != Some(b.source.as_slice())
+            }) {
+                *block = None;
+            }
+        }
+    }
+
     pub(crate) fn statistics(&self) -> JitStatistics {
         self.stats.get()
     }
@@ -326,14 +348,11 @@ impl Jit {
     ) -> Option<BlockResult> {
         let pc = cpu.pc as usize;
         let block = self.blocks.get(pc)?.as_ref()?;
-        if block.source.len() as u64 > budget
-            || cpu.roots.is_none()
-            || image.code.get(pc..pc + block.source.len())? != block.source
-        {
+        if block.source.len() as u64 > budget || cpu.roots.is_none() {
             return None;
         }
         let mut error = None;
-        // SAFETY: guarded code matches the current image, fields are accessed
+        // SAFETY: Machine invalidates changed code before execution. Fields are accessed
         // with build-local offsets, and the four pointed-to objects are live
         // and disjoint throughout this synchronous call.
         let result = unsafe { (block.run)(cpu, devices, &mut error, image) };
@@ -352,16 +371,11 @@ impl Jit {
     pub(crate) fn prepare(
         &self,
         cpu: &Processor,
-        i: Instruction,
         irq: bool,
         image: &Image,
     ) -> Option<Result<(PreparedWrites, Option<Command>), u8>> {
         let entry = self.entries.get(cpu.pc as usize)?.as_ref()?;
-        // The control store is public and writable. Never execute an old
-        // translation after an edit, even if it changes only a command field.
-        if entry.source != i {
-            return None;
-        }
+        let i = entry.source;
         let mut stats = self.stats.get();
         stats.preparations += 1;
         self.stats.set(stats);

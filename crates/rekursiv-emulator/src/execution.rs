@@ -39,17 +39,13 @@ impl WriteSet for Writes {
 
 pub(super) trait Execution {
     type Writes: WriteSet;
-    fn prepare(
-        m: &Machine,
-        i: Instruction,
-        irq: bool,
-    ) -> Result<(Self::Writes, Option<Command>), u8>;
+    fn prepare(m: &Machine, irq: bool) -> Result<(Self::Writes, Option<Command>), u8>;
 }
 pub(super) struct Interpreted;
 impl Execution for Interpreted {
     type Writes = Writes;
     #[inline(never)]
-    fn prepare(m: &Machine, i: Instruction, irq: bool) -> Result<(Writes, Option<Command>), u8> {
+    fn prepare(m: &Machine, irq: bool) -> Result<(Writes, Option<Command>), u8> {
         if m.recovering() {
             m.cpu
                 .prepare_recovery_writes(&m.image, irq)
@@ -58,7 +54,6 @@ impl Execution for Interpreted {
             .scalar_code
             .get(m.cpu.pc as usize)
             .and_then(Option::as_ref)
-            .filter(|d| d.matches(&i))
         {
             decoded
                 .prepare(&m.cpu, irq)
@@ -99,20 +94,16 @@ pub(super) struct Native;
 impl Execution for Native {
     type Writes = NativeWrites;
     #[inline(never)]
-    fn prepare(
-        m: &Machine,
-        i: Instruction,
-        irq: bool,
-    ) -> Result<(NativeWrites, Option<Command>), u8> {
+    fn prepare(m: &Machine, irq: bool) -> Result<(NativeWrites, Option<Command>), u8> {
         if !m.recovering() {
             if let Some(result) = m
                 .jit
                 .as_ref()
-                .and_then(|jit| jit.prepare(&m.cpu, i, irq, &m.image))
+                .and_then(|jit| jit.prepare(&m.cpu, irq, &m.image))
             {
                 return result.map(|(w, c)| (w.into(), c));
             }
         }
-        Interpreted::prepare(m, i, irq).map(|(w, c)| (NativeWrites::Interpreted(w), c))
+        Interpreted::prepare(m, irq).map(|(w, c)| (NativeWrites::Interpreted(w), c))
     }
 }

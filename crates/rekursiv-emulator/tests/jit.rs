@@ -13,8 +13,8 @@ fn edited_control_store_falls_back_and_can_be_recompiled() -> Result<()> {
     };
     let mut machine = Machine::new(Image::program(&[original, Instruction::halt()]), 0, 16, 512)?;
     assert!(machine.enable_jit()? > 0);
-    // Mutations do not need an explicit invalidation API.
-    machine.image.code[0].as_mut().unwrap().data = Word::raw(73)?;
+    // A mutable image borrow invalidates changed translations before execution.
+    machine.image_mut().code[0].as_mut().unwrap().data = Word::raw(73)?;
     assert_eq!(machine.step()?, Step::Retired);
     assert_eq!(machine.cpu.rf[0], 73);
     machine.cpu.pc = 0;
@@ -23,7 +23,7 @@ fn edited_control_store_falls_back_and_can_be_recompiled() -> Result<()> {
     assert_eq!(machine.cpu.rf[0], 73);
     // An invalid replacement must be validated, never run as cached code.
     machine.cpu.pc = 0;
-    machine.image.code[0].as_mut().unwrap().ra = 16;
+    machine.image_mut().code[0].as_mut().unwrap().ra = 16;
     assert!(machine.step().is_err());
     assert_eq!(machine.fault.unwrap().code, 1);
     assert_eq!(machine.cpu.rf[0], 73);
@@ -95,7 +95,7 @@ fn native_blocks_preserve_ticks_budget_edits_and_fault_boundaries() -> Result<()
         boot::microcode_with_pager("d=1, r=Bus, ldrb\nd=2, r=Bus, rb=1, ldrb\nhalt", 512, 16)?
             .machine;
     m.enable_jit()?;
-    m.image.code[1].as_mut().unwrap().data = Word::raw(73)?;
+    m.image_mut().code[1].as_mut().unwrap().data = Word::raw(73)?;
     m.run_steps(2)?;
     assert_eq!(m.cpu.rf[..2], [1, 73]);
     // A later invalid branch must preserve the earlier instruction's commit
@@ -314,7 +314,7 @@ fn native_block_destinations_use_old_operands_and_flags() -> Result<()> {
             product: random(),
             sp: if case % 31 == 0 { 32 } else { 0 },
             apc: if case % 37 == 0 { 0x1000000 } else { 0 },
-            roots: Some(a.image.roots),
+            roots: Some(a.image().roots),
             ..Default::default()
         };
         for r in &mut cpu.rf {
@@ -340,5 +340,92 @@ fn native_block_destinations_use_old_operands_and_flags() -> Result<()> {
         assert_eq!(a.fault, b.fault, "case {case}");
     }
     assert!(b.jit_statistics().unwrap().block_instructions > 1000);
+    Ok(())
+}
+
+#[test]
+fn image_edits_invalidate_overlapping_blocks_but_keep_unrelated_code() -> Result<()> {
+    let mut m = boot::microcode_with_pager(
+        "d=1, r=Bus, ldrb\nd=2, r=Bus, rb=1, ldrb\nd=3, r=Bus, rb=2, ldrb\nhalt",
+        512,
+        16,
+    )?
+    .machine;
+    let second = m.image().code[..4].to_vec();
+    m.image_mut().code[8..12].copy_from_slice(&second);
+    m.enable_jit()?;
+    // Invalidate blocks beginning at 0 and 1 as well as the edited word at 2.
+    m.image_mut().code[2].as_mut().unwrap().data = Word::raw(73)?;
+    m.run_steps(3)?;
+    assert_eq!(m.cpu.rf[..3], [1, 2, 73]);
+    assert_eq!(m.jit_statistics().unwrap().block_instructions, 0);
+    m.cpu.pc = 8;
+    m.run_steps(3)?;
+    assert_eq!(m.cpu.rf[..3], [1, 2, 3]);
+    assert_eq!(m.jit_statistics().unwrap().block_instructions, 3);
+    // Read access does not invalidate either cache. Table-only edits preserve
+    // blocks too, while their new values remain visible to fetch instructions.
+    assert!(m.image().code[8].is_some());
+    m.image_mut().map[0] = Some(8);
+    m.cpu.pc = 8;
+    m.run_steps(3)?;
+    assert_eq!(m.jit_statistics().unwrap().block_instructions, 6);
+    Ok(())
+}
+
+#[test]
+fn replacing_and_resizing_the_image_cannot_execute_stale_code() -> Result<()> {
+    for jit in [false, true] {
+        for batched in [false, true] {
+            let mut m = boot::microcode_with_pager("d=11, r=Bus, ldrb\nhalt", 512, 16)?.machine;
+            if jit {
+                m.enable_jit()?;
+            }
+            let original = m.image().code[0].unwrap();
+            *m.image_mut() = Image::program(&[Instruction {
+                data: Word::raw(29)?,
+                ..original
+            }]);
+            if batched {
+                m.run_steps(1)?;
+            } else {
+                m.step()?;
+            }
+            assert_eq!(m.cpu.rf[0], 29);
+            // This removes both the next word and all old native block ranges.
+            m.image_mut().code.clear();
+            let result = if batched {
+                m.run_steps(4).map(|_| ())
+            } else {
+                m.step().map(|_| ())
+            };
+            assert!(result.is_err());
+            assert_eq!(m.fault.unwrap().code, 2);
+            assert_eq!(m.cpu.rf[0], 29);
+            // New words must be decoded even when no old cache entry exists.
+            m.image_mut().code = vec![Some(Instruction {
+                data: Word::raw(47)?,
+                ..original
+            })];
+            m.cpu.pc = 0;
+            m.cpu.halted = false;
+            m.fault = None;
+            if batched {
+                m.run_steps(1)?;
+            } else {
+                m.step()?;
+            }
+            assert_eq!(m.cpu.rf[0], 47);
+            if jit {
+                m.cpu.pc = 0;
+                m.image_mut().code[0].as_mut().unwrap().data = Word::raw(59)?;
+                // Recompilation before the next execution must use the new image.
+                m.enable_jit()?;
+                m.run_steps(1)?;
+                assert_eq!(m.cpu.rf[0], 59);
+                assert_eq!(m.jit_statistics().unwrap().preparations, 1);
+            }
+        }
+    }
     Ok(())
 }

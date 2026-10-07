@@ -37,11 +37,11 @@ fn native_retirements_and_heaps_match_rtl_across_collection_and_paging() -> Resu
             },
             None,
         )?;
-        h.load_processor(&machine.image)?;
+        h.load_processor(machine.image())?;
         h.start_processor(machine.cpu.pc)?;
         let mut oracle = Processor::default();
         h.run_processor_observed(
-            &machine.image.clone(),
+            &machine.image().clone(),
             &mut oracle,
             5_000_000,
             |h, expected| {
@@ -132,7 +132,7 @@ fn malformed_collection_request_cannot_enter_recovery() -> Result<()> {
     };
     let image = Image::program(&[collect, Instruction::halt()]).with_ram_collector(128, 16)?;
     let mut m = Machine::new(image.clone(), 0, 16, 512)?;
-    m.image.code[0].as_mut().unwrap().data = Word::raw(1)?;
+    m.image_mut().code[0].as_mut().unwrap().data = Word::raw(1)?;
     assert!(m.step().is_err());
     assert_eq!(m.fault.unwrap().code, 1);
     assert!(!m.recovering());
@@ -206,9 +206,9 @@ fn edited_control_words_cannot_use_stale_native_decoding() -> Result<()> {
         None,
     ] {
         let mut m = Machine::new(Image::program(&[original]), 0, 16, 512)?;
-        m.image.code[0] = replacement;
+        m.image_mut().code[0] = replacement;
         let before = m.cpu.clone();
-        match before.prepare(&m.image, false) {
+        match before.prepare(m.image(), false) {
             Ok((expected, _)) => {
                 assert_eq!(m.step()?, Step::Retired);
                 assert_eq!(m.cpu, expected);

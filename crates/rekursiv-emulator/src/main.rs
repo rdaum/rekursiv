@@ -184,7 +184,7 @@ fn main() -> Result<()> {
             ensure!(
                 loaded
                     .machine
-                    .image
+                    .image()
                     .code
                     .get(pc as usize)
                     .is_some_and(Option::is_some),

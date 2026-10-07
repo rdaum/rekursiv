@@ -170,7 +170,7 @@ fn compiled_datapath_matches_the_processor_oracle() -> Result<()> {
             let irq = case % 2 == 0;
             let expected = cpu.prepare_writes(&image, irq);
             let actual = jit
-                .prepare(&cpu, i, irq, &image)
+                .prepare(&cpu, irq, &image)
                 .expect("eligible instruction");
             match (expected, actual) {
                 (Ok((mut expected, command)), Ok((actual, jit_command))) => {
@@ -318,7 +318,7 @@ fn stack_fetch_preparations_match_the_oracle_for_valid_and_invalid_state() -> Re
             }
             let before = cpu.clone();
             let expected = cpu.prepare_writes(&image, false);
-            let actual = jit.prepare(&cpu, i, false, &image).unwrap();
+            let actual = jit.prepare(&cpu, false, &image).unwrap();
             match (expected, actual) {
                 (Ok((mut expected, c)), Ok((actual, jc))) => {
                     let mut actual = crate::execution::NativeWrites::from(actual);

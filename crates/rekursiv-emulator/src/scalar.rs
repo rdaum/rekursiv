@@ -1,7 +1,7 @@
 //! Native execution of control words whose stack and fetch units are idle.
 //!
-//! Decode checks static constraints once. A cached word is used only while it
-//! still equals the writable image word. Dynamic checks and old-state operand
+//! Decode checks static constraints once. The executor refreshes cached words
+//! after image edits, before execution resumes. Dynamic checks and old-state operand
 //! reads precede every external operation; commit remains infallible. The full
 //! processor model handles all other words and remains the test oracle.
 use rekursiv_asm::{processor::*, Command, Word};
@@ -51,11 +51,6 @@ impl ScalarInstruction {
                 bus,
             })
         }
-    }
-
-    #[inline(always)]
-    pub(crate) fn matches(&self, i: &Instruction) -> bool {
-        self.instruction == *i
     }
 
     pub(crate) fn prepare(
