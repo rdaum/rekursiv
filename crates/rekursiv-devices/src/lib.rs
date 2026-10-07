@@ -101,11 +101,15 @@ pub struct Device {
 }
 impl Device {
     pub fn workstation(utc_seconds: u64, ticks_per_ms: u64) -> Self {
+        // Workstation power-on behavior: the visible cursor follows the
+        // physical pointer until software explicitly unlinks it at 0x40c.
+        let mut pointer = Pointer::default();
+        pointer.linked = true;
         Self {
             discard_history: true,
             events: Some(Events::default()),
             clocks: Some(Clocks::new(utc_seconds, 0, ticks_per_ms)),
-            pointer: Some(Pointer::default()),
+            pointer: Some(pointer),
             input: Some(Input::new(1024)),
             cursor_bitmap: Some(Bitmap::new(16, 16)),
             display_bitmap: Some(Bitmap::new(1024, 1024)),

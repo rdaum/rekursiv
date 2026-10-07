@@ -6,6 +6,10 @@ use std::{
     time::{Duration, Instant},
 };
 #[cfg(feature = "window")]
+mod frontend;
+#[cfg(feature = "window")]
+mod repaint;
+#[cfg(feature = "window")]
 mod window;
 
 fn main() -> Result<()> {

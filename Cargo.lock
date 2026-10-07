@@ -890,11 +890,13 @@ version = "0.1.0"
 dependencies = [
  "eyre",
  "minifb",
+ "raw-window-handle",
  "rekursiv-asm",
  "rekursiv-devices",
  "rekursiv-model",
  "rekursiv-sim",
  "rekursiv-smalltalk",
+ "x11-dl",
 ]
 
 [[package]]

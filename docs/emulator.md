@@ -103,7 +103,7 @@ The window presents complete published frames. It does not read a live Form from
 | `--when Rn=VALUE` | Add a register condition to `--stop-at`; decimal or `0x` hexadecimal |
 | `--trace FILE` | Record retired micro-PCs, collector mode, object result, and numeric registers |
 | `--frame FILE` | Save the last published display as a PPM, without cursor composition |
-| `--frames N` | Close a window session after N frames, for smoke tests |
+| `--frames N` | Close after N presentation iterations, including those that skip uploads |
 
 Headless execution stops after ten million steps unless `--steps` supplies another limit.
 Processor faults report the micro-PC, fault code, and object status where applicable.
@@ -112,8 +112,9 @@ The CLI leaves service breaks stopped.
 
 The exit summary reports active execution seconds, total elapsed seconds, and retired microinstructions per second for both intervals.
 The rates include mutator and collector instructions. Hold steps and collector entry/return transitions do not count as retired instructions.
-Active time includes instruction execution, emulated devices, recovery setup, and optional trace output. It excludes window presentation and stopped-window time.
-Elapsed time includes those frontend costs. Both intervals exclude image loading/conversion and final trace flush/frame export.
+Active time includes instruction execution, emulated devices, recovery setup, and optional trace output. It excludes worker input/clock updates and snapshot publication.
+Elapsed time also includes window startup, frontend work, and time spent displaying a stopped processor.
+Window work runs concurrently with CPU execution, so their measured durations overlap. Both intervals exclude image loading/conversion and final trace flush/frame export.
 The window title updates approximately once per second with the recent active execution rate.
 Headless runs with fixed memory and step counts provide repeatable workloads. Trace output affects throughput.
 
@@ -129,8 +130,31 @@ The frontend preserves keyboard press/release pairs between frames and releases 
 Caps Lock toggles a virtual lock state. Both physical Control keys share one guest state.
 Mouse coordinates follow the scaled display rectangle, with clipping at its edges.
 Published cursor pixels invert the display pixels at the device cursor position.
-The CPU runs for approximately 16.7 ms between presentation and input updates.
-Active execution has no additional frame-limit sleep. A stopped CPU uses a 60 Hz limit.
+The workstation starts with cursor tracking enabled; guest software can explicitly unlink the cursor from the mouse.
+The CPU runs on a worker thread. The main thread owns the window and presents at up to 60 Hz.
+Only the presentation thread sleeps to limit its update rate. Slow window calls do not pause the CPU.
+The worker checks queued input, host clocks, and shutdown requests approximately every 2 ms.
+Physical input still waits for the window backend to receive it.
+Input batches preserve key order and capture timestamps. A full frontend queue stops execution with an error.
+The exit report also counts overruns in the guest's separate, bounded input FIFO.
+
+The worker publishes immutable peripheral snapshots through one shared slot, at up to 60 Hz.
+The window takes the newest snapshot; intermediate snapshots can be replaced without building a frame queue.
+Published bitmaps share storage until their contents change. Identical guest publications reuse the previous snapshot's pixels.
+The window converts pixels only when the display, cursor, or visible cursor position changes.
+It uploads only changed RGB pixels, except when a resize, focus regain, or repaint requires another submission.
+On X11, a separate event connection detects exposure without consuming minifb's input events.
+
+The window report separates creation, snapshot checks, pixel conversion, submission, event-only updates, input handling, controls, and pacing sleep.
+Each category reports its call count, total duration, mean, and maximum.
+Submission includes event processing because minifb performs both in one call.
+The source-pixel byte count measures submitted RGB buffers, before backend scaling, protocol overhead, or compression; it is not network traffic.
+CPU worker input/clock and snapshot costs are reported separately.
+
+Under X11, minifb 0.28 calls `XQueryPointer` even for an event-only update.
+That request needs a server reply, so SSH forwarding can delay input polling even when no pixels change.
+Compare submission and event-only times with pixel conversion to distinguish those costs.
+These window timings overlap CPU execution; do not add them to active execution time.
 
 ## Architecture and validation
 
@@ -168,6 +192,9 @@ REKURSIV_ST80_DIR="$PWD/artifacts/st80" \
 
 The allocation and paging tests compare registers and object state with RTL after each mutator retirement.
 Other tests cover recovery failure, failed device writes, pixel clipping, keyboard mapping, and microcode-driven input/display changes.
+Frontend tests compare threaded and direct execution across collection with no snapshot consumer.
+They also check immutable frames, identical publications, ordered input, shutdown, and fault reporting.
+A saved-image cursor regression checks that the uploaded arrow follows mouse movement; a frontend test preserves explicit guest unlink behavior.
 The original-image regression matches all 499 bytecodes in Xerox's `trace2`.
 It also checks the RTL checkpoint: 2176 bytecode boundaries, three collections, and two display publications before BitBlt.
 A second native test completes 32 BitBlts: 9870 bytecode boundaries, 24 collections, and 33 display publications.

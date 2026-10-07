@@ -136,6 +136,7 @@ Cursor writes stage both coordinates, then publish them together. Failed writes 
 | `0x408` | Write | 1 publishes the staged cursor position |
 | `0x40c` | Write | 0 unlinks cursor and mouse; 1 links them and moves the cursor to the mouse |
 
+The workstation peripheral profile starts with cursor tracking enabled. Software can unlink it through `0x40c`.
 When linked, physical mouse movement also moves the cursor; publishing a cursor position also moves the mouse.
 Primitive 90 constructs a guest Point from the captured coordinates.
 Primitive 91 validates a Point and its two SmallInteger fields before it issues cursor writes.

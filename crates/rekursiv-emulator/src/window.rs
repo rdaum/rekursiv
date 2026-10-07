@@ -1,7 +1,8 @@
 //! Native window adapter. Only peripheral state crosses this boundary.
+use crate::frontend;
 use eyre::Result;
 use minifb::{Key, MouseButton, MouseMode, Window, WindowOptions};
-use rekursiv_emulator::{presentation, Machine};
+use rekursiv_emulator::Machine;
 use std::{
     cell::RefCell,
     collections::BTreeSet,
@@ -118,12 +119,101 @@ impl Keyboard {
         Some((code, down))
     }
 }
+#[derive(Default)]
+struct Timing {
+    calls: u64,
+    total: Duration,
+    longest: Duration,
+}
+impl Timing {
+    fn add(&mut self, elapsed: Duration) {
+        self.calls += 1;
+        self.total += elapsed;
+        self.longest = self.longest.max(elapsed);
+    }
+    fn report(&self, name: &str) {
+        eprintln!(
+            "  {name}: {} calls, {:.3} s total, {:.3} ms mean, {:.3} ms max",
+            self.calls,
+            self.total.as_secs_f64(),
+            if self.calls == 0 {
+                0.0
+            } else {
+                self.total.as_secs_f64() * 1000.0 / self.calls as f64
+            },
+            self.longest.as_secs_f64() * 1000.0
+        );
+    }
+}
+#[derive(Default)]
+struct WindowTiming {
+    creation: Timing,
+    snapshot: Timing,
+    conversion: Timing,
+    submission: Timing,
+    events: Timing,
+    input: Timing,
+    controls: Timing,
+    pacing: Timing,
+    source_bytes: u64,
+}
+impl WindowTiming {
+    fn report(&self) {
+        eprintln!("Window timings (concurrent with CPU execution):");
+        for (name, timing) in [
+            ("creation", &self.creation),
+            ("snapshot/repaint check", &self.snapshot),
+            ("pixel conversion", &self.conversion),
+            ("frame submission + events", &self.submission),
+            ("events without upload", &self.events),
+            ("input processing", &self.input),
+            ("title/cursor controls", &self.controls),
+            ("pacing sleep", &self.pacing),
+        ] {
+            timing.report(name);
+        }
+        eprintln!(
+            "  source pixels submitted: {:.3} MiB (before backend scaling/protocol/compression)",
+            self.source_bytes as f64 / 1048576.0
+        );
+    }
+}
+
 pub fn run(
     machine: &mut Machine,
-    step: &mut impl FnMut(&mut Machine) -> Result<bool>,
+    step: &mut (impl FnMut(&mut Machine) -> Result<bool> + Send),
     frame_limit: Option<u64>,
     execution_time: &mut Duration,
 ) -> Result<()> {
+    let exchange = frontend::Exchange::default();
+    // Physical events are ordered and bounded. Presentation has no queue: it
+    // consumes the newest immutable snapshot whenever the window is ready.
+    let (input, receive) = std::sync::mpsc::sync_channel(128);
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| frontend::execute(machine, step, &exchange, receive));
+        let stop = frontend::StopOnDrop(&exchange);
+        let mut timing = WindowTiming::default();
+        let result = render(&exchange, input, frame_limit, &mut timing);
+        drop(stop);
+        let worker = worker
+            .join()
+            .map_err(|_| eyre::eyre!("CPU worker panicked"))?;
+        *execution_time = worker.timing.execution;
+        timing.report();
+        eprintln!("CPU worker overhead: {:.3} s input/clock, {:.3} s snapshots ({} published), {} input overruns",
+            worker.timing.input_clock.as_secs_f64(), worker.timing.snapshots.as_secs_f64(),
+            worker.timing.snapshots_published, worker.timing.input_overruns);
+        result.and(worker.result)
+    })
+}
+
+fn render(
+    exchange: &frontend::Exchange,
+    input: std::sync::mpsc::SyncSender<frontend::InputBatch>,
+    frame_limit: Option<u64>,
+    timing: &mut WindowTiming,
+) -> Result<()> {
+    let creation = Instant::now();
     let mut window = Window::new(
         "Rekursiv",
         640,
@@ -134,103 +224,96 @@ pub fn run(
             ..Default::default()
         },
     )?;
-    // Execution itself fills the interval between presentations. A separate
-    // frame limiter would sleep away CPU time after each execution slice.
-    window.set_target_fps(0);
-    let start = Instant::now();
+    window.set_target_fps(0); // measure our own pacing separately from window calls
+    let repaint = crate::repaint::Repaint::new(&window)?;
+    timing.creation.add(creation.elapsed());
     let events = Rc::new(RefCell::new(Vec::new()));
     window.set_input_callback(Box::new(KeyEvents(events.clone())));
     let mut keyboard = Keyboard::default();
     let mut previous_keys = BTreeSet::new();
+    let mut previous_pointer = None;
+    let mut screen: Option<frontend::Screen> = None;
+    let mut pixels = Vec::new();
+    let mut last_size = (0, 0);
+    let mut was_active = false;
+    let mut cursor_visible = None;
+    let mut stopped = false;
     let mut frames = 0;
-    let mut running = true;
-    let mut failure = None;
-    let mut reported_overrun = false;
     let mut reported_at = Instant::now();
-    let mut reported_execution = *execution_time;
+    let mut reported_execution = Duration::ZERO;
     let mut reported_instructions = 0.0;
     while window.is_open() && frame_limit.is_none_or(|limit| frames < limit) {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
-        if let Some(clock) = &mut machine.devices.clocks {
-            clock.set_time(
-                now.as_secs(),
-                now.subsec_millis() as u16,
-                start.elapsed().as_millis() as u64,
-            );
-        }
-        if running {
-            // A wall-time budget keeps slow microcode and collection responsive.
-            // CPU execution stays on this thread, so input arrives only between
-            // instructions and never observes a half-retired architectural state.
-            let budget = Instant::now();
-            for n in 0u64.. {
-                match step(machine) {
-                    Ok(true) => (),
-                    Ok(false) => {
-                        running = false;
-                        break;
-                    }
-                    Err(error) => {
-                        window.set_title(&format!("Rekursiv — {error}"));
-                        failure = Some(error);
-                        running = false;
-                        break;
-                    }
-                }
-                if n % 256 == 0 && budget.elapsed() >= Duration::from_secs_f64(1.0 / 60.0) {
-                    break;
-                }
-            }
-            *execution_time += budget.elapsed();
-            if running && reported_at.elapsed() >= Duration::from_secs(1) {
-                let instructions =
-                    machine.stats.retired as f64 + machine.stats.collector_retired as f64;
-                let seconds = (*execution_time - reported_execution).as_secs_f64();
-                let rate = if seconds > 0.0 {
-                    (instructions - reported_instructions) / seconds
-                } else {
-                    0.0
-                };
-                window.set_title(&format!(
-                    "Rekursiv — {:.2} M microinstructions/s",
-                    rate / 1_000_000.0
-                ));
-                reported_at = Instant::now();
-                reported_execution = *execution_time;
-                reported_instructions = instructions;
-            }
-            if !running {
-                // A halted or faulted CPU has no work to fill the frame budget.
-                window.set_target_fps(60);
-            }
-            if !running && failure.is_none() {
-                window.set_title(&format!(
-                    "Rekursiv — stopped at micro-PC {}",
-                    machine.cpu.pc
-                ));
-            }
-        }
-        let display = machine
-            .devices
-            .display_bitmap
+        let iteration = Instant::now();
+        let snapshot_start = Instant::now();
+        let snapshot = exchange.snapshot.lock().unwrap().clone();
+        let exposed = repaint.requested();
+        timing.snapshot.add(snapshot_start.elapsed());
+        let (width, height) = snapshot.screen.dimensions();
+        let size = window.get_size();
+        let active = window.is_active();
+        let changed = screen
             .as_ref()
-            .and_then(|d| d.visible.as_ref());
-        let (width, height) = display.map_or((640, 480), |f| (f.width as usize, f.height as usize));
-        let cursor = machine
-            .devices
-            .cursor_bitmap
+            .is_none_or(|last| !last.same_pixels(&snapshot.screen));
+        let mode_changed = screen
             .as_ref()
-            .and_then(|d| d.visible.as_ref())
-            .zip(machine.devices.pointer.as_ref().map(|p| p.cursor));
-        let buffer = display.map_or_else(
-            || vec![0xffffff; width * height],
-            |f| presentation::pixels(f, cursor),
-        );
-        window.set_cursor_visibility(cursor.is_none());
-        window.update_with_buffer(&buffer, width, height)?;
+            .is_none_or(|last| last.dimensions() != (width, height));
+        let mut upload = exposed || size != last_size || (active && !was_active) || mode_changed;
+        if changed {
+            let conversion = Instant::now();
+            let converted = snapshot.screen.pixels();
+            upload |= converted != pixels;
+            pixels = converted;
+            timing.conversion.add(conversion.elapsed());
+        }
+        // Keep a composed buffer for exposes/resizes. Publication of identical
+        // pixels and cursor moves outside the display do not require uploads.
+        screen = Some(snapshot.screen.clone());
+        last_size = size;
+        was_active = active;
+        let controls = Instant::now();
+        let visible = snapshot.screen.cursor.is_none();
+        if cursor_visible != Some(visible) {
+            window.set_cursor_visibility(visible);
+            cursor_visible = Some(visible);
+        }
+        if !snapshot.running && !stopped {
+            window.set_title(&snapshot.error.as_ref().map_or_else(
+                || format!("Rekursiv — stopped at micro-PC {}", snapshot.pc),
+                |error| format!("Rekursiv — {error}"),
+            ));
+            stopped = true;
+        } else if snapshot.running && reported_at.elapsed() >= Duration::from_secs(1) {
+            let instructions =
+                snapshot.stats.retired as f64 + snapshot.stats.collector_retired as f64;
+            let seconds = (snapshot.execution_time - reported_execution).as_secs_f64();
+            let rate = if seconds > 0.0 {
+                (instructions - reported_instructions) / seconds
+            } else {
+                0.0
+            };
+            window.set_title(&format!(
+                "Rekursiv — {:.2} M microinstructions/s",
+                rate / 1_000_000.0
+            ));
+            reported_at = Instant::now();
+            reported_execution = snapshot.execution_time;
+            reported_instructions = instructions;
+        }
+        timing.controls.add(controls.elapsed());
+        let update = Instant::now();
+        if upload {
+            // minifb's submission also pumps events, so that work is included
+            // in this measurement. An unchanged frame uses events-only update.
+            window.update_with_buffer(&pixels, width, height)?;
+            timing.submission.add(update.elapsed());
+            timing.source_bytes += pixels.len() as u64 * 4;
+        } else {
+            window.update();
+            timing.events.add(update.elapsed());
+        }
+        let input_start = Instant::now();
+        let mut pointer = None;
         if window.is_active() {
-            // Map the resizable window to the aspect-preserved scanout rectangle.
-            // This also handles a display mode smaller than the initial window.
             if let Some((x, y)) = window.get_unscaled_mouse_pos(MouseMode::Discard) {
                 let (ww, wh) = window.get_size();
                 let scale = (ww as f32 / width as f32).min(wh as f32 / height as f32);
@@ -241,7 +324,10 @@ pub fn run(
                     let py = ((y - (wh as f32 - height as f32 * scale) / 2.0) / scale)
                         .clamp(0.0, height.saturating_sub(1) as f32)
                         as i32;
-                    presentation::pointer(&mut machine.devices, px, py);
+                    if previous_pointer != Some((px, py)) {
+                        pointer = Some((px, py));
+                        previous_pointer = pointer;
+                    }
                 }
             }
         }
@@ -252,13 +338,13 @@ pub fn run(
             }
         }
         if !window.is_active() {
+            previous_pointer = None;
             for key in keyboard.held.clone() {
                 transitions.extend(keyboard.transition(key, false));
             }
         }
         let mut keys = BTreeSet::new();
         if window.is_active() {
-            // Red/left = bit 2, yellow/middle = bit 1, blue/right = bit 0.
             for (button, code) in [
                 (MouseButton::Left, 130),
                 (MouseButton::Middle, 129),
@@ -275,16 +361,35 @@ pub fn run(
         ] {
             transitions.extend(set.difference(other).map(|&code| (code, down)));
         }
-        for (code, down) in transitions {
-            if !presentation::key(&mut machine.devices, code, down)? && !reported_overrun {
-                eprintln!("input FIFO overrun; guest did not consume input quickly enough");
-                reported_overrun = true;
+        previous_keys = keys;
+        if snapshot.running && (pointer.is_some() || !transitions.is_empty()) {
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
+            let timestamp_ms =
+                ((now.as_secs() % 86400) * 1000 + u64::from(now.subsec_millis())) as u32;
+            match input.try_send(frontend::InputBatch {
+                pointer,
+                keys: transitions,
+                timestamp_ms,
+            }) {
+                Ok(()) => {}
+                Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {} // worker just stopped
+                Err(std::sync::mpsc::TrySendError::Full(_)) => eyre::bail!(
+                    "frontend input queue full; stopping to avoid losing key transitions"
+                ),
             }
         }
-        previous_keys = keys;
+        timing.input.add(input_start.elapsed());
         frames += 1;
+        // Only the presentation thread sleeps. Slow X11 calls naturally reduce
+        // presentation frequency while the CPU continues on its own thread.
+        let remaining = frontend::FRAME_INTERVAL.saturating_sub(iteration.elapsed());
+        if !remaining.is_zero() {
+            let sleep = Instant::now();
+            std::thread::sleep(remaining);
+            timing.pacing.add(sleep.elapsed());
+        }
     }
-    failure.map_or(Ok(()), Err)
+    Ok(())
 }
 
 #[cfg(test)]

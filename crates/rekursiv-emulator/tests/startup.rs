@@ -189,3 +189,77 @@ fn native_saved_image_draws_through_bitblt() -> Result<()> {
     eprintln!("post-BitBlt: {boundaries} bytecodes, {completed} successful copies, {} display publications, {} collections; primitives {calls:?}",display.publications,m.stats.collections);
     Ok(())
 }
+
+#[test]
+#[ignore = "requires the pinned Xerox distribution; set REKURSIV_ST80_DIR"]
+fn native_saved_image_cursor_tracks_mouse_without_an_explicit_link_request() -> Result<()> {
+    let directory = std::path::PathBuf::from(std::env::var("REKURSIV_ST80_DIR")?);
+    let mut loaded = boot::smalltalk(&std::fs::read(directory.join("VirtualImage"))?, 1_048_576)?;
+    let m = &mut loaded.machine;
+    m.devices = presentation::workstation(0, 1000);
+    presentation::pointer(&mut m.devices, 200, 160);
+    let mut found = false;
+    for _ in 0..100_000_000 {
+        m.step()?;
+        ensure!(
+            !m.cpu.halted && !m.cpu.service,
+            "unexpected stop at {}",
+            m.cpu.pc
+        );
+        if m.devices.cursor_bitmap.as_ref().unwrap().publications != 0 {
+            found = true;
+            break;
+        }
+    }
+    ensure!(found, "saved image did not publish its cursor");
+    let display = m
+        .devices
+        .display_bitmap
+        .as_ref()
+        .unwrap()
+        .visible
+        .as_ref()
+        .unwrap();
+    let cursor = m
+        .devices
+        .cursor_bitmap
+        .as_ref()
+        .unwrap()
+        .visible
+        .as_ref()
+        .unwrap();
+    assert_eq!((cursor.width, cursor.height), (16, 16));
+    assert_ne!(
+        cursor.words[0] & 0x8000_0000,
+        0,
+        "arrow tip must be visible"
+    );
+    let plain = presentation::pixels(display, None);
+    for position in [(200, 160), (240, 180)] {
+        presentation::pointer(&mut m.devices, position.0, position.1);
+        let pointer = m.devices.pointer.as_ref().unwrap();
+        assert!(pointer.linked);
+        assert_eq!(pointer.cursor, position);
+        let display = m
+            .devices
+            .display_bitmap
+            .as_ref()
+            .unwrap()
+            .visible
+            .as_ref()
+            .unwrap();
+        let cursor = m
+            .devices
+            .cursor_bitmap
+            .as_ref()
+            .unwrap()
+            .visible
+            .as_ref()
+            .unwrap();
+        let pixels = presentation::pixels(display, Some((cursor, pointer.cursor)));
+        let index = position.1 as usize * display.width as usize + position.0 as usize;
+        assert_eq!(pixels[index], plain[index] ^ 0xffffff);
+        assert_eq!(pixels[0], plain[0], "cursor must not remain at the origin");
+    }
+    Ok(())
+}
