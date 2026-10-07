@@ -126,13 +126,13 @@ These values match `InputState class>>initialize` and `InputSensor` in the pinne
 They belong to the frontend profile, not the CPU or object-memory implementation.
 Other keyboard layouts, text composition, wheel input, and unmapped function keys remain unsupported.
 
-The frontend preserves keyboard press/release pairs between frames and releases held keys after focus loss.
+Keyboard and mouse-button events preserve short press/release pairs. Focus loss releases held keys and buttons.
 Caps Lock toggles a virtual lock state. Both physical Control keys share one guest state.
 Mouse coordinates follow the scaled display rectangle, with clipping at its edges.
 Published cursor pixels invert the display pixels at the device cursor position.
 The workstation starts with cursor tracking enabled; guest software can explicitly unlink the cursor from the mouse.
-The CPU runs on a worker thread. The main thread owns the window and presents at up to 60 Hz.
-Only the presentation thread sleeps to limit its update rate. Slow window calls do not pause the CPU.
+The CPU runs on a worker thread. The main thread owns the window and checks display snapshots at up to 60 Hz.
+The event loop waits between checks and wakes immediately for window or input events. Slow presentation does not pause the CPU.
 The worker checks queued input, host clocks, and shutdown requests approximately every 2 ms.
 Physical input still waits for the window backend to receive it.
 Input batches preserve key order and capture timestamps. A full frontend queue stops execution with an error.
@@ -143,18 +143,20 @@ The window takes the newest snapshot; intermediate snapshots can be replaced wit
 Published bitmaps share storage until their contents change. Identical guest publications reuse the previous snapshot's pixels.
 The window converts pixels only when the display, cursor, or visible cursor position changes.
 It uploads only changed RGB pixels, except when a resize, focus regain, or repaint requires another submission.
-On X11, a separate event connection detects exposure without consuming minifb's input events.
+Winit supplies repaint and resize events directly; the frontend needs no separate X11 repaint connection.
 
-The window report separates creation, snapshot checks, pixel conversion, submission, event-only updates, input handling, controls, and pacing sleep.
-Each category reports its call count, total duration, mean, and maximum.
-Submission includes event processing because minifb performs both in one call.
-The source-pixel byte count measures submitted RGB buffers, before backend scaling, protocol overhead, or compression; it is not network traffic.
-CPU worker input/clock and snapshot costs are reported separately.
+The window report separates initialization, snapshot checks, pixel conversion, buffer acquisition/submission, scaling, callbacks, and event-loop waiting.
+Each timing category reports its call count, total duration, mean, and maximum.
+Initialization includes event-loop and window/surface creation. Presentation checks and unchanged snapshots have separate counters.
+Window callback time includes redraw work; it overlaps the submission and scaling categories.
+Event-loop waiting includes the time blocked waiting for events or the next snapshot deadline, plus backend dispatch overhead before callbacks.
+The surface-pixel byte count measures submitted buffers after scaling, before protocol overhead or compression. It is not network traffic.
+CPU worker input/clock and snapshot costs are reported separately. Window timings overlap CPU execution.
 
-Under X11, minifb 0.28 calls `XQueryPointer` even for an event-only update.
-That request needs a server reply, so SSH forwarding can delay input polling even when no pixels change.
-Compare submission and event-only times with pixel conversion to distinguish those costs.
-These window timings overlap CPU execution; do not add them to active execution time.
+Mouse coordinates arrive through window events. Snapshot checks do not issue synchronous pointer queries or submit unchanged pixels.
+Under forwarded X11, changed frames still require pixel transfers. Softbuffer uses its ordinary X11 image path when shared memory is unavailable.
+The frontend currently submits the full scaled surface for each changed frame, including cursor movement.
+Event-driven input removes repeated polling round trips; it does not remove display bandwidth costs.
 
 ## Architecture and validation
 
@@ -167,7 +169,8 @@ Collector microcode chooses every root, mark, pager pass, body read, body write,
 `rekursiv-devices` supplies the same external peripheral models to both executors.
 The Verilator adapter drives their request/reply handshakes. The emulator waits for device completion before instruction retirement.
 A failed device reply preserves the instruction's local destinations.
-The GUI uses [minifb](https://docs.rs/minifb/0.28.0/minifb/) for window presentation and physical input.
+The GUI uses [winit](https://docs.rs/winit/0.30/winit/) for window events and [softbuffer](https://docs.rs/softbuffer/0.4/softbuffer/) for pixel presentation.
+Presentation needs no GPU renderer. Guest microcode still performs all drawing and supplies the published bitmap.
 It has no access to guest objects through the presentation helpers.
 
 Headless clocks advance one millisecond per 1000 device ticks.
@@ -194,6 +197,7 @@ The allocation and paging tests compare registers and object state with RTL afte
 Other tests cover recovery failure, failed device writes, pixel clipping, keyboard mapping, and microcode-driven input/display changes.
 Frontend tests compare threaded and direct execution across collection with no snapshot consumer.
 They also check immutable frames, identical publications, ordered input, shutdown, and fault reporting.
+Window tests cover physical key/button transitions, focus loss, and matching display/input scaling through letterboxed viewports.
 A saved-image cursor regression checks that the uploaded arrow follows mouse movement; a frontend test preserves explicit guest unlink behavior.
 The original-image regression matches all 499 bytecodes in Xerox's `trace2`.
 It also checks the RTL checkpoint: 2176 bytecode boundaries, three collections, and two display publications before BitBlt.

@@ -8,8 +8,6 @@ use std::{
 #[cfg(feature = "window")]
 mod frontend;
 #[cfg(feature = "window")]
-mod repaint;
-#[cfg(feature = "window")]
 mod window;
 
 fn main() -> Result<()> {
@@ -97,7 +95,7 @@ fn main() -> Result<()> {
                 )
             }
             "--help" | "-h" => {
-                println!("rekursiv-emulator [--microcode FILE | --smalltalk VirtualImage]\n  No program: run the interactive workstation microcode demo.\n  --headless          Run without a window (deterministic device clock)\n  --steps N           Stop after N steps (headless default 10000000; window unlimited)\n  --memory-words N    External RAM words (default 131072; two semispaces)\n  --trace FILE        Write retired micro-PCs and numeric state\n  --stop-at LABEL     Stop before the named microinstruction\n  --when Rn=VALUE     Stop only when this register also matches\n  --frame FILE        Save the last published display as a PPM\n  --frames N          Close the window after N frames (smoke tests)\nClose the window to exit. Escape is delivered to the guest.");
+                println!("rekursiv-emulator [--microcode FILE | --smalltalk VirtualImage]\n  No program: run the interactive workstation microcode demo.\n  --headless          Run without a window (deterministic device clock)\n  --steps N           Stop after N steps (headless default 10000000; window unlimited)\n  --memory-words N    External RAM words (default 131072; two semispaces)\n  --trace FILE        Write retired micro-PCs and numeric state\n  --stop-at LABEL     Stop before the named microinstruction\n  --when Rn=VALUE     Stop only when this register also matches\n  --frame FILE        Save the last published display as a PPM\n  --frames N          Close after N presentation checks (smoke tests)\nClose the window to exit. Escape is delivered to the guest.");
                 return Ok(());
             }
             _ => bail!("unknown option {arg}; use --help"),

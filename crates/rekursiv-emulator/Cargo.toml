@@ -5,7 +5,7 @@ edition.workspace = true
 
 [features]
 default = ["window"]
-window = ["dep:minifb", "dep:raw-window-handle", "dep:x11-dl"]
+window = ["dep:winit", "dep:softbuffer"]
 
 [dependencies]
 rekursiv-asm = { path = "../rekursiv-asm" }
@@ -13,11 +13,8 @@ rekursiv-model = { path = "../rekursiv-model" }
 rekursiv-devices = { path = "../rekursiv-devices" }
 rekursiv-smalltalk = { path = "../rekursiv-smalltalk" }
 eyre = "0.6"
-minifb = { version = "0.28", optional = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-raw-window-handle = { version = "0.6", optional = true }
-x11-dl = { version = "2.21", optional = true }
+winit = { version = "0.30", optional = true }
+softbuffer = { version = "0.4", optional = true, default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
 
 [dev-dependencies]
 rekursiv-sim = { path = "../rekursiv-sim" }
