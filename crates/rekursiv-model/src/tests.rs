@@ -232,3 +232,94 @@ fn revalidation_and_compact_types() {
     );
     assert_eq!(m.state.selected.unwrap().representation.bits(), 0xfffffff8);
 }
+
+#[test]
+fn combined_prepared_write_stages_registers_and_forwards_only_matching_selection() {
+    for select_written_object in [false, true] {
+        for observed in [false, true] {
+            let mut model = setup();
+            let a = model.state.selected.unwrap();
+            let b = Entry {
+                reference: Word::reference(3, true).unwrap(),
+                base: 8,
+                representation: Word::signed(41),
+                ..a
+            };
+            model.memory[8] = b.representation;
+            model.memory[9] = Word::signed(42);
+            assert_eq!(
+                model.service(Service::Install(b), false).response.status,
+                Status::Ok
+            );
+            let selected = if select_written_object { a } else { b };
+            model.state.vr[7] = selected.reference;
+            model.state.index_reg = 5;
+            assert_eq!(
+                model
+                    .execute_response(
+                        Command {
+                            index: Index::One,
+                            prepare: true,
+                            ..Command::default()
+                        },
+                        false
+                    )
+                    .status,
+                Status::Ok
+            );
+            let before = model.clone();
+            let command = Command {
+                pager: Pager::ProbeVr,
+                vr: 7,
+                load_vr: true,
+                data: Word::signed(99),
+                index: Index::Increment,
+                register: Register::FromIndex,
+                prepare: true,
+                prepared: true,
+                memory: Memory::Write,
+                expected_type: Some(a.class),
+                ..Command::default()
+            };
+            let execute = |model: &mut Model, fault| {
+                if observed {
+                    model.execute(command, fault).response
+                } else {
+                    model.execute_response(command, fault)
+                }
+            };
+            // The RAM fault comes after preparation, selection, and register
+            // calculations. None may escape the command's failure boundary.
+            assert_eq!(execute(&mut model, true).status, Status::MemoryError);
+            assert_eq!(model, before);
+            assert_eq!(execute(&mut model, false), Response::ok(Word::signed(99)));
+            assert_eq!(model.state.index, 2);
+            assert_eq!(model.state.index_reg, 1); // old index, not incremented index
+            assert_eq!(model.state.vr[7], Word::signed(99));
+            assert_eq!(&model.state.vr[..7], &before.state.vr[..7]);
+            // New preparation uses old selection A and new index two. The RAM
+            // write consumes the previous preparation of A's first word.
+            assert_eq!(
+                model.state.prepared,
+                PreparedAccess {
+                    reference: a.reference,
+                    index: 2,
+                    address: 5,
+                    status: Status::Ok,
+                }
+            );
+            assert_eq!(model.memory[4], Word::signed(99));
+            assert_eq!(model.memory[5], before.memory[5]);
+            assert_eq!(&model.memory[8..10], &before.memory[8..10]);
+            let written = model.resolve(a.reference).unwrap();
+            assert!(written.modified);
+            assert_eq!(written.representation, Word::signed(99));
+            // ProbeVr consumes the old VR. Forward write metadata if it selected
+            // A, but never replace a simultaneous selection of B with A.
+            assert_eq!(
+                model.state.selected,
+                Some(if select_written_object { written } else { b })
+            );
+        }
+    }
+}

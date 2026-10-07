@@ -24,9 +24,12 @@ impl Model {
         if matches!(c.pager, Pager::Fetch | Pager::Allocate | Pager::Exchange) {
             return Err(Status::BadCommand);
         }
-        let before = self.state.clone();
-        let mut next = before.clone();
-        // Calculate all proposed state from the old state before any memory effect.
+        // Borrow old operands and stage only the registers this command changes.
+        // No state is published until every fallible check has succeeded. This
+        // preserves combined-control semantics without copying all eight VRs
+        // and both metadata latches on every field read or index operation.
+        let before = &self.state;
+        let mut selection = None;
         let idx = match c.index {
             Index::None => before.index,
             Index::Load => c.data.as_index(),
@@ -42,7 +45,7 @@ impl Model {
                 if e.size == 0 || before.index < 0 || before.index > e.size as i64 {
                     return Err(Status::BoundsError);
                 }
-                next.selected = Some(e);
+                selection = Some(e);
                 if before.index == e.size as i64 {
                     1
                 } else {
@@ -53,10 +56,7 @@ impl Model {
         if !(INDEX_MIN..=INDEX_MAX).contains(&idx) {
             return Err(Status::IndexOverflow);
         }
-        next.index = idx;
-        if c.prepare {
-            next.prepared = self.prepare_access(idx);
-        }
+        let prepared = c.prepare.then(|| self.prepare_access(idx));
         let reg = match c.register {
             Register::None => before.index_reg,
             Register::Load => c.data.as_index(),
@@ -66,10 +66,6 @@ impl Model {
         };
         if !(INDEX_MIN..=INDEX_MAX).contains(&reg) {
             return Err(Status::IndexOverflow);
-        }
-        next.index_reg = reg;
-        if c.load_vr {
-            next.vr[c.vr as usize] = c.data;
         }
         let mut output = Word::NIL;
         if c.pager != Pager::None {
@@ -82,7 +78,7 @@ impl Model {
             };
             let e = self.resolve(r)?;
             output = e.reference;
-            next.selected = Some(e);
+            selection = Some(e);
         }
         let needs_metadata = matches!(
             c.read,
@@ -97,7 +93,7 @@ impl Model {
         if let Some(e) = old_entry {
             // A simultaneous page retains its newly selected snapshot; reads use old selection.
             if c.pager == Pager::None {
-                next.selected = Some(e);
+                selection = Some(e);
             }
             if c.expected_type.is_some_and(|t| t != e.class) {
                 return Err(Status::TypeError);
@@ -159,17 +155,29 @@ impl Model {
                     }
                     let slot = self.slot(e.reference);
                     self.entries[slot] = Some(e);
-                    if next
-                        .selected
+                    if selection
+                        .or(before.selected)
                         .is_some_and(|selected| selected.reference == e.reference)
                     {
-                        next.selected = Some(e);
+                        selection = Some(e);
                     }
                     output = c.data;
                 }
             }
         }
-        self.state = next;
+        // RAM writes above cannot be followed by a command failure. Publish the
+        // staged registers now, retaining untouched latches and virtual registers.
+        self.state.index = idx;
+        self.state.index_reg = reg;
+        if let Some(selected) = selection {
+            self.state.selected = Some(selected);
+        }
+        if let Some(prepared) = prepared {
+            self.state.prepared = prepared;
+        }
+        if c.load_vr {
+            self.state.vr[c.vr as usize] = c.data;
+        }
         Ok(output)
     }
 }

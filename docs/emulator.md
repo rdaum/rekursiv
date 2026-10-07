@@ -271,7 +271,7 @@ MICROMEASURE_OUTPUT=artifacts/objekt-bench.json \
 Choose an available core on your host. Hardware counters require access to Linux perf events.
 The report includes counter scheduling coverage; check it before comparing instruction or cycle counts.
 
-The 22 cases separate direct lookup, validation, resident commands, observed commands, allocation, and refill.
+The 23 cases separate direct lookup, validation, resident commands, observed commands, allocation, and refill.
 The ordinary command cases call `Model::execute_response`, as the emulator does with metrics disabled.
 The observed field-read case includes access-log allocation and destruction, but excludes emulator counter updates.
 Fixture setup is outside measurement. Every case checks for command or lookup failures.
@@ -310,7 +310,7 @@ All hardware counters had 100% scheduling coverage. Each case collected approxim
 Transfer timings varied more between processes than resident timings; repeat runs when assessing changes.
 Microbenchmark costs are not additive, and these host timings do not predict FPGA performance.
 
-A separate Linux perf profile ran 500 million Smalltalk steps with the JIT and 16,777,216 RAM words.
+A separate baseline Linux perf profile ran 500 million Smalltalk steps with the JIT and 16,777,216 RAM words.
 It used the same core, no window, no detailed OBJEKT counters, and a release build with debug information.
 Cycle sampling began after a 1.5-second delay to exclude startup on this host.
 The run retired approximately 25.6 million microinstructions per second and performed no collections.
@@ -319,13 +319,37 @@ Resident `transition` accounted for 8.3% of total time, and command validation a
 These are overlapping profile shares, not separate costs to add together.
 A separate metrics-enabled run had 25,287,341 stored-reference fetch hits and 3,268 misses: a 99.99% hit rate.
 
-The strongest candidates for improvement are repeated static command validation and resident state publication.
-The profile attributes substantial time to copying the next register state back into the model.
-This is the small architectural `State`, not a copy of the object heap.
-Any change must preserve old-operand behavior and leave state unchanged on resident command failure.
+The profile identified validation and resident state publication as optimization targets.
+The resident datapath now borrows old operands and stages individual register changes until all checks succeed.
+It avoids cloning and replacing the entire architectural `State` on each command.
+Typed command boundaries use `Command::check` to validate a borrowed command without returning a copy.
+Every validation check remains active; `Command::validate` retains its existing public behavior.
+Combined controls still consume old operands, and resident command failures leave registers and RAM unchanged.
 The relevant code is in [command.rs](../crates/rekursiv-model/src/command.rs),
 [datapath.rs](../crates/rekursiv-model/src/datapath.rs), and
 [pager.rs](../crates/rekursiv-model/src/pager.rs).
+
+Fresh before/after microbenchmarks on the same core measured these command costs:
+
+| Command | Before, ns | After, ns |
+| --- | ---: | ---: |
+| No-op | 15.0 | 6.5 |
+| Resident field read | 18.2 | 11.3 |
+| Prepared field read | 16.7 | 12.9 |
+| Resident field write | 21.7 | 14.4 |
+| Resident fetch hit | 12.9 | 12.0 |
+
+Three alternating pairs of headless JIT runs compared the optimized emulator with `4ebe8c2`.
+Both binaries used 16,777,216 RAM words and ran on CPU 7 with deterministic device time.
+Rates below are medians in millions of retired microinstructions per second, excluding loading and JIT compilation.
+
+| Step budget | Before | After | Throughput gain |
+| --- | ---: | ---: | ---: |
+| 50 million | 34.0 | 36.4 | 7.1% |
+| 500 million | 25.6 | 27.9 | 9.3% |
+
+Every pair produced matching final counters and framebuffer hashes. These runs performed no collections.
+The workspace tests include RTL comparisons and collection tests; the original-image trace regression also passes its collection checkpoint.
 
 ### Input and presentation
 

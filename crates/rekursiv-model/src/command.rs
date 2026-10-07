@@ -16,10 +16,9 @@ impl Model {
     /// retain their documented partial effects and attempted-request records.
     /// See [`Self::execute_transfer`] for those publication boundaries.
     pub fn execute(&mut self, command: Command, memory_error: bool) -> Outcome {
-        let command = match command.validate() {
-            Ok(command) => command,
-            Err(status) => return Outcome::error(status),
-        };
+        if let Err(status) = command.check() {
+            return Outcome::error(status);
+        }
         if self.maintenance {
             return Outcome::error(Status::BadCommand);
         }
@@ -38,10 +37,9 @@ impl Model {
     /// of an access log. Streaming commands still use the shared transfer path
     /// and discard its observations after execution.
     pub fn execute_response(&mut self, command: Command, memory_error: bool) -> Response {
-        let command = match command.validate() {
-            Ok(command) => command,
-            Err(status) => return Response::error(status),
-        };
+        if let Err(status) = command.check() {
+            return Response::error(status);
+        }
         if self.maintenance {
             return Response::error(Status::BadCommand);
         }

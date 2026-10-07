@@ -46,6 +46,12 @@ fn validate(_: &mut NoContext, n: usize, _: usize) {
     }
 }
 
+fn check(_: &mut NoContext, n: usize, _: usize) {
+    for _ in 0..n {
+        black_box(Command::read_field()).check().unwrap();
+    }
+}
+
 struct Lookup {
     model: Model,
     references: Vec<Word>,
@@ -76,6 +82,7 @@ fn lookup(ctx: &mut Lookup, n: usize, _: usize) {
 pub fn register(runner: &BenchmarkRunner) {
     runner.group::<NoContext>("OBJEKT components", |g| {
         g.bench("component/validate_field_read", validate);
+        g.bench("component/check_field_read", check);
     });
     runner.group::<Lookup>("OBJEKT lookup", |g| {
         for (name, objects) in [

@@ -198,7 +198,18 @@ impl Command {
             ..Self::default()
         }
     }
+    /// Check command fields and control combinations, retaining the command.
     pub fn validate(self) -> Result<Self, Status> {
+        self.check()?;
+        Ok(self)
+    }
+    /// Check command fields without copying or returning the command.
+    ///
+    /// This performs the same checks as [`Self::validate`], including dynamic
+    /// data-word restrictions. Pager residency, index bounds, and RAM faults are
+    /// checked by execution. Typed execution boundaries can use this borrowed
+    /// form to avoid passing the entire command through a `Result` value.
+    pub fn check(&self) -> Result<(), Status> {
         if matches!(
             self.pager,
             Pager::Fetch
@@ -240,7 +251,7 @@ impl Command {
         if self.expected_type.is_some_and(|w| !w.is_reference()) {
             return Err(Status::BadValue);
         }
-        Ok(self)
+        Ok(())
     }
     pub fn encode(self) -> Result<Ports, Status> {
         self.validate()?;
