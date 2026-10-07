@@ -51,11 +51,11 @@ microinstructions use the separate 256-bit encoding in the processor section.
 
 | Input             | Width | Numeric operation values                                                                          |
 | ----------------- | ----: | ------------------------------------------------------------------------------------------------- |
-| `pager_i`         |     4 | None=0, ProbeBus=1, ProbeVr=2, ProbeType=3, ProbeRepresentation=4, Fetch=5, Allocate=6            |
+| `pager_i`         |     4 | None=0, ProbeBus=1, ProbeVr=2, ProbeType=3, ProbeRepresentation=4, Fetch=5, Allocate=6, Exchange=7, NextObject=8, FindObject=9 |
 | `index_i`         |     4 | None=0, Load=1, Clear=2, One=3, Two=4, Increment=5, Decrement=6, Step=7, Next=8, FromReg=9        |
 | `register_i`      |     3 | None=0, Load=1, Increment=2, Decrement=3, FromIndex=4                                             |
 | `memory_i`        |     2 | None=0, Read=1, Write=2                                                                           |
-| `read_i`          |     4 | None=0, Vr=1, Reference=2, Size=3, Type=4, Base=5, Representation=6, Index=7, IndexReg=8, Flags=9 |
+| `read_i`          |     4 | None=0, Vr=1, Reference=2, Size=3, Type=4, Base=5, Representation=6, Index=7, IndexReg=8, Flags=9, FreeWords=10, FreeIdentities=11 |
 | `load_vr_i`       |     1 | Load `data_i` into the selected VR when set                                                       |
 | `vr_i`            |     3 | VR selector, 0–7                                                                                  |
 | `data_i`          |    40 | Bus value, write value, or signed index operand                                                   |
@@ -74,7 +74,7 @@ The following combinations return `BadCommand`:
 - A pager operation with a memory operation.
 - A pager operation with `Index::Next`.
 - A memory operation with a read-result selector.
-- Fetch or Allocate with any index, secondary-register, memory, read-result, VR-load, or class-guard
+- Fetch, Allocate, Exchange, NextObject, or FindObject with any index, secondary-register, memory, read-result, VR-load, or class-guard
   operation.
 
 For other combinations, every field reads the state that existed before the command. `ProbeVr` reads
@@ -111,6 +111,13 @@ write also updates the pager cache and selected snapshot. The new and cond flags
 
 The class guard is optional exact reference equality. It does not interpret class bodies,
 inheritance, or access-type policies.
+
+`FreeWords` and `FreeIdentities` return raw unsigned capacity counts without requiring an object selection.
+They generate no memory or backing-store transaction and do not change pager entries or allocation cursors.
+`FreeWords` is the allocation limit minus the body cursor, clamped at zero.
+With collection enabled, this excludes the inactive semispace and ranges awaiting reclamation.
+`FreeIdentities` is `2^37 - next_identity`; exhaustion returns zero without wrapping.
+Both include reservations retained after failed transfers. Reads report the allocator state at command acceptance.
 
 ## Clock and handshake contract
 
@@ -295,6 +302,42 @@ on one clock edge. A new allocation has new set, modified clear, and cond clear.
 has new and modified clear and restores cond from the backing record. The response becomes valid
 after that publication edge.
 
+## Object-binding exchange
+
+Exchange takes its first reference from `data_i` and its second from the selected value register.
+Both operands must be canonical stored references with the same scan flag.
+Equal references succeed without writes after the engine validates that the object exists.
+
+`rtl/objekt_exchange.sv` reads each source from its resident entry or committed backing record.
+It writes that source's class, size, cond flag, and body under the other identity in a private storage batch.
+The engine does not allocate temporary RAM or require both objects to occupy different pager slots.
+Bodies can exceed resident RAM capacity when their source is on the backing device.
+
+CommitBatch publishes both records together. The core then invalidates resident entries for both identities.
+It also clears the selected snapshot if that snapshot names either object. The response returns the first reference.
+Subsequent Fetch commands load the exchanged bindings. Existing references and aliases retain their bit patterns.
+Edges from the published records to resident objects become persistent collector roots at successful completion.
+
+On error, the engine aborts private writes. Committed records, pager entries, selection, RAM, and allocator counters remain unchanged.
+No other command can run during an exchange. External adapters implement batch storage, not an object-language operation.
+
+## Object directory
+
+NextObject returns the object with the smallest identity greater than `data_i`.
+FindObject returns the object with exactly that identity.
+Both accept either a raw 37-bit identity or a canonical stored reference. They ignore the input reference's scan flag.
+The response contains the canonical reference, and `vr_i` selects a value register to receive its class.
+An absent identity or exhausted enumeration succeeds with machine nil in both places.
+
+`rtl/objekt_directory.sv` combines resident metadata with committed backing-store metadata.
+Resident metadata wins when both sources contain the same identity.
+The engine never reads bodies, refills RAM, or changes the selected object, pager entries, or allocation counters.
+It can enumerate objects larger than RAM. Class filtering and language identity-number conversion belong in microcode.
+
+The request is exclusive until its response completes. A store error leaves the destination value register unchanged.
+Malformed returned references, classes, or identity ordering also produce ServiceError without architectural changes.
+Enumeration is ordered by identity, but does not create a snapshot across separate commands.
+
 ## Streaming backing-store interface
 
 The store channel is independent of the halted initialization channel. It remains active while a
@@ -308,8 +351,8 @@ There is one outstanding store transaction at most.
 
 | Request field    | Width | Meaning                                                          |
 | ---------------- | ----: | ---------------------------------------------------------------- |
-| `store_op_o`     |     3 | Operation from the table below                                   |
-| `store_ref_o`    |    40 | Complete canonical object reference                              |
+| `store_op_o`     |     4 | Operation from the table below                                   |
+| `store_ref_o`    |    40 | Canonical reference, or raw identity for directory operations     |
 | `store_class_o`  |    40 | Class for BeginSave, otherwise zero                              |
 | `store_size_o`   |    24 | Body size for BeginSave, otherwise zero                          |
 | `store_cond_o`   |     1 | Cond flag for BeginSave, otherwise zero                          |
@@ -323,10 +366,19 @@ There is one outstanding store transaction at most.
 |     2 | BeginSave  | Start an unpublished record with the supplied metadata         |
 |     3 | WriteWord  | Append the next body word to that unpublished record           |
 |     4 | CommitSave | Atomically replace the committed record after all words arrive |
+|     5 | BeginBatch | Start an empty private batch and discard any abandoned staging |
+|     6 | CommitBatch | Atomically publish all completed records in the batch |
+|     7 | AbortBatch | Discard the private batch and any incomplete record |
+|     8 | NextRecord | Return metadata for the smallest committed identity greater than the raw input identity |
+|     9 | FindRecord | Return metadata for the exact raw input identity |
 
 The completion carries `store_rsp_status_i` (4 bits). Metadata also returns `store_rsp_ref_i` and
 `store_rsp_class_i` (40 bits each), `store_rsp_size_i` (24), and `store_rsp_cond_i` (1). ReadWord
 returns `store_rsp_data_i` (40 bits). Unused reply fields are ignored by the RTL.
+
+NextRecord and FindRecord use the metadata reply fields. Absence returns successful status with
+machine nil reference and class; it is not a store error. Private batch records are invisible.
+These operations inspect the storage directory without interpreting classes or object bodies.
 
 The service keys records by identity and verifies the full reference, including the scan flag.
 Metadata returns `InvalidReference` for a missing identity or mismatched reference. Other store
@@ -338,6 +390,11 @@ accepts sequential offsets starting at zero and rejects duplicates or gaps. Comm
 exactly the declared number of words. An error completion must not publish a replacement record. A
 successful commit publishes once, at its completion handshake. These are requirements for any
 external backing-store adapter. The Rust adapter verifies them independently of transfer sequencing.
+
+Inside a batch, CommitSave adds a complete record to private batch storage without publishing it.
+Metadata and ReadWord continue to read committed records. CommitBatch requires no incomplete record.
+A failed CommitBatch must publish none of its records. BeginBatch, CommitBatch, and AbortBatch ignore operand fields; RTL sends zeros.
+Reset discards all private staging and retains only previously committed records.
 
 ## Transfer failure and space accounting
 
@@ -370,8 +427,10 @@ set or a Smalltalk runtime.
 | `logik_store.sv`       | Writable control store, NAM, CSMAP, abstract program counter, fetch pipeline  |
 | `logik_sequencer.sv`   | Microaddresses, branch targets, saved return address, mark, condition history |
 | `logik_stacks.sv`      | Resident stacks, pointers, argument pointer, cached stack values              |
+| `logik_io.sv`          | Captured device request, completion handshake, device-result register         |
 | `numerik.sv`           | Sixteen registers, Q, product, flags, operand selection                       |
 | `numerik_alu.sv`       | Combinational integer operations, destination shifts, flag calculation        |
+| `numerik_fp32.sv`      | Binary32 arithmetic backend, response holding, exception results              |
 | `rekursiv_control.svh` | Shared control enums, arithmetic flags, packed microinstruction type          |
 | `objekt_entry.svh`     | Packed pager metadata shared with the transfer engine                         |
 
@@ -381,7 +440,7 @@ distinguish book evidence from project choices and explain timing at each state 
 
 ### Configuration and loading
 
-The simulation wrapper supplies 1024 microinstructions, 256 NAM words, 1024 CSMAP entries, and 32
+The simulation wrapper supplies 4096 microinstructions, 256 NAM words, 1024 CSMAP entries, and 32
 words per stack. LOGIK parameters permit other capacities; control-store capacity ranges from 2
 through 65535 words. NAM capacity ranges from 2 through 65536 words. Stack capacity ranges from 2
 through 65536 words for the supplied debug interface. Addresses remain 16 bits for microcode and 24
@@ -442,15 +501,34 @@ The packed word is 256 bits. The exact symbolic values are defined in `rekursiv_
 | 211:206                   | Project compact code                                                 |
 | 215:212                   | Recovery operation, defined below                                    |
 | 216                       | Allocation size comes from NUMERIK register A instead of the literal |
-| 94, 98, 113, 255:217      | Reserved; must be zero                                               |
+| 220:217                  | Floating-point operation (with ALU Float)                            |
+| 223:221                  | Floating-point rounding mode                                        |
+| 225:224                  | Device operation: None=0, Read=1, Write=2                            |
+| 226                      | Write full D-bus word to explicit root indexed by register A         |
+| 94, 98, 113, 255:227      | Reserved; must be zero                                               |
 
 Invalid selectors and reserved bits halt execution before an OBJEKT command can issue. The literal
 field supplies D unless another source is selected. Other sources include cached stack values, the
 previous OBJEKT result, register A, Q, pointers, NAM operand, saved return address, and the
-full-width symbol register (source 11). Full-width sources preserve all 40 bits; narrower sources
+full-width symbol register (source 11), and SymbolHigh (source 12), which returns symbol bits 39:32.
+Device (source 13) returns the last successful 32-bit device reply.
+Root (source 14) returns the explicit root indexed by register A.
+Full-width sources preserve all 40 bits; narrower sources
 are zero-extended.
 
 ### Retirement, conditions, and errors
+
+The [device channel](devices.md#logik-transport) is independent of OBJEKT and backing storage.
+`io=Read` and `io=Write` capture a 32-bit aligned address from register A and write data from D.
+They cannot combine object, Float, or recovery operations. A device instruction retires only after a successful reply.
+Other local destinations use the original operands; the reply becomes available through Device on the next instruction.
+Device transactions also capture their branch condition before waiting. Errors preserve the previous device result and local destinations.
+
+`ldroot` replaces one of the 32 explicit roots with the full D-bus word at retirement.
+The root index comes from register A and must be below 32. `d=Root` reads through the same index.
+The boot loader initializes these slots; microcode can subsequently register, replace, or clear tagged references.
+Reads and writes are prohibited during collection, which scans the frozen root slots through a separate port.
+A failed accompanying object or device command does not publish the root write.
 
 During mutator execution, every local architectural module receives the same retirement pulse.
 During collection, stack and fetch retirement are disabled; arithmetic and sequencing execute the
@@ -481,6 +559,7 @@ failure contract.
 |     3 | Stack address, argument pointer, or control-word counter overflow           |
 |     4 | OBJEKT returned an error                                                    |
 |     5 | Invalid abstract counter, uninitialized NAM word, or missing opcode mapping |
+|     6 | Device transaction returned an error                                      |
 
 Validation checks instruction availability, encoding, next microaddress, stack effects, fetch
 effects, and compact construction in that order. An invalid programming address reports fault 1
@@ -511,8 +590,14 @@ selection from SP forwards the newly calculated SP for the next access. Control-
 increment/decrement operations change the stored counter, not its pointer. All address and counter
 checks occur before writes.
 
+Evaluation-stack operation Wide (5) constructs `{D[7:0], shifted_ALU_result[31:0]}` and updates ESTKR.
+It packs raw bits without choosing a tag or validating a language representation.
+Together with SymbolHigh, it permits microcode to manipulate full 40-bit words through the 32-bit arithmetic datapath.
+
 NUMERIK implements pass, addition, both subtraction orders, AND, OR, XOR, complement, rotation, and
-signed/unsigned multiplication. Carry input is zero, one, or the previous zero flag. Subtraction
+signed/unsigned multiplication. The [floating-point extension](numerik-floating-point.md) adds binary32 arithmetic, conversions, comparison, and square root.
+Its result completion uses a handshake; LOGIK waits before retiring architectural effects.
+Carry input is zero, one, or the previous zero flag. Subtraction
 computes `A - B - 1 + carry`; ordinary subtraction therefore selects carry one. Its carry-out means
 no borrow. Multiplication retains a 64-bit product, with separate high-word and low-word reads.
 Destination shifts support left, logical right, and arithmetic right by one bit. Q and register B

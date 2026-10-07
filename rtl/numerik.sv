@@ -1,4 +1,4 @@
-// NUMERIK integer datapath and architectural arithmetic state.
+// NUMERIK integer and floating-point datapaths and architectural state.
 //
 // Book pp. 144-149 establish sixteen 32-bit registers, F/Y/Q separation,
 // carry-input selection, and a retained 64-bit product. This module implements
@@ -15,6 +15,8 @@ module numerik (
     input logic clk_i,
     input logic rst_i,
     input logic retire_i, input logic save_i, restore_i,
+    input logic fp_start_i, output logic fp_done_o,
+    input logic [3:0] fp_operation_i, input logic [2:0] fp_rounding_i,
     input logic [3:0] operation_i,
     input logic [3:0] ra_i,
     input logic [3:0] rb_i,
@@ -32,7 +34,7 @@ module numerik (
     output logic [31:0] register_a_o,
     output logic [31:0] q_o,
     output logic [63:0] product_o,
-    output logic [4:0] flags_o,
+    output logic [4:0] flags_o, output logic [4:0] fp_flags_o,
     input logic [3:0] debug_register_i,
     output logic [31:0] debug_register_o
 );
@@ -46,7 +48,36 @@ module numerik (
     logic [63:0] product, calculated_product;
     arithmetic_flags_t flags, calculated_flags;
     logic [31:0] r_operand, s_operand;
-    logic carry_input;
+    logic carry_input, unused_fp_ready;
+    logic [31:0] integer_y, fp_result;
+    logic [4:0] fp_exceptions, fp_flags, saved_fp_flags;
+    arithmetic_flags_t integer_flags;
+    numerik_fp32 floating_point (
+        .clk_i(clk_i), .rst_i(rst_i), .valid_i(fp_start_i), .ready_o(unused_fp_ready),
+        .operation_i(fp_operation_i), .rounding_i(fp_rounding_i),
+        .a_i(r_operand), .b_i(s_operand),
+        .valid_o(fp_done_o), .ready_i(retire_i && operation_i==ALU_FLOAT),
+        .result_o(fp_result), .exceptions_o(fp_exceptions)
+    );
+    // Integer condition flags remain independent of FP exceptions. FloatStatus
+    // reads the exceptions from the most recently retired Float operation.
+    always_comb begin
+        y_o=integer_y; calculated_flags=integer_flags;
+        if(operation_i==ALU_FLOAT || operation_i==ALU_FLOAT_STATUS) begin
+            y_o=operation_i==ALU_FLOAT ? fp_result : {27'b0,fp_flags};
+            calculated_flags='0;
+            calculated_flags.zero=y_o==0;
+            calculated_flags.sign=y_o[31];
+            calculated_flags.corrected_sign=y_o[31];
+            if(operation_i==ALU_FLOAT_STATUS) begin
+                case(shift_i)
+                    SHIFT_LEFT: y_o={26'b0,fp_flags,1'b0};
+                    SHIFT_RIGHT, SHIFT_ARITHMETIC_RIGHT: y_o={28'b0,fp_flags[4:1]};
+                    default: ;
+                endcase
+            end
+        end
+    end
 
     // Both register reads use pre-retirement state. Register B is also the
     // optional write destination, so read/modify/write needs no bypass path.
@@ -76,8 +107,8 @@ module numerik (
         .carry_i(carry_input),
         .shift_i(shift_i),
         .product_i(product),
-        .y_o(y_o),
-        .flags_o(calculated_flags),
+        .y_o(integer_y),
+        .flags_o(integer_flags),
         .product_o(calculated_product)
     );
 
@@ -85,21 +116,22 @@ module numerik (
         if (rst_i) begin
             q <= '0; saved_q <= '0; saved_product <= '0; saved_flags <= '0;
             product <= '0;
-            flags <= '0;
+            flags <= '0; fp_flags<=0; saved_fp_flags<=0;
             for (int index = 0; index < 16; index++) begin
                 registers[index] <= '0; saved_registers[index] <= '0;
             end
         end else if(save_i) begin
             for(int index=0;index<16;index++) saved_registers[index]<=registers[index];
-            saved_q<=q; saved_product<=product; saved_flags<=flags;
+            saved_q<=q; saved_product<=product; saved_flags<=flags; saved_fp_flags<=fp_flags;
         end else if(restore_i) begin
             for(int index=0;index<16;index++) registers[index]<=saved_registers[index];
-            q<=saved_q; product<=saved_product; flags<=saved_flags;
+            q<=saved_q; product<=saved_product; flags<=saved_flags; fp_flags<=saved_fp_flags;
         end else if (retire_i) begin
             if (write_register_i) registers[rb_i] <= y_o;
             if (load_q_i) q <= y_o;
             if (write_flags_i) flags <= calculated_flags;
             product <= calculated_product;
+            if(operation_i==ALU_FLOAT) fp_flags<=fp_exceptions;
         end
     end
 
@@ -108,4 +140,5 @@ module numerik (
     assign q_o = q;
     assign product_o = product;
     assign flags_o = flags;
+    assign fp_flags_o = fp_flags;
 endmodule

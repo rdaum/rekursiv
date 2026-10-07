@@ -42,7 +42,9 @@ pub mod scheduler {
 
 /// The complete fixed low-oop range from the Version 2 distribution is kept
 /// in the machine's explicit root slots. Slot 26 will hold the active context;
-/// slots 27..31 remain available to the interpreter. This is not a root for
+/// slots 27/28 hold input/timer semaphores, 29 holds private device state,
+/// 30 holds a low-space registration Array,
+/// and 31 holds the raw idle flag. This is not a root for
 /// every imported object: the ordinary guest graph supplies those edges.
 pub const BOOT_ROOTS: [u16; 26] = [
     2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50,

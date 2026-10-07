@@ -105,7 +105,8 @@ ra=9, rb=12, alu=Sub, cin=One, flags
 seq=ConditionalJump, cc=Sign, brch=bad_state
 ```
 
-Here R9 contains the guest stack pointer, and R12 contains the temporary count.
+Here R9 contains the guest stack pointer, and R12 contains the evaluation-stack floor.
+For a MethodContext, that floor is the temporary count. For a BlockContext, it is zero.
 The code rejects a stack pointer below the temporaries. These values are bounded nonnegative counts.
 For general signed comparisons with possible overflow, use `CorrectedSign` instead of `Sign`.
 
@@ -255,10 +256,12 @@ control aliases are not implemented.
 
 | Fields                              | Values                                                                                                          |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `d`                                 | Literal expression or `Estk`, `Cstk`, `Object`, `Register`, `Apc`, `Ap`, `Sp`, `Namarg`, `Upcor`, `Q`, `Symbol` |
+| `d`                                 | Literal expression or `Estk`, `Cstk`, `Object`, `Register`, `Apc`, `Ap`, `Sp`, `Namarg`, `Upcor`, `Q`, `Symbol`, `SymbolHigh`, `Device`, `Root` |
 | `seq`, `cc`, `brch`                 | Sequence operation, condition with optional `!`, and label or 16-bit expression                                 |
 | `ra`, `rb`                          | Register numbers 0–15                                                                                           |
 | `alu`, `r`, `s`, `cin`, `shift`     | Arithmetic operation, operand sources, carry source, destination shift                                          |
+| `fp`, `round`                     | Floating-point operation and rounding mode with `alu=Float`; see [numeric contract](numerik-floating-point.md) |
+| `io`                              | `Read` or `Write`; register A holds the aligned 32-bit device address, D supplies write data |
 | `esp`, `sp`, `estk`, `csp`, `cstk`  | Stack address, pointer, and data controls                                                                       |
 | `apc`, `fetch`                      | Abstract program counter and NAM/CSMAP fetch controls                                                           |
 | `page`, `idx`, `reg`, `mem`, `read` | OBJEKT command controls                                                                                         |
@@ -267,7 +270,16 @@ control aliases are not implemented.
 | `compact`                           | Compact construction code 0–3                                                                                   |
 | `gc`                                | Privileged recovery operation                                                                                   |
 
-Flags without operands are `halt`, `ldsym`, `ldmark`, `ldrb`, `ldq`, `flags`, `ldap`, and `ldvr`.
+Flags without operands are `halt`, `ldsym`, `ldmark`, `ldrb`, `ldq`, `flags`, `ldap`, `ldvr`, and `ldroot`.
+`ldroot` writes D to an explicit root slot indexed by register A (0–31). `d=Root` reads that slot.
+Both controls are mutator operations; the collector observes the frozen slots through its root interface.
+
+`read=FreeWords` and `read=FreeIdentities` return OBJEKT allocation capacity through the Object bus.
+They do not require an object selection or issue external transfers. Counts include reservations retained after a failed allocation.
+
+`d=SymbolHigh` reads the symbol register's high byte, zero-extended.
+`estk=Wide` packs the D bus's low byte above the 32-bit arithmetic result and writes the full 40-bit stack word.
+It applies no compact-value encoding or language-specific tag policy.
 `nop` emits an otherwise empty control word. Unspecified fields take the encoder's default values.
 Symbolic values match the enums in [processor.rs](../crates/rekursiv-asm/src/processor.rs) and
 [lib.rs](../crates/rekursiv-asm/src/lib.rs). For example, `r=Register` selects register A and

@@ -27,6 +27,8 @@ module logik_store #(
     input logic [1:0] apc_operation_i,
     input logic [39:0] bus_i,
     input logic fetch_nam_i, fetch_map_i,
+    input logic runtime_root_write_i, input logic [4:0] runtime_root_address_i,
+    output logic [39:0] runtime_root_o,
     output logic fetch_fault_o,
     output logic [23:0] apc_o,
     output logic [15:0] dispatch_o,
@@ -34,7 +36,7 @@ module logik_store #(
     input logic [15:0] debug_address_i, root_address_i,
     output logic [39:0] root_literal_o, root_type_o, root_extra_o,
     output logic debug_valid_o,
-    output logic [39:0] debug_literal_o, debug_type_o
+    output logic [39:0] debug_literal_o, debug_type_o, debug_root_o
 );
     `include "rekursiv_control.svh"
     localparam integer CODE_BITS = $clog2(CODE_WORDS);
@@ -91,7 +93,12 @@ module logik_store #(
 
     always_ff @(posedge clk_i) begin
         if (rst_i) begin
+            // Eight lane-valid bits per control word. A larger control store
+            // deliberately needs a reset vector wider than Verilator's 8K
+            // replication heuristic; the data arrays themselves are not reset.
+            /* verilator lint_off WIDTHCONCAT */
             control_valid <= '0;
+            /* verilator lint_on WIDTHCONCAT */
             nam_valid <= '0;
             map_valid <= '0; roots_valid<='0;
             apc <= '0;
@@ -120,6 +127,13 @@ module logik_store #(
                 end
             end
             if (retire_i) begin
+                // Explicit roots are generic tagged storage. Retire gates this
+                // write together with other local effects; the collector freezes
+                // mutator retirement, so registrations cannot change mid-scan.
+                if (runtime_root_write_i) begin
+                    extra_roots[runtime_root_address_i] <= bus_i;
+                    roots_valid[runtime_root_address_i*2 +: 2] <= 2'b11;
+                end
                 apc <= next_apc[23:0];
                 if (fetch_nam_i) begin
                     opcode <= nam[apc[NAM_BITS-1:0]][39:30];
@@ -145,6 +159,12 @@ module logik_store #(
     assign root_type_o=root_word.object_enable && root_word.check_type ? root_word.expected_type : 40'b0;
     assign root_extra_o=root_address_i<32 && roots_valid[root_address_i[4:0]*2 +: 2]==2'b11 ?
         extra_roots[root_address_i[4:0]] : 40'b0;
+    // A separate read port avoids feeding the collector's D-bus-derived root
+    // address back into the mutator D bus through Root selection.
+    assign runtime_root_o = roots_valid[runtime_root_address_i*2 +: 2] == 2'b11 ?
+        extra_roots[runtime_root_address_i] : 40'b0;
+    assign debug_root_o = debug_address_i < 32 && roots_valid[debug_address_i[4:0]*2 +: 2] == 2'b11 ?
+        extra_roots[debug_address_i[4:0]] : 40'b0;
     assign apc_o = apc;
     assign dispatch_o = dispatch;
     assign operand_o = operand;

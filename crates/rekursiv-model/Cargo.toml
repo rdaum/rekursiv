@@ -4,3 +4,6 @@ version.workspace = true
 edition.workspace = true
 [dependencies]
 rekursiv-asm = { path = "../rekursiv-asm" }
+
+[build-dependencies]
+cc = "1"

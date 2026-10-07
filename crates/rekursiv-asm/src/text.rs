@@ -276,6 +276,7 @@ fn instruction(
             }
             "halt" => i.halt = flag()?,
             "ldsym" => i.symbol = flag()?,
+            "ldroot" => i.write_root = flag()?,
             "ldmark" => i.mark = flag()?,
             "ldrb" => i.write_register = flag()?,
             "ldq" => i.load_q = flag()?,
@@ -317,6 +318,9 @@ fn instruction(
             "ra" => i.ra = number(15)? as u8,
             "rb" => i.rb = number(15)? as u8,
             "alu" => i.alu = enumeration(line, value)?,
+            "fp" => i.float = enumeration(line, value)?,
+            "round" => i.rounding = enumeration(line, value)?,
+            "io" => i.device = enumeration(line, value)?,
             "r" => i.r = enumeration(line, value)?,
             "s" => i.s = enumeration(line, value)?,
             "cin" => i.carry = enumeration(line, value)?,

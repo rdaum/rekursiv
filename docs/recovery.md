@@ -20,7 +20,7 @@ h.start_processor(0)?;
 `with_ram_collector` assembles 68 ordinary microinstructions at the supplied address and rejects
 overlap with existing code. The pager count must match the hardware configuration. Root bounds come
 from the image's stack and control-store capacities. The wrapper has 16 pager entries, 32 stack
-words, and 1024 control words. The collector uses NUMERIK registers R0–R4 for loop state; hardware
+words, and 4096 control words. The collector uses NUMERIK registers R0–R4 for loop state; hardware
 preserves the mutator's complete arithmetic state.
 
 The loader sets `gc_enable_i` and `gc_entry_i` while halted. Keep these settings fixed throughout
@@ -76,11 +76,12 @@ The ROOT control reads machine state directly. Its index layout is:
 | 19                        | Class returned by the interrupted refill metadata lookup                      |
 | 20 onward                 | Evaluation slots, with only `0..SP` contributing values                       |
 | After stack capacity      | Two words per control-store slot: literal and enabled expected-class constant |
-| After control-store roots | 32 explicit root words, programmed through boot space 3                       |
+| After control-store roots | 32 explicit root words, initialized through boot space 3 and writable by mutator microcode |
 
 Unwritten code and explicit-root slots read as zero. The loader writes all 32 explicit roots from
-`Image::roots`. A language runtime can anchor a scanned root-table object there or in a value
-register, then update its fields with normal machine instructions. Rust-local references are not
+`Image::roots`. Mutator microcode can read a slot with `d=Root` or replace it with `ldroot`;
+register A selects slots 0–31. A write publishes only at successful retirement. Collection freezes these slots.
+A language runtime can also anchor a scanned root-table object there or in a value register, then update its fields normally. Rust-local references are not
 machine roots. Indices, control-stack entries, and NUMERIK registers are untagged numeric state. The
 representation cache contributes no independent edge, so opaque data cannot acquire pointer
 semantics through that cache.

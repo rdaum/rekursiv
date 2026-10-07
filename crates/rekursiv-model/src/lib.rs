@@ -1,5 +1,7 @@
 //! Cycle-independent architectural oracle. No RTL or Verilator dependency.
 use rekursiv_asm::*;
+mod directory;
+mod exchange;
 pub mod ram_gc;
 mod recovery;
 pub mod store;
@@ -123,25 +125,31 @@ impl Model {
             };
         }
         if let Ok(c) = ports.decode() {
+            if matches!(c.pager, Pager::NextObject | Pager::FindObject) {
+                return self.execute_directory(c, faults);
+            }
+            if c.pager == Pager::Exchange {
+                return self.execute_exchange(c, faults);
+            }
             if matches!(c.pager, Pager::Fetch | Pager::Allocate) {
                 return self.execute_transfer(c, faults);
             }
         }
         let memory_error = faults.memory_at == Some(0);
-        let mut candidate = self.clone();
         let mut effect = None;
+        // transition validates all fallible conditions before publishing a
+        // memory write or replacing state. Cloning the complete disk image on
+        // every register read adds no rollback protection and makes original
+        // image execution prohibitively expensive.
         let result = ports
             .decode()
-            .and_then(|c| candidate.transition(c, memory_error, &mut effect));
+            .and_then(|c| self.transition(c, memory_error, &mut effect));
         match result {
-            Ok(data) => {
-                *self = candidate;
-                Outcome {
-                    response: Response::ok(data),
-                    memory: effect.into_iter().collect(),
-                    store: Vec::new(),
-                }
-            }
+            Ok(data) => Outcome {
+                response: Response::ok(data),
+                memory: effect.into_iter().collect(),
+                store: Vec::new(),
+            },
             Err(e) => Outcome {
                 response: Response::error(e),
                 memory: effect.into_iter().collect(),
@@ -155,7 +163,7 @@ impl Model {
         memory_error: bool,
         effect: &mut Option<MemoryEffect>,
     ) -> Result<Word, Status> {
-        if matches!(c.pager, Pager::Fetch | Pager::Allocate) {
+        if matches!(c.pager, Pager::Fetch | Pager::Allocate | Pager::Exchange) {
             return Err(Status::BadCommand);
         }
         let before = self.state.clone();
@@ -245,6 +253,10 @@ impl Model {
             Read::Base => Word::raw(old_entry.unwrap().base as u64)?,
             Read::Representation => old_entry.unwrap().representation,
             Read::Flags => Word::raw(old_entry.unwrap().flags() as u64)?,
+            Read::FreeWords => {
+                Word::raw(self.allocation_limit.saturating_sub(self.body_cursor) as u64)?
+            }
+            Read::FreeIdentities => Word::raw((ID_MASK + 1).saturating_sub(self.next_identity))?,
         };
         if c.memory != Memory::None {
             let mut e = old_entry.unwrap();
@@ -487,4 +499,5 @@ mod tests {
     }
 }
 
+pub mod float;
 pub mod processor;

@@ -11,29 +11,36 @@
 ; 0 scratch, 1 field index/jump delta, 2 variable kind, 3 store mode,
 ; 4/5 arithmetic operands, 6 peek continuation, 7 byte-fetch continuation,
 ; 8 guest IP (one-based bytes), 9 guest SP (includes temporaries),
-; 10 literal count, 11 method byte length, 12 temporary count,
+; 10 literal count, 11 method byte length, 12 evaluation floor (method temps or zero for a block),
 ; 13 opcode, 14 context slot capacity, 15 terminal status.
 ;
-; Status: 1 root return, 2 unsupported bytecode, 4 non-Boolean branch,
-; 5 malformed context/index/stack, 6 missing method, 7 argument mismatch.
+; Status: 1 root return, 2 unsupported bytecode, 5 malformed state/index,
+; 6 missing doesNotUnderstand:, 7 argument mismatch. No runnable process waits
+; in scheduler_idle until an external event makes a process runnable.
 ; Arithmetic failure preserves operands and enters ordinary message lookup.
 ; sends.uc owns that path, context allocation, and return to a sender.
 ;
 ; Every instruction boundary writes IP/SP into the context. Popped slots are
 ; cleared to guest nil. The whole context is scanned by the generic collector.
 ; A nil sender terminates a diagnostic root invocation. Ordinary returns clear
-; the finished context and resume its sender. Blocks need the later VM stage.
+; the finished context and resume its sender. blocks.uc supplies home/caller
+; resolution; messages.uc supplies failed-send and cannotReturn: delivery.
 .equ NIL = 0xa000000001
 .equ FALSE = 0xa000000002
 .equ TRUE = 0xa000000003
 .entry start
 .root 26, ACTIVE_CONTEXT
+.root 27, NIL ; input semaphore
+.root 28, NIL ; timer semaphore
+.root 29, NIL ; private device state (input, cursor/display, snapshot target, storage)
+.root 30, NIL ; low-space registration Array (semaphore and threshold chunks)
+.root 31, 0   ; raw idle flag, never a guest reference
 start:
     d=ACTIVE_CONTEXT, ldvr, vr=0
 load_context:
     read=Vr, vr=0
     d=Object, page=Fetch
-    read=Size, class=0xa00000000b
+    read=Size
     d=Object, r=Bus, s=Branch, brch=7, alu=Sub, cin=One, rb=14, ldrb, flags
     seq=ConditionalJump, cc=Sign, brch=bad_state
     d=3, idx=Load
@@ -44,7 +51,11 @@ load_context:
     mem=Read
     d=Object, ldsym, r=Bus, rb=9, ldrb, estk=Compact, compact=2
     d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bad_state
-    idx=Increment
+    d=context_home_ready, r=Bus, rb=6, ldrb, seq=Jump, brch=context_home
+context_home_ready:
+    read=Vr, vr=3
+    d=Object, page=Fetch
+    d=5, idx=Load
     mem=Read
     d=Object, ldvr, vr=1
     d=7, idx=Load
@@ -72,6 +83,14 @@ load_context:
     ra=12, shift=Right, rb=12, ldrb
     ra=12, shift=Right, rb=12, ldrb
     ra=12, s=Bus, d=31, alu=And, rb=12, ldrb
+    ; A block has its own evaluation stack, starting at zero. Its temporaries
+    ; still belong to the home method and are accessed through context_home.
+    read=Vr, vr=0
+    d=Object, ldsym
+    read=Vr, vr=3
+    d=Object, seq=ConditionalJump, cc=Symbol, brch=context_stack_floor
+    d=0, r=Bus, rb=12, ldrb
+context_stack_floor:
     ra=9, rb=12, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=bad_state
     ra=14, rb=9, alu=Sub, cin=One, flags
@@ -101,6 +120,7 @@ save_context:
     d=Estk, mem=Write
     ra=15, flags
     seq=ConditionalJump, cc=!Zero, brch=stopped
+    seq=Jump, brch=check_process_switch
 ; Tests observe this boundary without changing machine state or supplying work.
 cycle:
     d=decoded, r=Bus, rb=7, ldrb, seq=Jump, brch=fetch_byte
@@ -203,11 +223,25 @@ receiver_target:
     d=Q, idx=Load
     seq=Jump, brch=access_variable
 temporary_target:
-    ra=12, rb=1, alu=Sub, cin=One, flags
+    d=temporary_home_ready, r=Bus, rb=6, ldrb, seq=Jump, brch=context_home
+temporary_home_ready:
+    ; Read the home method's temporary count. R12 is the evaluation-stack floor,
+    ; which is zero inside a block and therefore cannot validate this access.
+    read=Vr, vr=1
+    d=Object, page=Fetch
+    d=2, idx=Load
+    mem=Read
+    d=Object, r=Bus, shift=Right, rb=0, ldrb
+    ra=0, shift=Right, rb=0, ldrb
+    ra=0, shift=Right, rb=0, ldrb
+    ra=0, shift=Right, rb=0, ldrb
+    ra=0, shift=Right, rb=0, ldrb
+    ra=0, shift=Right, rb=0, ldrb
+    ra=0, shift=Right, rb=0, ldrb
+    ra=0, s=Branch, brch=31, alu=And, rb=0, ldrb
+    ra=0, rb=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=bad_state
     seq=ConditionalJump, cc=Sign, brch=bad_state
-    read=Vr, vr=0
-    d=Object, ldvr, vr=3
     read=Vr, vr=3
     d=Object, page=Fetch
     ra=1, s=Branch, brch=8, alu=Add, ldq
@@ -293,15 +327,34 @@ return_false:
 return_nil:
     d=NIL, ldsym, seq=Jump, brch=return_value
 return_top:
-    d=return_value, r=Bus, rb=6, ldrb, seq=Jump, brch=peek
+return_block:
+    d=return_pop, r=Bus, rb=6, ldrb, seq=Jump, brch=peek
+return_pop:
+    ; Keep the value in SYMBOL while removing it from the outgoing stack.
+    d=NIL, mem=Write
+    ra=9, s=Branch, brch=1, alu=Sub, cin=One, rb=9, ldrb
 return_value:
     d=Symbol, ldvr, vr=5
+    ra=13, s=Branch, brch=125, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=return_local
+    d=return_home_ready, r=Bus, rb=6, ldrb, seq=Jump, brch=context_home
+return_home_ready:
+    read=Vr, vr=3
+    d=Object, page=Fetch
+    seq=Jump, brch=return_target
+return_local:
     read=Vr, vr=0
     d=Object, page=Fetch
+return_target:
     d=2, idx=Load
     mem=Read
     d=NIL, ldsym
     d=Object, seq=ConditionalJump, cc=!Symbol, brch=return_sender
+    ; Only the boot activation has a diagnostic nil-sender return. Escaped
+    ; blocks and manipulated sender chains send cannotReturn: on the machine.
+    read=Vr, vr=0
+    d=ACTIVE_CONTEXT, ldsym
+    d=Object, seq=ConditionalJump, cc=!Symbol, brch=cannot_return
     d=1, r=Bus, rb=15, ldrb, seq=Jump, brch=save_context
 
 short_jump:
@@ -375,6 +428,8 @@ arithmetic_argument:
     mem=Read
     d=Object, ldsym, r=Bus, rb=4, ldrb, estk=Compact, compact=2
     d=Estk, seq=ConditionalJump, cc=!Symbol, brch=primitive_failure
+    ra=13, flags
+    seq=ConditionalJump, cc=Zero, brch=integer_extended
     ra=13, s=Branch, brch=176, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=add
     ra=13, s=Branch, brch=177, alu=Sub, cin=One, flags
@@ -446,6 +501,8 @@ false_result:
 true_result:
     d=TRUE, ldsym
 arithmetic_result:
+    ra=15, flags
+    seq=ConditionalJump, cc=!Zero, brch=primitive_arithmetic_result
     d=Symbol, mem=Write
     idx=Increment
     d=NIL, mem=Write
@@ -453,10 +510,18 @@ arithmetic_result:
     seq=Jump, brch=boundary
 unsupported:
     d=2, r=Bus, rb=15, ldrb, seq=Jump, brch=save_context
+primitive_arithmetic_result:
+    d=Symbol, ldvr, vr=5, seq=Jump, brch=send_result
 primitive_failure:
+    ra=15, flags
+    seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     seq=Jump, brch=send_special
 boolean_failure:
-    d=4, r=Bus, rb=15, ldrb, seq=Jump, brch=save_context
+    d=0xa00000001a, ldvr, vr=4
+    d=0, r=Bus, rb=1, ldrb
+    d=0, r=Bus, rb=2, ldrb
+    d=0, r=Bus, rb=13, ldrb
+    seq=Jump, brch=send_prepare
 bad_state:
     d=5, r=Bus, rb=15, ldrb
     ; Malformed boot state may not be safe to write back to a guest context.
@@ -717,7 +782,7 @@ stopped:
 .nam 124, 124, 0
 .map 124, return_top
 .nam 125, 125, 0
-.map 125, unsupported
+.map 125, return_block
 .nam 126, 126, 0
 .map 126, unsupported
 .nam 127, 127, 0

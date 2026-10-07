@@ -7,6 +7,7 @@ use marlin::{
 };
 use rekursiv_asm::*;
 use rekursiv_model::{MemoryEffect, Model, Outcome, State};
+pub mod device;
 pub mod microprograms;
 pub mod processor;
 pub mod programs;
@@ -21,24 +22,56 @@ pub struct Objekt;
 pub const PAGER_ENTRIES: usize = 16;
 pub const MEMORY_WORDS: usize = 512;
 pub fn runtime() -> Result<VerilatorRuntime> {
+    runtime_with_memory(MEMORY_WORDS)
+}
+/// Compile the same machine with a different external RAM capacity. The pager,
+/// processor, and instruction semantics do not change. Each capacity has its
+/// own compilation cache, so small adversarial tests can run alongside image
+/// tests without changing global files or rebuilding each other's machine.
+pub fn runtime_with_memory(memory_words: usize) -> Result<VerilatorRuntime> {
+    ensure!((2..=1 << 24).contains(&memory_words) && memory_words.is_multiple_of(2));
     let root = Utf8Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let directory = root.join(format!("artifacts/marlin/memory-{memory_words}"));
+    let configuration = directory.join("memory_config.sv");
+    {
+        // Several tests can ask for the same profile concurrently. Do not let
+        // another compiler observe a partially written preprocessor input.
+        static CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = CONFIG_LOCK.lock().unwrap();
+        std::fs::create_dir_all(&directory)?;
+        let text = format!("`define REKURSIV_SIM_MEMORY_WORDS {memory_words}\n");
+        if std::fs::read_to_string(&configuration).ok().as_ref() != Some(&text) {
+            std::fs::write(&configuration, text)?;
+        }
+    }
     let files = [
+        configuration,
         root.join("objekt_tb.sv"),
         root.join("rtl/objekt.sv"),
         root.join("rtl/objekt_transfer.sv"),
+        root.join("rtl/objekt_exchange.sv"),
+        root.join("rtl/objekt_directory.sv"),
         root.join("rtl/objekt_gc.sv"),
         root.join("rtl/logik.sv"),
+        root.join("rtl/logik_io.sv"),
         root.join("rtl/numerik.sv"),
         root.join("rtl/numerik_alu.sv"),
+        root.join("rtl/numerik_fp32.sv"),
+        root.join("rtl/hardfloat.sv"),
         root.join("rtl/logik_store.sv"),
         root.join("rtl/logik_stacks.sv"),
         root.join("rtl/logik_sequencer.sv"),
     ];
     let refs: Vec<_> = files.iter().map(|p| p.as_path()).collect();
     VerilatorRuntime::new(
-        &root.join("artifacts/marlin"),
+        &directory,
         &refs,
-        &[root.as_path(), root.join("rtl").as_path()],
+        &[
+            root.as_path(),
+            root.join("rtl").as_path(),
+            root.join("vendor/hardfloat/source").as_path(),
+            root.join("vendor/hardfloat/source/RISCV").as_path(),
+        ],
         [],
         VerilatorRuntimeOptions::default_logging(),
     )
@@ -94,6 +127,7 @@ pub struct Harness<'a> {
     pub commands: Vec<(Ports, Response)>,
     ticks: u64,
     pub store: BackingStore,
+    pub device: device::Device,
     pub store_requests: Vec<StoreRequest>,
     pub store_timing: Timing,
     pending_store: Option<PendingStore>,
@@ -115,12 +149,18 @@ impl<'a> Harness<'a> {
                 ..Default::default()
             })
             .map_err(|e| eyre!("Build RTL model: {e:?}"))?;
+        rtl.eval();
+        let memory_words = rtl.dbg_memory_words_o as usize;
+        ensure!(
+            (2..=1 << 24).contains(&memory_words),
+            "invalid RTL RAM capacity"
+        );
         let trace = trace.map(|p| rtl.open_vcd(p.as_str()));
         let mut h = Self {
             trace,
             rtl,
-            oracle: Model::new(PAGER_ENTRIES, MEMORY_WORDS),
-            backing: vec![Word::ZERO; MEMORY_WORDS],
+            oracle: Model::new(PAGER_ENTRIES, memory_words),
+            backing: vec![Word::ZERO; memory_words],
             timing,
             stats: Statistics::default(),
             pending: None,
@@ -132,6 +172,7 @@ impl<'a> Harness<'a> {
             commands: Vec::new(),
             ticks: 0,
             store: BackingStore::default(),
+            device: device::Device::default(),
             store_requests: Vec::new(),
             store_timing: timing,
             pending_store: None,
@@ -142,6 +183,7 @@ impl<'a> Harness<'a> {
             recovery_job: None,
         };
         h.reset()?;
+        h.device.timing = timing;
         Ok(h)
     }
     fn eval(&mut self) {
@@ -159,6 +201,10 @@ impl<'a> Harness<'a> {
         self.rtl.cpu_boot_valid_i = 0;
         self.rtl.cpu_resume_i = 0;
         self.rtl.cpu_irq_i = 0;
+        self.rtl.io_ready_i = 0;
+        self.rtl.io_response_i = 0;
+        self.rtl.io_error_i = 0;
+        self.rtl.io_result_i = 0;
         self.rtl.cpu_command_enable_i = 1;
         self.rtl.cpu_response_enable_i = 1;
         self.rtl.cmd_valid_i = 0;
@@ -183,6 +229,7 @@ impl<'a> Harness<'a> {
         self.oracle.reset();
         self.recovery_job = None;
         self.store = BackingStore::default();
+        self.device = device::Device::default();
         self.store_requests.clear();
         self.pending_store = None;
         self.store_wait = 0;
@@ -239,6 +286,7 @@ impl<'a> Harness<'a> {
             }
         }
         self.tick_store()?;
+        self.tick_device()?;
         self.rtl.eval();
         let edges = Edges {
             command: (if self.rtl.cpu_enable_i != 0 {
@@ -308,6 +356,12 @@ impl<'a> Harness<'a> {
         self.eval();
         self.rtl.clk_i = 0;
         self.eval();
+        // External interrupt changes take effect after the sampled edge. The
+        // instruction oracle and RTL then see the same level at next issue.
+        if let Some(events) = &self.device.events {
+            self.rtl.cpu_irq_i = u8::from(events.status() != 0);
+            self.eval();
+        }
         self.stats.cycles += 1;
         self.stats.commands += edges.command as u64;
         self.stats.services += edges.service as u64;
@@ -632,7 +686,7 @@ impl<'a> Harness<'a> {
     ) -> Result<()> {
         ensure!(
             body.len() < ADDRESS_LIMIT as usize
-                && base as u64 + body.len() as u64 <= MEMORY_WORDS as u64,
+                && base as u64 + body.len() as u64 <= self.backing.len() as u64,
             "object exceeds memory"
         );
         for (i, value) in body.iter().enumerate() {

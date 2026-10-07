@@ -77,10 +77,44 @@ argument transfer, quick methods, primitive fallback, and guest allocation under
 See the [execution contract](smalltalk-execution.md).
 `scripts/check-smalltalk-image.sh` also executes original methods from the pinned Xerox image, including a send to `Behavior>>basicNew`.
 
+### Smalltalk stage 4 acceptance
+
+The stage 4 requirements cover interpreter/runtime execution and device interface definitions.
+The runtime suite and full pinned-image check pass for this checkpoint.
+The latter includes all eight original-method send tests, saved-image startup, complete conversion verification, and primitive inventory generation.
+The [primitive inventory](smalltalk-primitives.md) separates implemented primitives, tested guest fallbacks, and operations assigned to stage 5 image integration.
+The [method representation contract](smalltalk-image.md#physical-bodies-and-indexing) records the typed literal access policy and its image-port consequences.
+
+| Requirement | Evidence |
+| --- | --- |
+| Bytecodes, blocks, returns, and failed sends | `tests/execution.rs` compares guest instruction boundaries. `tests/sends.rs` checks block reuse, escaped homes, non-local return, `cannotReturn:`, `doesNotUnderstand:`, and `mustBeBoolean`. |
+| Primitive execution and failure | `tests/sends.rs` covers integer/Float arithmetic, indexing, streams, allocation, dynamic sends, identity conversion/enumeration, and `become:`. Rejected calls preserve the receiver and arguments. Original LargeInteger and replacement fallbacks execute on RTL. |
+| Method construction and access | Directed tests check immutable headers and 37-bit literals. The original `needsStack:encoder:` allocates, copies, and exchanges a method across paging and collection, preserving code and source bytes. |
+| Scheduling, priorities, and semaphores | Guest tests check priority preemption, FIFO ordering, excess signals, waits, suspension, idle wakeup, repeated input, simultaneous timer/input delivery, and low-space notification. |
+| Image primitive accounting and startup | Offline inventory tests check every declared primitive and its class/selector binding. The saved-image RTL test matches all 499 bytecodes in Xerox's `trace2`, then reaches the first BitBlt call at boundary 2,176. |
+| Device interfaces | [The register contract](devices.md) specifies discovery, events, clocks, input, cursor/display upload, and block request/completion fields. Generic LOGIK tests cover delayed replies, errors, reset, captured branch conditions, and one-time retirement. |
+| Collection, paging, and device delays | Guest fixtures force allocation/refill recovery and apply request, memory, and reply delays. The saved-image startup performs three collections and publishes both display registrations. |
+| Execution stays on the machine | `execute_machine` checks that the host service count does not change after boot. The startup harness checks the same invariant. The Rust oracle observes microinstructions and object transactions; it supplies no guest results or scheduling decisions. |
+
+The guest test files are in `crates/rekursiv-smalltalk/tests/`. Generic transport, directory, exchange, and floating-point tests are in `crates/rekursiv-sim/tests/`.
+NUMERIK's independent numerical checks and synthesis evidence are recorded in [the floating-point contract](numerik-floating-point.md#validation).
+
+Reproduce the runtime and pinned-image checks with:
+
+```sh
+cargo test --locked -p rekursiv-smalltalk
+bash scripts/check-smalltalk-image.sh
+```
+
+The startup observer stops before executing primitive 96. It does not supply a BitBlt result or bypass the guest call.
+Successful storage transfers, actual snapshots, drawing, interactive presentation, and startup beyond that boundary require stage 5 integration.
+The missing-storage test executes the original Alto fallback and checks its error field, unchanged buffer, and untouched semaphore.
+It establishes failure behavior, not a functioning disk implementation.
+
 ## FPGA resource estimate
 
-The following estimate uses the original 256-word control store. The current wrapper has 1024 words.
-These figures are not a current resource estimate. `scripts/synth.sh` now checks the 1024-word LOGIK configuration.
+The following estimate uses the original 256-word control store. The current wrapper has 4096 words.
+These figures are not a current resource estimate. `scripts/synth.sh` now checks the 4096-word LOGIK configuration.
 
 On 2026-10-06, Yosys 0.33 mapped the combined `objekt_tb` wrapper to Xilinx 7-series primitives. The
 configuration had 16 pager entries, 32 words per stack, 256 microinstructions, 256 NAM words, and

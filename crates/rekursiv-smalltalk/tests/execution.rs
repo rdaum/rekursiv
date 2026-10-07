@@ -13,7 +13,7 @@ const ASSOCIATION: u16 = 106;
 
 fn fixture(bytes: &[u8], literals: &[u16], temps: &[u16]) -> source::Image {
     let mut objects = BTreeMap::new();
-    for oop in [12, 16, 22, 34, 52, 54, 56, 60] {
+    for oop in [12, 16, 22, 32, 34, 52, 54, 56, 60] {
         objects.insert(
             oop,
             source::Object {
@@ -132,6 +132,9 @@ fn run_source(source: source::Image, force_collection: bool) -> Result<(Vec<Boun
             &[rekursiv_asm::Word::ZERO; 16],
         )?;
     }
+    h.service(rekursiv_asm::Service::ReserveIdentities(
+        converted.next_identity,
+    ))?;
     h.load_processor(&program)?;
     let boot_services = h.stats.services;
     h.start_processor(assembly.entry.unwrap())?;
@@ -180,7 +183,7 @@ fn run_source(source: source::Image, force_collection: bool) -> Result<(Vec<Boun
             .all(|&v| v == layout::reference(layout::NIL).unwrap()),
         "dead stack slot retains a reference"
     );
-    if matches!(processor.rf[15], 3 | 4 | 6) {
+    if matches!(processor.rf[15], 3 | 4) {
         let slots = body[7..7 + sp]
             .iter()
             .map(|&w| target::source_oop(w))
@@ -311,7 +314,7 @@ fn expected(bytes: &[u8], literals: &[u16], temps: &[u16]) -> (Vec<Boundary>, u3
             152..=159 => {
                 let v = *stack.last().unwrap();
                 if v != 4 && v != 6 {
-                    return (trace, 4, 0);
+                    return (trace, 6, 0);
                 }
                 stack.pop();
                 if v == 4 {
@@ -328,7 +331,7 @@ fn expected(bytes: &[u8], literals: &[u16], temps: &[u16]) -> (Vec<Boundary>, u3
                 pc += 1;
                 let v = *stack.last().unwrap();
                 if v != 4 && v != 6 {
-                    return (trace, 4, 0);
+                    return (trace, 6, 0);
                 }
                 stack.pop();
                 if v == if op < 172 { 6 } else { 4 } {
@@ -484,8 +487,8 @@ fn integer_fast_paths_preserve_arguments_on_type_and_range_failure() -> Result<(
 }
 
 #[test]
-fn unsupported_operations_and_non_boolean_branches_stop_explicitly() -> Result<()> {
-    for opcode in [125, 126, 127, 138, 143] {
+fn unused_bytecodes_stop_and_non_boolean_branches_follow_missing_send_path() -> Result<()> {
+    for opcode in [126, 127, 138, 143] {
         compare(&[opcode], &[], &[])?;
     }
     for bytes in [&[117, 152][..], &[112, 168, 0], &[115, 172, 0]] {

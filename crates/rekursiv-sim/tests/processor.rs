@@ -647,3 +647,661 @@ proptest::proptest! {
         h.run_processor(&image,&mut Processor::default(),1000).unwrap();
     }
 }
+
+#[test]
+fn floating_point_retires_once_and_preserves_exceptions_across_collection() -> Result<()> {
+    let rt = runtime()?;
+    let mut h = Harness::new(
+        &rt,
+        Timing {
+            request_delay: 3,
+            memory_latency: 5,
+            response_stall: 4,
+        },
+        None,
+    )?;
+    let class = Word::reference(1, true)?;
+    h.install(class, class, 0, &[])?;
+    h.install(Word::reference(2, true)?, class, 0, &vec![Word::NIL; 256])?;
+    let assembly = rekursiv_asm::text::assemble(
+        "d=0x3f800000, r=Bus, rb=2, ldrb\n\
+         d=0x40400000, r=Bus, rb=3, ldrb\n\
+         ra=2, rb=3, alu=Float, fp=Divide, ldq, flags\n\
+         alu=FloatStatus, rb=4, ldrb\n\
+         d=CLASS, page=Fetch\n\
+         d=CLASS, page=Allocate, size=4, scan=1\n\
+         alu=FloatStatus, rb=5, ldrb\n\
+         r=Q, alu=Float, fp=ToSigned, round=Up, rb=6, ldrb\n\
+         halt",
+        0,
+        &[("CLASS", class.bits() as i64)],
+    )?;
+    let image = Image::from_assembly(&assembly)?.with_ram_collector(128, 16)?;
+    h.load_processor(&image)?;
+    h.start_processor(0)?;
+    let mut model = Processor::default();
+    let retired = h.run_processor(&image, &mut model, 500_000)?;
+    assert_eq!(retired, 9);
+    assert_eq!(model.q, (1.0f32 / 3.0).to_bits());
+    assert_eq!((model.rf[4], model.rf[5], model.rf[6]), (1, 1, 1));
+    assert_eq!(model.fp_flags, 1);
+    assert_eq!(h.stats.collections, 1);
+    Ok(())
+}
+
+#[test]
+fn floating_point_encoding_rejects_ambiguous_parallel_effects() {
+    for source in [
+        "alu=Float, fp=Divide, page=Fetch, d=0xa000000001",
+        "alu=Float, fp=Add, shift=Left",
+        "alu=Float, fp=Add, cin=One",
+        "alu=Float, estk=Compact, compact=2",
+        "alu=Add, fp=Divide",
+        "round=TowardZero",
+    ] {
+        assert!(
+            rekursiv_asm::text::assemble(source, 0, &[]).is_err(),
+            "{source}"
+        );
+    }
+    let a = rekursiv_asm::text::assemble("alu=Float, fp=ToSigned, round=TowardZero, ldq", 0, &[])
+        .unwrap();
+    let words = a.code[&0].encode().unwrap();
+    assert_eq!((words[2] >> 16) & 15, 13);
+    assert_eq!((words[6] >> 25) & 15, 7);
+    assert_eq!((words[6] >> 29) & 7, 1);
+}
+
+#[test]
+fn floating_point_latches_branch_condition_before_variable_latency_wait() -> Result<()> {
+    let rt = runtime()?;
+    let mut h = Harness::new(&rt, Timing::default(), None)?;
+    let a = rekursiv_asm::text::assemble(
+        "d=2, r=Bus, rb=1, ldrb\n\
+         ra=1, alu=Float, fp=FromUnsigned, rb=1, ldrb\n\
+         ra=1, alu=Float, fp=Sqrt, rb=1, ldrb, flags, seq=ConditionalJump, cc=Interrupt, brch=4\n\
+         halt\n\
+         d=99, r=Bus, rb=2, ldrb\n\
+         halt",
+        0,
+        &[],
+    )?;
+    h.load_processor(&Image::from_assembly(&a)?)?;
+    h.rtl.cpu_irq_i = 1;
+    h.start_processor(0)?;
+    for _ in 0..100 {
+        if h.rtl.cpu_pc_o == 2 {
+            break;
+        }
+        h.tick()?;
+    }
+    assert_eq!(h.rtl.cpu_pc_o, 2);
+    // Allow EXECUTE to accept sqrt, then remove IRQ while its result is pending.
+    h.tick()?;
+    h.tick()?;
+    assert_eq!(h.rtl.cpu_pc_o, 2);
+    h.rtl.cpu_irq_i = 0;
+    for _ in 0..100 {
+        if h.rtl.cpu_halted_o != 0 {
+            break;
+        }
+        h.tick()?;
+    }
+    assert_ne!(h.rtl.cpu_halted_o, 0);
+    assert_eq!(h.rtl.cpu_fault_o, 0);
+    h.rtl.cpu_dbg_addr_i = 2;
+    h.rtl.eval();
+    assert_eq!(h.rtl.cpu_dbg_rf_o, 99);
+    h.rtl.cpu_dbg_addr_i = 1;
+    h.rtl.eval();
+    assert_eq!(h.rtl.cpu_dbg_rf_o, 2.0f32.sqrt().to_bits());
+    Ok(())
+}
+
+#[test]
+fn wide_stack_pack_and_symbol_high_preserve_all_forty_bits() -> Result<()> {
+    let rt = runtime()?;
+    let mut h = Harness::new(&rt, Timing::default(), None)?;
+    // D supplies only the high byte; its other bits must not leak into the
+    // arithmetic low word. Reading SYMBOL high must zero-extend that byte.
+    let assembly = rekursiv_asm::text::assemble(
+        "d=0x89abcdef, r=Bus, ldq\n\
+         d=0x123456781f, r=Q, estk=Wide\n\
+         d=Estk, ldsym\n\
+         d=SymbolHigh, r=Bus, rb=2, ldrb\n\
+         d=Symbol, r=Bus, rb=3, ldrb\n\
+         d=0xff, r=Q, estk=Wide\n\
+         d=Estk, ldsym\n\
+         d=SymbolHigh, r=Bus, rb=4, ldrb\n\
+         halt",
+        0,
+        &[],
+    )?;
+    let image = Image::from_assembly(&assembly)?;
+    h.load_processor(&image)?;
+    h.start_processor(0)?;
+    let mut model = Processor::default();
+    h.run_processor(&image, &mut model, 1000)?;
+    assert_eq!(
+        (model.rf[2], model.rf[3], model.rf[4]),
+        (31, 0x89abcdef, 255)
+    );
+    assert_eq!(model.estkr, 0xff89abcdef);
+    Ok(())
+}
+
+#[test]
+fn device_transactions_retire_once_and_results_survive_collection() -> Result<()> {
+    let rt = runtime()?;
+    let mut h = Harness::new(
+        &rt,
+        Timing {
+            request_delay: 4,
+            memory_latency: 7,
+            response_stall: 3,
+        },
+        None,
+    )?;
+    h.device.registers.insert(0x200, 0x12345678);
+    let class = Word::reference(1, true)?;
+    h.install(class, class, 0, &[])?;
+    h.install(Word::reference(2, true)?, class, 0, &vec![Word::NIL; 256])?;
+    let assembly = rekursiv_asm::text::assemble(
+        "d=0x200, r=Bus, rb=1, ldrb\n\
+         ra=1, io=Read, d=7, r=Bus, rb=2, ldrb\n\
+         d=Device, r=Bus, rb=3, ldrb\n\
+         ra=1, d=0xfedcba98, io=Write\n\
+         ra=1, io=Read\n\
+         d=CLASS, page=Fetch\n\
+         d=CLASS, page=Allocate, size=4, scan=1\n\
+         d=Device, r=Bus, rb=4, ldrb\n\
+         halt",
+        0,
+        &[("CLASS", class.bits() as i64)],
+    )?;
+    let image = Image::from_assembly(&assembly)?.with_ram_collector(128, 16)?;
+    h.load_processor(&image)?;
+    h.start_processor(0)?;
+    let mut model = Processor::default();
+    assert_eq!(h.run_processor(&image, &mut model, 500_000)?, 9);
+    assert_eq!(
+        (model.rf[2], model.rf[3], model.rf[4]),
+        (7, 0x12345678, 0xfedcba98)
+    );
+    assert_eq!(h.device.requests.len(), 3);
+    assert_eq!(h.device.completions.len(), 3);
+    assert_eq!(h.device.registers[&0x200], 0xfedcba98);
+    assert_eq!(h.stats.collections, 1);
+    Ok(())
+}
+
+#[test]
+fn device_errors_and_unaligned_addresses_do_not_retire_local_effects() -> Result<()> {
+    let rt = runtime()?;
+    for (address, fault, requests) in [(0x204, 6, 2), (0x203, 1, 1)] {
+        let mut h = Harness::new(
+            &rt,
+            Timing {
+                request_delay: 3,
+                memory_latency: 5,
+                response_stall: 0,
+            },
+            None,
+        )?;
+        h.device.registers.insert(0x200, 55);
+        let assembly = rekursiv_asm::text::assemble(
+            "d=0x200, r=Bus, rb=1, ldrb\n\
+             ra=1, io=Read\n\
+             d=BAD_ADDRESS, r=Bus, rb=1, ldrb\n\
+             ra=1, d=99, io=Write, r=Bus, rb=2, ldrb, ldq\n\
+             halt",
+            0,
+            &[("BAD_ADDRESS", address)],
+        )?;
+        let image = Image::from_assembly(&assembly)?;
+        h.load_processor(&image)?;
+        h.start_processor(0)?;
+        let mut model = Processor::default();
+        assert!(h.run_processor(&image, &mut model, 1000).is_err());
+        assert_eq!((h.rtl.cpu_fault_o, h.rtl.cpu_pc_o), (fault, 3));
+        assert_eq!(h.rtl.cpu_q_o, 0);
+        assert_eq!(h.rtl.cpu_device_result_o, 55);
+        h.rtl.cpu_dbg_addr_i = 2;
+        h.rtl.eval();
+        assert_eq!(h.rtl.cpu_dbg_rf_o, 0);
+        assert_eq!(h.device.requests.len(), requests);
+        assert_eq!(h.device.registers.len(), 1);
+        assert_eq!(h.device.registers[&0x200], 55);
+    }
+    for source in [
+        "io=Read, page=Fetch",
+        "io=Write, alu=Float",
+        "io=Read, gc=Begin",
+    ] {
+        assert!(rekursiv_asm::text::assemble(source, 0, &[]).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn device_wait_captures_irq_and_reset_cancels_unfinished_writes() -> Result<()> {
+    let rt = runtime()?;
+    let assembly = rekursiv_asm::text::assemble(
+        "d=0x200, r=Bus, rb=1, ldrb\n\
+         ra=1, d=99, io=Write, seq=ConditionalJump, cc=Interrupt, brch=3\n\
+         halt\n\
+         d=77, r=Bus, rb=2, ldrb\n\
+         halt",
+        0,
+        &[],
+    )?;
+    let image = Image::from_assembly(&assembly)?;
+    for reset in [false, true] {
+        let mut h = Harness::new(
+            &rt,
+            Timing {
+                request_delay: 4,
+                memory_latency: 20,
+                response_stall: 0,
+            },
+            None,
+        )?;
+        h.device.registers.insert(0x200, 55);
+        h.load_processor(&image)?;
+        h.rtl.cpu_irq_i = 1;
+        h.start_processor(0)?;
+        for _ in 0..100 {
+            if !h.device.requests.is_empty() {
+                break;
+            }
+            h.tick()?;
+        }
+        assert_eq!(h.device.requests.len(), 1);
+        assert_eq!(h.rtl.cpu_pc_o, 1);
+        assert_eq!(h.device.registers[&0x200], 55);
+        h.rtl.cpu_irq_i = 0;
+        if reset {
+            h.reset()?;
+            h.device.registers.insert(0x200, 55);
+        }
+        for _ in 0..100 {
+            h.tick()?;
+        }
+        assert_ne!(h.rtl.cpu_halted_o, 0);
+        assert_eq!(h.rtl.cpu_fault_o, 0);
+        h.rtl.cpu_dbg_addr_i = 2;
+        h.rtl.eval();
+        assert_eq!(h.rtl.cpu_dbg_rf_o, if reset { 0 } else { 77 });
+        assert_eq!(h.device.registers[&0x200], if reset { 55 } else { 99 });
+        assert_eq!(h.device.completions.len(), if reset { 0 } else { 1 });
+    }
+    Ok(())
+}
+
+#[test]
+fn clock_device_latches_high_words_across_rollover_and_delayed_replies() -> Result<()> {
+    let rt = runtime()?;
+    for address in [0x200, 0x208] {
+        let mut h = Harness::new(&rt, Timing::default(), None)?;
+        let assembly = rekursiv_asm::text::assemble(
+            "d=LOW, r=Bus, rb=1, ldrb\n\
+             ra=1, io=Read\n\
+             d=Device, r=Bus, rb=3, ldrb\n\
+             d=HIGH, r=Bus, rb=1, ldrb\n\
+             ra=1, io=Read\n\
+             d=Device, r=Bus, rb=4, ldrb\n\
+             halt",
+            0,
+            &[("LOW", address), ("HIGH", address + 4)],
+        )?;
+        let image = Image::from_assembly(&assembly)?;
+        h.load_processor(&image)?;
+        h.device.clocks = Some(rekursiv_sim::device::Clocks::new(
+            0x2_ffff_ffff,
+            0x2_ffff_fff0,
+            1,
+        ));
+        h.device.timing = Timing {
+            request_delay: 3,
+            memory_latency: 1500,
+            response_stall: 0,
+        };
+        h.start_processor(0)?;
+        let mut model = Processor::default();
+        h.run_processor(&image, &mut model, 10_000)?;
+        assert_eq!(model.rf[4], 2);
+        assert!(model.rf[3] >= 0xffff_fff0);
+        let clocks = h.device.clocks.as_ref().unwrap();
+        assert_eq!(
+            (if address == 0x200 {
+                clocks.utc_seconds
+            } else {
+                clocks.monotonic_ms
+            }) >> 32,
+            3
+        );
+        assert_eq!(h.device.completions.len(), 2);
+    }
+    Ok(())
+}
+
+#[test]
+fn mutable_explicit_roots_retain_dynamic_objects_and_can_release_them() -> Result<()> {
+    let rt = runtime()?;
+    let class = Word::reference(1, true)?;
+    for clear in [false, true] {
+        let mut h = Harness::new(
+            &rt,
+            Timing {
+                request_delay: 2,
+                memory_latency: 3,
+                response_stall: 2,
+            },
+            None,
+        )?;
+        h.install(class, class, 0, &[])?;
+        h.install(Word::reference(2, true)?, class, 0, &vec![Word::ZERO; 220])?;
+        let source = format!(
+            "d=27, r=Bus, rb=1, ldrb\n\
+             d=CLASS, page=Allocate, size=8, scan=1\n\
+             ra=1, d=Object, ldroot\n\
+             {}\n\
+             d=CLASS, page=Fetch\n\
+             d=CLASS, page=Allocate, size=40, scan=1\n\
+             ra=1, d=Root, ldsym\n\
+             halt",
+            if clear { "ra=1, d=0, ldroot" } else { "nop" },
+        );
+        let assembly = rekursiv_asm::text::assemble(&source, 0, &[("CLASS", class.bits() as i64)])?;
+        let mut image = Image::from_assembly(&assembly)?.with_ram_collector(128, 16)?;
+        image.roots[27] = Word::signed(-7);
+        h.load_processor(&image)?;
+        h.start_processor(0)?;
+        let mut model = Processor::default();
+        h.run_processor(&image, &mut model, 500_000)?;
+        let child = Word::reference(3, true)?;
+        assert_eq!(model.symbol, if clear { 0 } else { child.bits() });
+        assert_eq!(
+            model.roots.unwrap()[27],
+            if clear { Word::ZERO } else { child }
+        );
+        assert_eq!(
+            h.oracle
+                .entries
+                .iter()
+                .flatten()
+                .any(|e| e.reference == child),
+            !clear
+        );
+        assert_eq!(h.stats.collections, 1);
+    }
+    Ok(())
+}
+
+#[test]
+fn explicit_root_index_and_failed_object_command_cannot_change_registration() -> Result<()> {
+    let rt = runtime()?;
+    for index in [27, 32] {
+        let mut h = Harness::new(&rt, Timing::default(), None)?;
+        let source =
+            format!("d={index}, r=Bus, rb=1, ldrb\nra=1, d=0xa00000007b, page=Fetch, ldroot\nhalt");
+        let assembly = rekursiv_asm::text::assemble(&source, 0, &[])?;
+        let mut image = Image::from_assembly(&assembly)?;
+        image.roots[27] = Word::signed(42);
+        h.load_processor(&image)?;
+        h.start_processor(0)?;
+        let mut model = Processor::default();
+        assert!(h.run_processor(&image, &mut model, 1000).is_err());
+        assert_eq!(h.rtl.cpu_fault_o, if index == 27 { 4 } else { 1 });
+        h.rtl.cpu_dbg_addr_i = 27;
+        h.rtl.eval();
+        assert_eq!(h.rtl.cpu_dbg_root_o, Word::signed(42).bits());
+        assert_eq!(h.commands.len(), if index == 27 { 1 } else { 0 });
+    }
+    Ok(())
+}
+
+#[test]
+fn pointer_device_latches_coordinates_during_motion_and_publishes_cursor_atomically() -> Result<()>
+{
+    let rt = runtime()?;
+    for fail_publish in [false, true] {
+        let mut h = Harness::new(&rt, Timing::default(), None)?;
+        let assembly = rekursiv_asm::text::assemble(
+            "d=0x300, r=Bus, rb=1, ldrb
+             ra=1, io=Read
+             d=Device, r=Bus, rb=3, ldrb
+             d=0x304, r=Bus, rb=1, ldrb
+             ra=1, io=Read
+             d=Device, r=Bus, rb=4, ldrb
+             d=0x400, r=Bus, rb=1, ldrb
+             ra=1, d=111, io=Write
+             d=0x404, r=Bus, rb=1, ldrb
+             ra=1, d=222, io=Write
+             d=0x408, r=Bus, rb=1, ldrb
+             seq=Service, brch=1
+             ra=1, d=1, io=Write
+             halt",
+            0,
+            &[],
+        )?;
+        let image = Image::from_assembly(&assembly)?;
+        h.load_processor(&image)?;
+        let mut pointer = rekursiv_sim::device::Pointer::default();
+        pointer.mouse = (-7, 9);
+        pointer.cursor = (10, 20);
+        // The X read starts before this motion and completes afterwards.
+        pointer.schedule.insert(100, (300, 400));
+        h.device.pointer = Some(pointer);
+        h.device.timing = Timing {
+            request_delay: 3,
+            memory_latency: 200,
+            response_stall: 0,
+        };
+        h.start_processor(0)?;
+        let mut model = Processor::default();
+        h.run_processor_observed(&image, &mut model, 10_000, |h, _| {
+            assert_eq!(h.device.pointer.as_ref().unwrap().cursor, (10, 20));
+            Ok(())
+        })?;
+        assert!(model.service);
+        assert_eq!(h.device.completions.len(), 4);
+        h.device.fail_next = fail_publish;
+        h.resume_processor()?;
+        model.service = false;
+        let result = h.run_processor(&image, &mut model, 10_000);
+        if fail_publish {
+            assert!(result.is_err());
+        } else {
+            result?;
+        }
+        let pointer = h.device.pointer.as_ref().unwrap();
+        assert_eq!((model.rf[3] as i32, model.rf[4] as i32), (-7, 9));
+        assert_eq!(pointer.mouse, (300, 400));
+        assert_eq!(
+            pointer.cursor,
+            if fail_publish { (10, 20) } else { (111, 222) }
+        );
+        assert_eq!(h.device.completions.len(), 5);
+    }
+    Ok(())
+}
+
+#[test]
+fn input_fifo_preserves_packet_fields_under_pressure_and_failed_consume() -> Result<()> {
+    use rekursiv_sim::device::{Input, InputKind, InputPacket};
+    let rt = runtime()?;
+    for fail_pop in [false, true] {
+        let mut h = Harness::new(&rt, Timing::default(), None)?;
+        let assembly = rekursiv_asm::text::assemble(
+            "d=0x314, r=Bus, rb=1, ldrb
+             ra=1, io=Read
+             d=Device, r=Bus, rb=3, ldrb
+             d=0x318, r=Bus, rb=1, ldrb
+             ra=1, io=Read
+             d=Device, r=Bus, rb=4, ldrb
+             d=0x31c, r=Bus, rb=1, ldrb
+             ra=1, io=Read
+             d=Device, r=Bus, rb=5, ldrb
+             d=0x320, r=Bus, rb=1, ldrb
+             ra=1, io=Read
+             d=Device, r=Bus, rb=6, ldrb
+             seq=Service, brch=1
+             d=0x324, r=Bus, rb=1, ldrb
+             ra=1, d=1, io=Write
+             d=0x104, r=Bus, rb=1, ldrb
+             ra=1, d=1, io=Write
+             d=0x310, r=Bus, rb=1, ldrb
+             ra=1, io=Read
+             d=Device, r=Bus, rb=7, ldrb
+             halt",
+            0,
+            &[],
+        )?;
+        let image = Image::from_assembly(&assembly)?;
+        h.load_processor(&image)?;
+        let packet = InputPacket {
+            kind: InputKind::Motion,
+            value: -7,
+            extra: 9000,
+            timestamp_ms: 0xfedcba98,
+        };
+        let mut input = Input::new(2);
+        input.schedule.insert(0, vec![packet]);
+        input.schedule.insert(
+            100,
+            vec![InputPacket {
+                value: 100,
+                ..packet
+            }],
+        );
+        input.schedule.insert(
+            200,
+            vec![InputPacket {
+                value: 200,
+                ..packet
+            }],
+        );
+        h.device.input = Some(input);
+        h.device.events = Some(Default::default());
+        h.device.timing = Timing {
+            request_delay: 3,
+            memory_latency: 100,
+            response_stall: 0,
+        };
+        h.start_processor(0)?;
+        let mut model = Processor::default();
+        h.run_processor(&image, &mut model, 10_000)?;
+        assert!(model.service);
+        assert_eq!(&model.rf[3..7], &[1, (-7i32) as u32, 9000, 0xfedcba98]);
+        assert_eq!(h.device.input.as_ref().unwrap().len(), 2);
+        assert_eq!(h.device.input.as_ref().unwrap().overruns, 1);
+        assert_eq!(h.device.events.as_ref().unwrap().counts, [2, 0, 0, 0]);
+        h.device.fail_next = fail_pop;
+        h.resume_processor()?;
+        model.service = false;
+        let result = h.run_processor(&image, &mut model, 10_000);
+        if fail_pop {
+            assert!(result.is_err());
+            assert_eq!(h.rtl.cpu_fault_o, 6);
+        } else {
+            result?;
+            assert_eq!(model.rf[7], 0x80000001);
+        }
+        assert_eq!(
+            h.device.input.as_ref().unwrap().len(),
+            if fail_pop { 2 } else { 1 }
+        );
+        assert_eq!(
+            h.device.events.as_ref().unwrap().counts,
+            [if fail_pop { 2 } else { 1 }, 0, 0, 0]
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn bitmap_device_publishes_complete_frames_atomically_and_rejects_partial_or_failed_publication(
+) -> Result<()> {
+    use rekursiv_sim::device::{Bitmap, BitmapFrame};
+    let rt = runtime()?;
+    for case in 0..3 {
+        let mut h = Harness::new(&rt, Timing::default(), None)?;
+        let assembly = rekursiv_asm::text::assemble(
+            &format!(
+                "d=0x518, r=Bus, rb=1, ldrb
+             ra=1, d=33, io=Write
+             d=0x51c, r=Bus, rb=1, ldrb
+             ra=1, d=1, io=Write
+             d=0x520, r=Bus, rb=1, ldrb
+             ra=1, d=2, io=Write
+             d=0x524, r=Bus, rb=1, ldrb
+             ra=1, d=0, io=Write
+             d=0x52c, r=Bus, rb=1, ldrb
+             ra=1, d=0xfedcba98, io=Write
+             {}
+             seq=Service, brch=1
+             d=0x524, r=Bus, rb=1, ldrb
+             ra=1, d=1, io=Write
+             halt",
+                if case == 2 {
+                    ""
+                } else {
+                    "ra=1, d=0x80000000, io=Write"
+                }
+            ),
+            0,
+            &[],
+        )?;
+        let image = Image::from_assembly(&assembly)?;
+        h.load_processor(&image)?;
+        let old = BitmapFrame {
+            width: 1,
+            height: 1,
+            stride: 1,
+            words: vec![0],
+        };
+        let mut bitmap = Bitmap::new(64, 64);
+        bitmap.visible = Some(old.clone());
+        h.device.display_bitmap = Some(bitmap);
+        h.device.timing = Timing {
+            request_delay: 4,
+            memory_latency: 7,
+            response_stall: 0,
+        };
+        h.start_processor(0)?;
+        let mut model = Processor::default();
+        h.run_processor_observed(&image, &mut model, 10_000, |h, _| {
+            assert_eq!(
+                h.device.display_bitmap.as_ref().unwrap().visible.as_ref(),
+                Some(&old)
+            );
+            Ok(())
+        })?;
+        assert!(model.service);
+        h.device.fail_next = case == 1;
+        h.resume_processor()?;
+        model.service = false;
+        let result = h.run_processor(&image, &mut model, 10_000);
+        let bitmap = h.device.display_bitmap.as_ref().unwrap();
+        if case == 0 {
+            result?;
+            assert_eq!(
+                bitmap.visible,
+                Some(BitmapFrame {
+                    width: 33,
+                    height: 1,
+                    stride: 2,
+                    words: vec![0xfedcba98, 0x80000000]
+                })
+            );
+            assert_eq!(bitmap.publications, 1);
+        } else {
+            assert!(result.is_err());
+            assert_eq!(h.rtl.cpu_fault_o, 6);
+            assert_eq!(bitmap.visible, Some(old));
+            assert_eq!(bitmap.publications, 0);
+        }
+    }
+    Ok(())
+}

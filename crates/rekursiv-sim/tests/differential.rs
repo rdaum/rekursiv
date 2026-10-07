@@ -53,6 +53,59 @@ fn fixture(h: &mut Harness<'_>) -> Result<()> {
     good(h, Command::probe(r(1)));
     Ok(())
 }
+
+#[test]
+fn capacity_reads_follow_allocator_reservations_without_object_selection_or_io() -> Result<()> {
+    let rt = runtime()?;
+    let mut h = Harness::new(
+        &rt,
+        Timing {
+            request_delay: 3,
+            memory_latency: 5,
+            response_stall: 2,
+        },
+        None,
+    )?;
+    assert_eq!(good(&mut h, Command::read(Read::FreeWords)).bits(), 512);
+    assert_eq!(
+        good(&mut h, Command::read(Read::FreeIdentities)).bits(),
+        ID_MASK
+    );
+    assert!(h.oracle.state.selected.is_none());
+    h.install(r(1), r(1), 0, &[Word::ZERO; 4])?;
+    good(&mut h, Command::allocate(r(1), 5, true)?);
+    assert_eq!(good(&mut h, Command::read(Read::FreeWords)).bits(), 503);
+    let before = (h.oracle.body_cursor, h.oracle.next_identity);
+    let failed = h.execute_raw(Command::allocate(r(1), 2, true)?.encode()?, true)?;
+    assert_eq!(failed.status, Status::MemoryError);
+    // A transfer failure retains its reserved identity/body range by contract.
+    assert_eq!(
+        (h.oracle.body_cursor, h.oracle.next_identity),
+        (before.0 + 2, before.1 + 1)
+    );
+    let reserved = (h.oracle.body_cursor, h.oracle.next_identity);
+    assert_eq!(
+        h.execute(Command::allocate(r(1), 502, true)?)?.status,
+        Status::OutOfSpace
+    );
+    assert_eq!((h.oracle.body_cursor, h.oracle.next_identity), reserved);
+    h.service(Service::ReserveIdentities(ID_MASK - 1))?;
+    for remaining in [2, 1, 0] {
+        let state = h.oracle.state.clone();
+        let traffic = (h.transfers.len(), h.store_requests.len());
+        assert_eq!(
+            good(&mut h, Command::read(Read::FreeIdentities)).bits(),
+            remaining
+        );
+        assert_eq!(good(&mut h, Command::read(Read::FreeWords)).bits(), 501);
+        assert_eq!(h.oracle.state, state);
+        assert_eq!((h.transfers.len(), h.store_requests.len()), traffic);
+        if remaining != 0 {
+            good(&mut h, Command::allocate(r(1), 0, true)?);
+        }
+    }
+    Ok(())
+}
 #[test]
 fn all_examples_with_delays_and_backpressure() -> Result<()> {
     let runtime = runtime()?;

@@ -2,7 +2,7 @@
 //! startup. Expected heaps are computed independently and never fed to RTL.
 use eyre::{ensure, Result};
 use rekursiv_asm::{processor::*, Command, Service, Word};
-use rekursiv_model::processor::{Image, Processor};
+use rekursiv_model::processor::{Image, Processor, CODE_WORDS};
 use rekursiv_sim::{runtime, Harness, Timing};
 fn object(c: Command) -> Instruction {
     Instruction {
@@ -27,7 +27,8 @@ fn finish(h: &mut Harness<'_>) -> Result<usize> {
     let services = h.stats.services;
     let mut collections = 0;
     let mut active = false;
-    for cycle in 0..200_000 {
+    // Each collection scans two embedded roots per control-store word.
+    for cycle in 0..200_000 * CODE_WORDS.div_ceil(1024) {
         if h.rtl.cpu_halted_o != 0 {
             ensure!(
                 h.stats.services == services,
@@ -233,7 +234,7 @@ fn every_copy_failure_preserves_source_pager_and_allows_restart() -> Result<()> 
         let services = h.stats.services;
         h.start_processor(0)?;
         let mut injected = false;
-        for _ in 0..40_000 {
+        for _ in 0..40_000 * CODE_WORDS.div_ceil(1024) {
             if h.rtl.cpu_halted_o != 0 {
                 break;
             }

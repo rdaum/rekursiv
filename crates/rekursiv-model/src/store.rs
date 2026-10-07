@@ -12,16 +12,60 @@ pub struct Record {
 pub struct BackingStore {
     pub records: BTreeMap<u64, Record>,
     staging: Option<(Record, usize)>,
+    batch: Option<BTreeMap<u64, Record>>,
 }
 impl BackingStore {
+    /// Number of complete records awaiting batch publication (device diagnostics).
+    pub fn staged_record_count(&self) -> Option<usize> {
+        self.batch.as_ref().map(BTreeMap::len)
+    }
     pub fn discard_staging(&mut self) {
         self.staging = None;
+        self.batch = None;
     }
-    pub fn request(&mut self, req: StoreRequest, fail: bool) -> StoreReply {
+    /// Compute the eventual reply without publication. A device adapter can
+    /// hold this reply under backpressure, then apply request at the completion
+    /// handshake. No complete-image snapshot is needed for each transferred word.
+    pub fn preview(&self, req: StoreRequest, fail: bool) -> StoreReply {
         let mut reply = StoreReply::default();
         let result = (|| {
             if fail {
                 return Err(Status::ServiceError);
+            }
+            // Batch operations provide generic storage publication, not object
+            // transformations. The requester supplies every record and word.
+            match req.op {
+                StoreOp::NextRecord | StoreOp::FindRecord => {
+                    let id = req.reference.bits();
+                    if id > ID_MASK {
+                        return Err(Status::BadValue);
+                    }
+                    let found = if req.op == StoreOp::NextRecord {
+                        self.records
+                            .range((std::ops::Bound::Excluded(id), std::ops::Bound::Unbounded))
+                            .next()
+                            .map(|(_, r)| r)
+                    } else {
+                        self.records.get(&id)
+                    };
+                    reply.reference = Word::NIL;
+                    reply.class = Word::NIL;
+                    if let Some(record) = found {
+                        reply.reference = record.reference;
+                        reply.class = record.class;
+                        reply.size = record.body.len() as u32;
+                        reply.cond = record.cond;
+                    }
+                    return Ok(());
+                }
+                StoreOp::BeginBatch | StoreOp::AbortBatch => return Ok(()),
+                StoreOp::CommitBatch => {
+                    if self.staging.is_some() || self.batch.is_none() {
+                        return Err(Status::ServiceError);
+                    }
+                    return Ok(());
+                }
+                _ => {}
             }
             let id = req.reference.identity()?;
             match req.op {
@@ -47,36 +91,27 @@ impl BackingStore {
                     if !req.class.is_reference() || req.size >= ADDRESS_LIMIT {
                         return Err(Status::ServiceError);
                     }
-                    // A new transaction discards an abandoned unpublished save.
-                    self.staging = Some((
-                        Record {
-                            reference: req.reference,
-                            class: req.class,
-                            cond: req.cond,
-                            body: vec![Word::ZERO; req.size as usize],
-                        },
-                        0,
-                    ));
                 }
                 StoreOp::WriteWord => {
-                    let (record, next) = self.staging.as_mut().ok_or(Status::ServiceError)?;
+                    let (record, next) = self.staging.as_ref().ok_or(Status::ServiceError)?;
                     if record.reference != req.reference
                         || req.offset as usize != *next
                         || *next >= record.body.len()
                     {
                         return Err(Status::ServiceError);
                     }
-                    record.body[*next] = req.data;
-                    *next += 1;
                 }
                 StoreOp::CommitSave => {
                     let (record, next) = self.staging.as_ref().ok_or(Status::ServiceError)?;
                     if record.reference != req.reference || *next != record.body.len() {
                         return Err(Status::ServiceError);
                     }
-                    let (record, _) = self.staging.take().unwrap();
-                    self.records.insert(id, record);
                 }
+                StoreOp::BeginBatch
+                | StoreOp::CommitBatch
+                | StoreOp::AbortBatch
+                | StoreOp::NextRecord
+                | StoreOp::FindRecord => unreachable!(),
             }
             Ok(())
         })();
@@ -85,11 +120,97 @@ impl BackingStore {
         }
         reply
     }
+
+    /// Publish exactly once after a successful completion. preview performs
+    /// every fallible check; the mutations below cannot fail halfway through.
+    pub fn request(&mut self, req: StoreRequest, fail: bool) -> StoreReply {
+        let reply = self.preview(req, fail);
+        if reply.status != Status::Ok {
+            return reply;
+        }
+        match req.op {
+            StoreOp::BeginBatch => {
+                self.discard_staging();
+                self.batch = Some(BTreeMap::new());
+            }
+            StoreOp::AbortBatch => self.discard_staging(),
+            StoreOp::CommitBatch => self.records.append(&mut self.batch.take().unwrap()),
+            StoreOp::BeginSave => {
+                self.staging = Some((
+                    Record {
+                        reference: req.reference,
+                        class: req.class,
+                        cond: req.cond,
+                        body: vec![Word::ZERO; req.size as usize],
+                    },
+                    0,
+                ));
+            }
+            StoreOp::WriteWord => {
+                let (record, next) = self.staging.as_mut().unwrap();
+                record.body[*next] = req.data;
+                *next += 1;
+            }
+            StoreOp::CommitSave => {
+                let (record, _) = self.staging.take().unwrap();
+                let id = record.reference.identity().unwrap();
+                if let Some(batch) = &mut self.batch {
+                    batch.insert(id, record);
+                } else {
+                    self.records.insert(id, record);
+                }
+            }
+            StoreOp::Metadata | StoreOp::ReadWord | StoreOp::NextRecord | StoreOp::FindRecord => {}
+        }
+        reply
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn held_completion_does_not_publish_or_advance_staging() {
+        let reference = Word::reference(7, true).unwrap();
+        let mut store = BackingStore::default();
+        for op in [
+            StoreOp::BeginBatch,
+            StoreOp::BeginSave,
+            StoreOp::WriteWord,
+            StoreOp::CommitSave,
+            StoreOp::CommitBatch,
+        ] {
+            let request = StoreRequest {
+                op,
+                reference,
+                class: reference,
+                size: 1,
+                data: Word::signed(42),
+                ..Default::default()
+            };
+            let before = store.clone();
+            for _ in 0..3 {
+                assert_eq!(store.preview(request, false).status, Status::Ok);
+                assert_eq!(store, before);
+            }
+            assert_eq!(store.preview(request, true).status, Status::ServiceError);
+            assert_eq!(store, before);
+            assert_eq!(store.request(request, false).status, Status::Ok);
+            if op != StoreOp::CommitBatch {
+                assert!(store.records.is_empty());
+            }
+        }
+        assert_eq!(store.records[&7].body, [Word::signed(42)]);
+        let invalid = StoreRequest {
+            op: StoreOp::WriteWord,
+            reference,
+            ..Default::default()
+        };
+        let before = store.clone();
+        assert_eq!(store.preview(invalid, false).status, Status::ServiceError);
+        assert_eq!(store.request(invalid, false).status, Status::ServiceError);
+        assert_eq!(store, before);
+    }
     #[test]
     fn save_publication_is_atomic_and_ordered() {
         let reference = Word::reference(1, true).unwrap();

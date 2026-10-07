@@ -117,7 +117,7 @@ impl Harness<'_> {
         let mut end = 0;
         for e in &entries {
             ensure!(
-                e.base as u64 + e.size as u64 <= MEMORY_WORDS as u64,
+                e.base as u64 + e.size as u64 <= self.backing.len() as u64,
                 "resident body exceeds memory"
             );
             if e.size != 0 {

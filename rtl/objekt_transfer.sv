@@ -28,7 +28,7 @@ module objekt_transfer #(
     output logic mem_write_o, output logic [23:0] mem_addr_o, output logic [39:0] mem_data_o,
     input logic mem_rsp_valid_i, output logic mem_rsp_ready_o,
     input logic [39:0] mem_rsp_data_i, input logic mem_rsp_error_i,
-    output logic store_valid_o, input logic store_ready_i, output logic [2:0] store_op_o,
+    output logic store_valid_o, input logic store_ready_i, output logic [3:0] store_op_o,
     output logic [39:0] store_ref_o, output logic [39:0] store_class_o,
     output logic [23:0] store_size_o, output logic store_cond_o,
     output logic [23:0] store_offset_o, output logic [39:0] store_data_o,
@@ -75,8 +75,8 @@ module objekt_transfer #(
     assign store_valid_o = (phase == META || phase == SAVE || phase == PUT ||
         phase == COMMIT || phase == GET) && !rst_i;
     assign store_rsp_ready_o = store_wait && !rst_i;
-    assign store_op_o = phase == META ? 3'd0 : phase == GET ? 3'd1 :
-        phase == SAVE ? 3'd2 : phase == PUT ? 3'd3 : 3'd4;
+    assign store_op_o = phase == META ? 4'd0 : phase == GET ? 4'd1 :
+        phase == SAVE ? 4'd2 : phase == PUT ? 4'd3 : 4'd4;
     assign store_ref_o = (phase == META || phase == GET) ? incoming.reference : victim.reference;
     assign store_class_o = phase == SAVE ? victim.class_reference : 40'b0;
     assign store_size_o = phase == SAVE ? victim.size : 24'b0;

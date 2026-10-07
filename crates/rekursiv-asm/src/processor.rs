@@ -15,16 +15,20 @@ macro_rules! field {
         }
     };
 }
-field!(Bus { Immediate=0, Estk=1, Cstk=2, Object=3, Register=4, Apc=5, Ap=6, Sp=7, Namarg=8, Upcor=9, Q=10, Symbol=11 });
+field!(Bus { Immediate=0, Estk=1, Cstk=2, Object=3, Register=4, Apc=5, Ap=6, Sp=7, Namarg=8, Upcor=9, Q=10, Symbol=11, SymbolHigh=12, Device=13, Root=14 });
 field!(Seq { Continue=0, Hold=1, Jump=2, ConditionalJump=3, Relative=4, ConditionalRelative=5, Bus=6, ConditionalBus=7, Return=8, ConditionalReturn=9, Dispatch=10, ConditionalDispatch=11, ConditionalMark=12, TwoWay=13, SavedReturn=14, Service=15 });
 field!(Condition { Always=0, Zero=1, Sign=2, Carry=3, Overflow=4, CorrectedSign=5, Symbol=6, Last=7, ControlZero=8, ObjectOk=9, Interrupt=10 });
-field!(Alu { Pass=0, Add=1, Sub=2, SubReverse=3, And=4, Or=5, Xor=6, Not=7, Rotate=8, MultiplySigned=9, MultiplyUnsigned=10, ProductHigh=11, ProductLow=12 });
+field!(Alu { Pass=0, Add=1, Sub=2, SubReverse=3, And=4, Or=5, Xor=6, Not=7, Rotate=8, MultiplySigned=9, MultiplyUnsigned=10, ProductHigh=11, ProductLow=12, Float=13, FloatStatus=14 });
+// Numeric operations are independent of language primitive numbers.
+field!(FloatOp { Add=0, Subtract=1, Multiply=2, Divide=3, Sqrt=4, Compare=5, FromSigned=6, ToSigned=7, FromUnsigned=8, ToUnsigned=9 });
+field!(Rounding { NearestEven=0, TowardZero=1, Down=2, Up=3, NearestAway=4 });
+field!(Device { None=0, Read=1, Write=2 });
 field!(Source { Register=0, Bus=1, Estk=2, Q=3, Branch=4 });
 field!(Carry { Zero=0, One=1, ZeroFlag=2 });
 field!(Shift { None=0, Left=1, Right=2, ArithmeticRight=3 });
 field!(Address { Hold=0, Bus=1, Sp=2, Argument=3 });
 field!(Pointer { Hold=0, Bus=1, Increment=2, Decrement=3 });
-field!(Estk { Hold=0, Read=1, Bus=2, Alu=3, Compact=4 });
+field!(Estk { Hold=0, Read=1, Bus=2, Alu=3, Compact=4, Wide=5 });
 field!(Cstk { Hold=0, Read=1, Bus=2, Upcor=3, Apc=4, Ap=5, Sp=6, Increment=7, Decrement=8 });
 field!(Apc { Hold=0, Bus=1, Increment=2, Step=3 });
 field!(Fetch { Hold=0, Nam=1, Map=2, Both=3 });
@@ -46,6 +50,10 @@ pub struct Instruction {
     pub ra: u8,
     pub rb: u8,
     pub alu: Alu,
+    pub float: FloatOp,
+    pub rounding: Rounding,
+    pub device: Device,
+    pub write_root: bool,
     pub r: Source,
     pub s: Source,
     pub carry: Carry,
@@ -84,6 +92,25 @@ impl Instruction {
     /// Eight little-endian 32-bit lanes, loaded through the halted programming port.
     pub fn encode(self) -> Result<[u32; 8], Status> {
         if self.ra >= 16 || self.rb >= 16 || self.compact_code > 3 {
+            return Err(Status::BadCommand);
+        }
+        if (self.alu != Alu::Float
+            && (self.float != FloatOp::Add || self.rounding != Rounding::NearestEven))
+            || (self.alu == Alu::Float
+                && (self.object.is_some()
+                    || self.recovery != Recovery::None
+                    || self.shift != Shift::None
+                    || self.carry != Carry::Zero
+                    || self.estk == Estk::Compact))
+        {
+            return Err(Status::BadCommand);
+        }
+        if self.device != Device::None
+            && (self.object.is_some() || self.alu == Alu::Float || self.recovery != Recovery::None)
+        {
+            return Err(Status::BadCommand);
+        }
+        if (self.write_root || self.bus == Bus::Root) && self.recovery != Recovery::None {
             return Err(Status::BadCommand);
         }
         let mut words = [0u32; 8];
@@ -139,6 +166,10 @@ impl Instruction {
         put(206, 6, self.compact_code as u64);
         put(212, 4, self.recovery as u64);
         put(216, 1, self.allocation_dynamic as u64);
+        put(217, 4, self.float as u64);
+        put(221, 3, self.rounding as u64);
+        put(224, 2, self.device as u64);
+        put(226, 1, self.write_root as u64);
         Ok(words)
     }
 }

@@ -40,28 +40,34 @@ module logik #(
     output logic [39:0] data_o, output logic check_type_o, output logic [39:0] expected_type_o,
     input logic rsp_valid_i, output logic rsp_ready_o,
     input logic [3:0] rsp_status_i, input logic [39:0] rsp_data_i,
+    output logic io_valid_o, input logic io_ready_i,
+    output logic io_write_o, output logic [31:0] io_address_o, io_data_o,
+    input logic io_response_i, output logic io_response_ready_o,
+    input logic io_error_i, input logic [31:0] io_result_i,
+    output logic [31:0] device_result_o,
     output logic [15:0] pc_o, output logic [15:0] upcor_o, output logic [15:0] mark_o,
     output logic [23:0] sp_o, output logic [23:0] esp_o, output logic [23:0] csp_o,
     output logic [23:0] ap_o, output logic [23:0] apc_o,
     output logic [39:0] estkr_o, output logic [23:0] cstkr_o,
     output logic [39:0] symbol_o, output logic [39:0] object_o,
     output logic [31:0] q_o, output logic [63:0] product_o,
-    output logic [4:0] flags_o, output logic lastcc_o,
+    output logic [4:0] flags_o, output logic [4:0] fp_flags_o, output logic lastcc_o,
     output logic [15:0] ucar_o, output logic [29:0] namarg_o,
     input logic [15:0] dbg_addr_i, output logic [31:0] dbg_rf_o,
     output logic [39:0] dbg_estk_o, output logic [23:0] dbg_cstk_o,
-    output logic dbg_code_valid_o, output logic [39:0] dbg_code_data_o, output logic [39:0] dbg_code_type_o
+    output logic dbg_code_valid_o, output logic [39:0] dbg_code_data_o, output logic [39:0] dbg_code_type_o, output logic [39:0] dbg_root_o
 );
     `include "rekursiv_control.svh"
 
     typedef enum logic [2:0] {
-        HALTED, EXECUTE, WAIT_RESPONSE, SERVICE_BREAK, ISSUE
+        HALTED, EXECUTE, WAIT_RESPONSE, SERVICE_BREAK, ISSUE, NUMERIC_WAIT, DEVICE_WAIT
     } execution_state_t;
     execution_state_t state, next_state;
     microinstruction_t instruction;
     processor_fault_t local_fault;
     logic instruction_valid, boot_fault, target_fault, stack_fault, fetch_fault, compact_fault;
-    logic retire, start, condition_value, issued_condition;
+    logic retire, start, condition_value, issued_condition, fp_start, fp_done;
+    logic io_start, io_done, io_error;
     object_word_t bus_value, symbol, object_result;
     logic [3:0] object_status, service_code;
     logic [31:0] alu_result, register_a;
@@ -77,7 +83,7 @@ module logik #(
     logic [3:0] saved_status;
     logic saved_issued_condition;
     logic [15:0] stack_root_address, store_root_address;
-    logic [39:0] stack_root, code_literal, code_type, extra_root;
+    logic [39:0] stack_root, code_literal, code_type, extra_root, runtime_root;
     localparam integer STACK_ROOT=20, CODE_ROOT=STACK_ROOT+STACK_WORDS;
     localparam integer EXTRA_ROOT=CODE_ROOT+2*CODE_WORDS;
     assign response_valid=gc_active_o ? gc_response_i : rsp_valid_i;
@@ -122,6 +128,8 @@ module logik #(
 
     logik_store #(.CODE_WORDS(CODE_WORDS), .NAM_WORDS(NAM_WORDS)) instruction_store (
         .clk_i(clk_i), .rst_i(rst_i), .retire_i(retire && !gc_active_o),
+        .runtime_root_write_i(instruction.write_root), .runtime_root_address_i(register_a[4:0]), .runtime_root_o(runtime_root),
+        .debug_root_o(dbg_root_o),
         .root_address_i(store_root_address),.root_literal_o(code_literal),.root_type_o(code_type),.root_extra_o(extra_root),
         .boot_write_i(boot_valid_i && boot_ready_o),
         .boot_space_i(boot_space_i), .boot_address_i(boot_addr_i),
@@ -148,7 +156,22 @@ module logik #(
         .debug_evaluation_o(dbg_estk_o), .debug_control_o(dbg_cstk_o)
     );
 
+    assign io_start = state == EXECUTE && next_state == DEVICE_WAIT && !rst_i;
+    logik_io device_channel (
+        .clk_i(clk_i), .rst_i(rst_i), .start_i(io_start),
+        .finish_i(state == DEVICE_WAIT && io_done),
+        .write_i(instruction.device == 2), .address_i(register_a), .data_i(bus_value[31:0]),
+        .done_o(io_done), .error_o(io_error), .result_o(device_result_o),
+        .valid_o(io_valid_o), .ready_i(io_ready_i), .write_o(io_write_o),
+        .address_o(io_address_o), .data_o(io_data_o),
+        .response_i(io_response_i), .response_ready_o(io_response_ready_o),
+        .response_error_i(io_error_i), .response_data_i(io_result_i)
+    );
+
+    assign fp_start=state==EXECUTE && next_state==NUMERIC_WAIT && !rst_i;
     numerik arithmetic (
+        .fp_start_i(fp_start), .fp_done_o(fp_done),
+        .fp_operation_i(instruction.fp_operation), .fp_rounding_i(instruction.fp_rounding),
         .save_i(gc_enter),.restore_i(gc_exit),
         .clk_i(clk_i), .rst_i(rst_i), .retire_i(retire),
         .operation_i(instruction.alu), .ra_i(instruction.ra), .rb_i(instruction.rb),
@@ -158,7 +181,7 @@ module logik #(
         .write_flags_i(instruction.write_flags), .bus_i(bus_value[31:0]),
         .estkr_i(estkr_o[31:0]), .branch_i(instruction.branch),
         .y_o(alu_result), .register_a_o(register_a), .q_o(q_o),
-        .product_o(product_o), .flags_o(flags_o),
+        .product_o(product_o), .flags_o(flags_o), .fp_flags_o(fp_flags_o),
         .debug_register_i(dbg_addr_i[3:0]), .debug_register_o(dbg_rf_o)
     );
 
@@ -169,7 +192,7 @@ module logik #(
         .load_mark_i(instruction.load_mark), .branch_i(instruction.branch),
         .dispatch_i(ucar_o), .control_top_i(cstkr_o), .bus_i(bus_value), .symbol_i(symbol),
         .flags_i(flags_o), .object_ok_i(object_status == 0), .irq_i(irq_i),
-        .use_issued_condition_i(state == ISSUE || state == WAIT_RESPONSE || (!gc_active_o && retried)),
+        .use_issued_condition_i(state == ISSUE || state == WAIT_RESPONSE || state == NUMERIC_WAIT || state == DEVICE_WAIT || (!gc_active_o && retried)),
         .issued_condition_i((!gc_active_o && retried) ? saved_issued_condition : issued_condition), .condition_o(condition_value),
         .target_fault_o(target_fault), .pc_o(pc_o), .upcor_o(upcor_o), .mark_o(mark_o),
         .last_condition_o(lastcc_o)
@@ -192,6 +215,9 @@ module logik #(
             BUS_UPCOR: bus_value = {24'b0, upcor_o};
             BUS_Q: bus_value = {8'b0, q_o};
             BUS_SYMBOL: bus_value = symbol;
+            BUS_SYMBOL_HIGH: bus_value = {32'b0,symbol[39:32]};
+            BUS_DEVICE: bus_value = {8'b0,device_result_o};
+            BUS_ROOT: bus_value = runtime_root;
             default: bus_value = instruction.immediate;
         endcase
     end
@@ -204,11 +230,20 @@ module logik #(
         if (!instruction_valid) local_fault = FAULT_CODE;
         else if (instruction.reserved_high != 0 || instruction.reserved_113 ||
             instruction.reserved_98 || instruction.reserved_94 ||
-            instruction.bus_source > BUS_SYMBOL || instruction.condition > CC_INTERRUPT ||
-            instruction.alu > ALU_PRODUCT_LOW || instruction.r_source > SOURCE_BRANCH ||
+            instruction.bus_source > BUS_ROOT || instruction.condition > CC_INTERRUPT ||
+            instruction.alu > ALU_FLOAT_STATUS || instruction.r_source > SOURCE_BRANCH ||
             instruction.s_source > SOURCE_BRANCH || instruction.carry > CARRY_ZERO_FLAG ||
-            instruction.estk > ESTK_COMPACT || instruction.cstk > CSTK_DECREMENT ||
+            instruction.estk > ESTK_WIDE || instruction.cstk > CSTK_DECREMENT ||
             instruction.compact_code > 3) local_fault = FAULT_ENCODING;
+        else if ((instruction.write_root || instruction.bus_source == BUS_ROOT) &&
+            (gc_active_o || register_a >= 32)) local_fault = FAULT_ENCODING;
+        else if (instruction.device > 2 ||
+            (instruction.device != 0 && (instruction.object_enable || instruction.alu == ALU_FLOAT ||
+                instruction.recovery != 0 || gc_active_o || register_a[1:0] != 0))) local_fault = FAULT_ENCODING;
+        else if(instruction.fp_operation>9 || instruction.fp_rounding>4 ||
+            (instruction.alu!=ALU_FLOAT && (instruction.fp_operation!=0 || instruction.fp_rounding!=0)) ||
+            (instruction.alu==ALU_FLOAT && (instruction.object_enable || instruction.recovery!=0 || gc_active_o ||
+                instruction.shift!=SHIFT_NONE || instruction.carry!=CARRY_ZERO || instruction.estk==ESTK_COMPACT))) local_fault=FAULT_ENCODING;
         else if(instruction.recovery>10 ||
             (instruction.recovery!=0 && !gc_active_o) ||
             (instruction.allocation_dynamic && register_a[31:24]!=0) ||
@@ -232,9 +267,20 @@ module logik #(
                 // HOLD freezes the whole instruction, unconditionally. Relative
                 // zero is different: it retires effects and then revisits itself.
                 else if (instruction.sequence_op != SEQ_HOLD) begin
-                    if (instruction.object_enable || (instruction.recovery!=0 && instruction.recovery!=10)) next_state = ISSUE;
+                    if (instruction.device != 0) next_state = DEVICE_WAIT;
+                    else if (instruction.alu==ALU_FLOAT) next_state=NUMERIC_WAIT;
+                    else if (instruction.object_enable || (instruction.recovery!=0 && instruction.recovery!=10)) next_state = ISSUE;
                     else retire = 1'b1;
                 end
+            end
+            DEVICE_WAIT: if (io_done) begin
+                next_state = io_error ? HALTED : EXECUTE;
+                retire = !io_error;
+            end
+            NUMERIC_WAIT: if(fp_done) begin
+                next_state=EXECUTE;
+                retire=local_fault==FAULT_NONE;
+                if(local_fault!=FAULT_NONE) next_state=HALTED;
             end
             ISSUE: if (gc_active_o ? gc_ready_i : cmd_ready_i) next_state = WAIT_RESPONSE;
             WAIT_RESPONSE: if (response_valid) begin
@@ -278,8 +324,9 @@ module logik #(
             if (start) begin fault_o <= FAULT_NONE; retried<=0; end
             if (state == EXECUTE) begin
                 if (local_fault != FAULT_NONE) fault_o <= local_fault;
-                else if (next_state == ISSUE) issued_condition <= (!gc_active_o && retried) ? saved_issued_condition : condition_value;
+                else if (next_state == ISSUE || next_state == NUMERIC_WAIT || next_state == DEVICE_WAIT) issued_condition <= (!gc_active_o && retried) ? saved_issued_condition : condition_value;
             end
+            if (state == DEVICE_WAIT && io_done && io_error) fault_o <= FAULT_DEVICE;
             if (state == WAIT_RESPONSE && response_valid) begin
                 last_status_o<=response_status;
                 if(response_status!=0 && !gc_enter) fault_o<=FAULT_OBJECT;

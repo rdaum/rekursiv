@@ -26,6 +26,7 @@ impl Harness<'_> {
         for address in 0..STACK_WORDS {
             self.rtl.cpu_dbg_addr_i = address as u16;
             self.rtl.eval();
+            words.push(Word::from_bits(self.rtl.cpu_dbg_root_o)?);
             if address <= self.rtl.cpu_sp_o as usize {
                 words.push(Word::from_bits(self.rtl.cpu_dbg_estk_o)?);
             }
@@ -64,7 +65,7 @@ impl Harness<'_> {
         self.rtl.svc_valid_i = 0;
         self.rtl.cpu_gc_enable_i = image.collector_entry.is_some() as u8;
         if image.collector_entry.is_some() {
-            self.oracle.allocation_limit = crate::MEMORY_WORDS as u32 / 2;
+            self.oracle.allocation_limit = self.backing.len() as u32 / 2;
         }
         self.rtl.cpu_gc_entry_i = image.collector_entry.unwrap_or(0);
         for (address, word) in image.roots.iter().enumerate() {
@@ -143,6 +144,7 @@ impl Harness<'_> {
     }
     pub fn compare_processor(&mut self, p: &Processor) -> Result<()> {
         let a = &self.rtl;
+        ensure!(a.cpu_device_result_o == p.device, "device result mismatch");
         ensure!(
             (a.cpu_pc_o, a.cpu_upcor_o, a.cpu_mark_o, a.cpu_ucar_o)
                 == (p.pc, p.upcor, p.mark, p.ucar),
@@ -183,6 +185,10 @@ impl Harness<'_> {
                 && (a.cpu_service_o != 0) == p.service,
             "processor execution state mismatch"
         );
+        ensure!(
+            a.cpu_fp_flags_o == p.fp_flags,
+            "floating-point exception flags mismatch"
+        );
         if p.service {
             ensure!(
                 a.cpu_service_code_o == p.service_code,
@@ -196,6 +202,12 @@ impl Harness<'_> {
                 self.rtl.cpu_dbg_estk_o == p.estk[j] && self.rtl.cpu_dbg_cstk_o == p.cstk[j],
                 "stack slot {j} mismatch"
             );
+            if let Some(roots) = p.roots {
+                ensure!(
+                    self.rtl.cpu_dbg_root_o == roots[j].bits(),
+                    "explicit root {j} mismatch"
+                );
+            }
             if j < 16 {
                 ensure!(
                     self.rtl.cpu_dbg_rf_o == p.rf[j],
@@ -232,8 +244,9 @@ impl Harness<'_> {
         let mut expected_object = None;
         let mut transaction_start = (0, 0, 0);
         let mut response = None;
+        let mut device_response = None;
         let mut wait = 0u32;
-        let mut from_upper = self.oracle.allocation_limit as usize == crate::MEMORY_WORDS;
+        let mut from_upper = self.oracle.allocation_limit as usize == self.backing.len();
         let mut collection: Option<std::result::Result<rekursiv_model::Model, Status>> = None;
         for cycle in 0..limit {
             if self.rtl.cpu_halted_o != 0 || self.rtl.cpu_service_o != 0 {
@@ -303,7 +316,33 @@ impl Harness<'_> {
                     data: Word::from_bits(self.rtl.rsp_data_o)?,
                 });
             }
+            let device_requests = self.device.requests.len();
+            let device_completions = self.device.completions.len();
             self.tick()?;
+            if self.device.requests.len() != device_requests {
+                let i = image.code[model.pc as usize].expect("device instruction");
+                ensure!(
+                    i.device != rekursiv_asm::processor::Device::None,
+                    "unsolicited device request"
+                );
+                let write = i.device == rekursiv_asm::processor::Device::Write;
+                let expected = crate::device::Request {
+                    address: model.rf[i.ra as usize],
+                    write,
+                    data: if write { model.bus(i) as u32 } else { 0 },
+                };
+                ensure!(
+                    self.device.requests.last() == Some(&expected),
+                    "device request differs from instruction"
+                );
+            }
+            if self.device.completions.len() != device_completions {
+                ensure!(
+                    device_response.is_none(),
+                    "repeated device completion before retirement"
+                );
+                device_response = self.device.completions.last().map(|(_, reply)| *reply);
+            }
             if received {
                 let expected = expected_object
                     .take()
@@ -329,7 +368,7 @@ impl Harness<'_> {
                         .iter()
                         .map(|&w| Word::from_bits(w).unwrap()),
                 );
-                roots.extend(image.roots);
+                roots.extend(model.roots.unwrap_or(image.roots));
                 for i in image.code.iter().flatten() {
                     roots.push(i.data);
                     if let Some(c) = i.object {
@@ -378,6 +417,10 @@ impl Harness<'_> {
                     .map_err(|e| eyre::eyre!("RTL retired instruction with model fault {e}"))?;
                 if let Some(rsp) = response.take() {
                     next.object = rsp.data.bits();
+                }
+                if let Some(reply) = device_response.take() {
+                    ensure!(!reply.error, "processor retired a failed device operation");
+                    next.device = reply.data;
                 }
                 *model = next;
                 self.compare_processor(model)?;
@@ -428,7 +471,11 @@ pub fn allocation_example(h: &mut Harness<'_>) -> Result<String> {
     h.load_processor(&image)?;
     h.start_processor(0)?;
     let mut model = Processor::default();
-    let retired = h.run_processor(&image, &mut model, 100000)?;
+    // Collection examines embedded roots throughout the configured control
+    // store, including unused words. Keep the example budget proportional to
+    // that scan as the language interpreter grows the store.
+    let limit = 100_000 * rekursiv_model::processor::CODE_WORDS.div_ceil(1024);
+    let retired = h.run_processor(&image, &mut model, limit)?;
     ensure!(
         model.rf[0] == 0 && model.estkr == Word::signed(1234).bits() && h.stats.saved_objects >= 5,
         "processor allocation example failed"
@@ -443,7 +490,8 @@ pub fn collection_example(h: &mut Harness<'_>) -> Result<String> {
     h.load_processor(&image)?;
     h.start_processor(entry)?;
     let mut model = Processor::default();
-    h.run_processor(&image, &mut model, 200_000)?;
+    let limit = 200_000 * rekursiv_model::processor::CODE_WORDS.div_ceil(1024);
+    h.run_processor(&image, &mut model, limit)?;
     ensure!(
         model.rf[8] == 0 && h.stats.collections == 5 && h.rtl.dbg_next_identity_o == 8,
         "autonomous collection result"

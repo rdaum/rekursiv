@@ -4,7 +4,7 @@
 use rekursiv_asm::{processor::*, Command, Word};
 
 // Matches the simulation wrapper. Individual RTL modules remain parameterized.
-pub const CODE_WORDS: usize = 1024;
+pub const CODE_WORDS: usize = 4096;
 pub const STACK_WORDS: usize = 32;
 pub const NAM_WORDS: usize = 256;
 
@@ -23,9 +23,12 @@ pub struct Processor {
     pub cstkr: u32,
     pub symbol: u64,
     pub object: u64,
+    pub device: u32,
+    pub roots: Option<[Word; 32]>,
     pub q: u32,
     pub product: u64,
     pub flags: u8,
+    pub fp_flags: u8,
     pub lastcc: bool,
     pub opcode: usize,
     pub namarg: u32,
@@ -52,9 +55,12 @@ impl Default for Processor {
             cstkr: 0,
             symbol: 0,
             object: 0,
+            device: 0,
+            roots: None,
             q: 0,
             product: 0,
             flags: 0,
+            fp_flags: 0,
             lastcc: false,
             opcode: 0,
             namarg: 0,
@@ -168,9 +174,21 @@ impl Processor {
             Bus::Upcor => self.upcor as u64,
             Bus::Q => self.q as u64,
             Bus::Symbol => self.symbol,
+            Bus::SymbolHigh => self.symbol >> 32,
+            Bus::Device => self.device as u64,
+            Bus::Root => self
+                .roots
+                .and_then(|roots| roots.get(self.rf[i.ra as usize] as usize).copied())
+                .unwrap_or(Word::ZERO)
+                .bits(),
         }
     }
     pub fn prepare(&self, image: &Image, irq: bool) -> Result<(Self, Option<Command>), u8> {
+        if self.roots.is_none() {
+            let mut initialized = self.clone();
+            initialized.roots = Some(image.roots);
+            return initialized.prepare(image, irq);
+        }
         let i = image
             .code
             .get(self.pc as usize)
@@ -180,7 +198,12 @@ impl Processor {
         i.encode().map_err(|_| 1u8)?;
         // This method models mutator retirement. Recovery transitions are
         // specified by collect_ram; privileged controls cannot run here.
-        if i.recovery != Recovery::None {
+        if i.recovery != Recovery::None
+            || (i.device != Device::None && self.rf[i.ra as usize] & 3 != 0)
+        {
+            return Err(1);
+        }
+        if (i.write_root || i.bus == Bus::Root) && self.rf[i.ra as usize] >= 32 {
             return Err(1);
         }
         if i.seq == Seq::Hold {
@@ -202,6 +225,10 @@ impl Processor {
             Carry::ZeroFlag => (self.flags & 1) as u64,
         };
         let mut n = self.clone();
+        if i.write_root {
+            n.roots.as_mut().unwrap()[self.rf[i.ra as usize] as usize] =
+                Word::from_bits(d).unwrap();
+        }
         let (f, carry, overflow) = match i.alu {
             Alu::Add | Alu::Sub | Alu::SubReverse => {
                 let (a, b, subtract) = match i.alu {
@@ -223,6 +250,12 @@ impl Processor {
             }
             op => {
                 let value = match op {
+                    Alu::Float => {
+                        let (bits, exceptions) = crate::float::evaluate(i.float, i.rounding, r, s);
+                        n.fp_flags = exceptions;
+                        bits
+                    }
+                    Alu::FloatStatus => self.fp_flags as u32,
                     Alu::Pass => r,
                     Alu::And => r & s,
                     Alu::Or => r | s,
@@ -405,6 +438,7 @@ impl Processor {
                 let data = match op {
                     Estk::Bus => d,
                     Estk::Alu => y as u64,
+                    Estk::Wide => ((d & 255) << 32) | u64::from(y),
                     Estk::Compact => Word::compact(i.compact_code, y).map_err(|_| 1u8)?.bits(),
                     _ => unreachable!(),
                 };

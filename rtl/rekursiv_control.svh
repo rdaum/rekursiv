@@ -26,7 +26,7 @@ typedef enum logic [3:0] {
 typedef enum logic [3:0] {
     BUS_IMMEDIATE = 0, BUS_ESTK = 1, BUS_CSTK = 2, BUS_OBJECT = 3,
     BUS_REGISTER = 4, BUS_APC = 5, BUS_AP = 6, BUS_SP = 7,
-    BUS_NAMARG = 8, BUS_UPCOR = 9, BUS_Q = 10, BUS_SYMBOL = 11
+    BUS_NAMARG = 8, BUS_UPCOR = 9, BUS_Q = 10, BUS_SYMBOL = 11, BUS_SYMBOL_HIGH = 12, BUS_DEVICE = 13, BUS_ROOT = 14
 } bus_source_t;
 
 typedef enum logic [3:0] {
@@ -39,7 +39,7 @@ typedef enum logic [3:0] {
     ALU_PASS = 0, ALU_ADD = 1, ALU_SUB = 2, ALU_SUB_REVERSE = 3,
     ALU_AND = 4, ALU_OR = 5, ALU_XOR = 6, ALU_NOT = 7, ALU_ROTATE = 8,
     ALU_MULTIPLY_SIGNED = 9, ALU_MULTIPLY_UNSIGNED = 10,
-    ALU_PRODUCT_HIGH = 11, ALU_PRODUCT_LOW = 12
+    ALU_PRODUCT_HIGH = 11, ALU_PRODUCT_LOW = 12, ALU_FLOAT = 13, ALU_FLOAT_STATUS = 14
 } alu_op_t;
 
 typedef enum logic [2:0] {
@@ -64,7 +64,7 @@ typedef enum logic [1:0] {
 } address_op_t;
 
 typedef enum logic [2:0] {
-    ESTK_HOLD = 0, ESTK_READ = 1, ESTK_BUS = 2, ESTK_ALU = 3, ESTK_COMPACT = 4
+    ESTK_HOLD = 0, ESTK_READ = 1, ESTK_BUS = 2, ESTK_ALU = 3, ESTK_COMPACT = 4, ESTK_WIDE = 5
 } evaluation_op_t;
 
 typedef enum logic [3:0] {
@@ -78,7 +78,7 @@ typedef enum logic [1:0] {
 
 typedef enum logic [3:0] {
     FAULT_NONE = 0, FAULT_ENCODING = 1, FAULT_CODE = 2,
-    FAULT_STACK = 3, FAULT_OBJECT = 4, FAULT_FETCH = 5
+    FAULT_STACK = 3, FAULT_OBJECT = 4, FAULT_FETCH = 5, FAULT_DEVICE = 6
 } processor_fault_t;
 
 // Flags describe unshifted F. Register/Q/stack destinations receive shifted Y.
@@ -94,7 +94,11 @@ typedef struct packed {
 // Declarations run from most significant bit to least significant bit.
 // Reserved fields must be zero; rejecting them avoids silent image corruption.
 typedef struct packed {
-    logic [38:0] reserved_high;        // 255:217
+    logic [28:0] reserved_high;        // 255:227
+    logic write_root;                 // 226: full-width explicit-root write
+    logic [1:0] device;               // 225:224: none/read/write
+    logic [2:0] fp_rounding;           // 223:221
+    logic [3:0] fp_operation;          // 220:217
     logic allocation_dynamic;         // 216: size from NUMERIK register A
     logic [3:0] recovery;              // 215:212: privileged collector operation
     logic [5:0] compact_code;          // 211:206, project compact representation

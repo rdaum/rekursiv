@@ -104,9 +104,10 @@ The original dictionary hash bits are `oop >> 1`, exactly the imported machine i
 Conversion preserves dictionary slots and selector identities without rehashing.
 Physical relocation cannot change this value. For a new identity, runtime hash lookup must use its
 low 15 bits. This permits collisions without limiting the machine identity space.
-The legacy `asOop` representation interprets those 15 bits as a signed SmallInteger payload.
-Reversible `asOop`/`asObject` behavior for identities beyond the original oop range remains a stage 4
-runtime decision. It must not truncate a machine identity and silently alias another object.
+For stored identities below 32768, `asOop` interprets those 15 bits as a signed SmallInteger payload.
+The image reserves positive integer codes 32768–65535 for immediate SmallInteger identities.
+New stored identities encode as identity plus 32768 in a LargePositiveInteger. `asObject` reverses the mapping and rejects absent stored identities.
+The [runtime identity tests](smalltalk-execution.md#identity-and-process-state) cover all 37 hardware identity bits without truncation.
 
 The output reserves the original 15-bit identity namespace and requires `next_identity = 32768`.
 The halted loader establishes this floor with `Service::ReserveIdentities(32768)` before guest allocation.
@@ -154,6 +155,21 @@ The header and literal prefix retain their guest word interpretation.
 Guest context instruction pointers are one-based byte offsets from the start of the method contents.
 Their numeric values remain unchanged by conversion.
 The initial method IP formula is `2*P + 1`, independent of the target body size.
+
+The prefix reserves guest byte offsets, but it is not a byte serialization of the header and literals.
+Byte access starts at `initialPC` and includes the source trailer. Reads and writes inside the prefix enter primitive fallback.
+This rule applies to all literals, including imported references. It does not expose a partial identity for larger references.
+`objectAt: 1` reads the header. `objectAt:` and `objectAt:put:` access full tagged literals at indices 2 through `P`.
+The header is immutable after `newMethod:header:`. A header write fails even if the proposed value equals the current header.
+Changing frame metadata requires a replacement method, followed by `become:` when the original identity must survive.
+
+The [Version 2 source distribution](https://archive.org/download/smalltalk-80/image.tar.gz) documents header immutability in `CompiledMethod class>>newMethod:header:` and the write bounds in `CompiledMethod>>objectAt:put:`.
+Its `CompiledMethod>>needsStack:encoder:` uses separate literal and byte access when it constructs a larger-frame method.
+An RTL test executes that original method with a 37-bit literal reference, delayed transfers, and collection.
+It checks the replacement header, every literal, every bytecode, the source trailer, and the preserved method identity.
+The unavailable prefix byte view is an explicit port policy, not a claim about the historical machine's raw memory access.
+Guest code that copies or inspects the whole method as a ByteArray needs a typed-access adaptation during image integration.
+The original method-growth test does not establish compatibility for those inherited collection operations.
 
 Class, dictionary, and context field indices remain the Blue Book indices in `layout.rs`.
 The extra physical descriptor never becomes an extra guest instance variable.

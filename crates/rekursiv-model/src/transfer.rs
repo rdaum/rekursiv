@@ -175,7 +175,7 @@ impl Model {
         };
         out
     }
-    fn memory_effect(
+    pub(super) fn memory_effect(
         &mut self,
         effect: MemoryEffect,
         faults: Faults,
@@ -191,7 +191,7 @@ impl Model {
         }
         Ok(self.memory[effect.address as usize])
     }
-    fn store_effect(
+    pub(super) fn store_effect(
         &mut self,
         request: StoreRequest,
         faults: Faults,

@@ -72,6 +72,9 @@ module logik_stacks #(
 
         evaluation_write = bus_i;
         if (evaluation_operation_i == ESTK_ALU) evaluation_write = {8'b0, alu_i};
+        // Wide construction joins an explicit upper byte with the ALU's low
+        // word. It is a raw bit operation; consumers validate tags separately.
+        if (evaluation_operation_i == ESTK_WIDE) evaluation_write = {bus_i[7:0],alu_i};
         // The project has a six-bit compact code. The original book's five-bit
         // FLAGX plus unused bit is source evidence, not our serialized format.
         if (evaluation_operation_i == ESTK_COMPACT)

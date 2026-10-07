@@ -304,6 +304,28 @@ fn xerox_distribution_converts_every_object_and_matches_tape_metadata() {
     assert_eq!(target.primitives.get(&128), Some(&1));
     assert_eq!(target.primitives.get(&135), Some(&1));
     assert_eq!(target.primitives.get(&0), Some(&71));
+    let inventory = rekursiv_smalltalk::audit::inventory(&source).unwrap();
+    assert_eq!(inventory.initial_context, 0x2b28);
+    assert_eq!(inventory.initial_method, 0x6b64);
+    assert_eq!(
+        inventory
+            .primitives
+            .iter()
+            .map(|(&p, methods)| (p, methods.len()))
+            .collect::<BTreeMap<_, _>>(),
+        target.primitives,
+    );
+    assert!(inventory
+        .primitives
+        .values()
+        .flatten()
+        .all(|m| !m.bindings.is_empty()));
+    assert_eq!(inventory.primitives[&1][0].bindings, ["SmallInteger>>+"]);
+    assert_eq!(inventory.primitives[&128][0].arguments, 5);
+    assert_eq!(
+        inventory.primitives[&128][0].bindings,
+        ["AltoFile>>dskprim:address:command:page:semaphore:"]
+    );
     let mut counts = [0; 4];
     for o in source.objects.values() {
         counts[match o.body {

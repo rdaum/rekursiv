@@ -31,8 +31,7 @@ impl Harness<'_> {
         let mut prepared = None;
         if let Some(p) = self.pending_store {
             if p.left == 0 {
-                let mut next = self.store.clone();
-                let reply = next.request(p.request, p.fail);
+                let reply = self.store.preview(p.request, p.fail);
                 self.rtl.store_rsp_valid_i = 1;
                 self.rtl.store_rsp_status_i = reply.status as u8;
                 self.rtl.store_rsp_ref_i = reply.reference.bits();
@@ -40,7 +39,7 @@ impl Harness<'_> {
                 self.rtl.store_rsp_size_i = reply.size;
                 self.rtl.store_rsp_cond_i = reply.cond as u8;
                 self.rtl.store_rsp_data_i = reply.data.bits();
-                prepared = Some(next);
+                prepared = Some(reply);
             }
         }
         self.rtl.eval();
@@ -53,10 +52,18 @@ impl Harness<'_> {
         };
         if complete {
             let pending = self.pending_store.take().unwrap();
-            self.store = prepared.unwrap();
-            if self.rtl.store_rsp_status_i == 0 && pending.request.op == StoreOp::CommitSave {
-                self.stats.saved_objects += 1;
+            if self.rtl.store_rsp_status_i == 0 {
+                self.stats.saved_objects += match pending.request.op {
+                    StoreOp::CommitSave if self.store.staged_record_count().is_none() => 1,
+                    StoreOp::CommitBatch => self.store.staged_record_count().unwrap_or(0) as u64,
+                    _ => 0,
+                };
             }
+            let committed = self.store.request(pending.request, pending.fail);
+            ensure!(
+                Some(committed) == prepared,
+                "store completion changed after preview"
+            );
         } else if let Some(p) = self.pending_store.as_mut() {
             p.left = p.left.saturating_sub(1);
         }

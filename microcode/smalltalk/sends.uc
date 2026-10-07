@@ -13,8 +13,8 @@
 ; r6=new context size, r7=transfer cursor. r8/r9 retain caller IP/SP until saved.
 ; Cache fields r10/r12/r14 can be reused after lookup; load_context restores them.
 ;
-; Failed method lookup stops with status 6; argument mismatch with status 7.
-; doesNotUnderstand:, blocks and non-local returns remain stage 4 operations.
+; Failed lookup constructs a guest Message through messages.uc. Only a missing
+; doesNotUnderstand: handler stops with status 6. Argument mismatch uses status 7.
 
 send_literal:
     ra=13, s=Bus, d=15, alu=And, rb=4, ldrb
@@ -97,6 +97,23 @@ send_prepare:
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=6
+    ; Five special bytecodes attempt their primitive before method lookup.
+    ; Failure returns here with the original receiver and arguments intact.
+    d=special_lookup, r=Bus, rb=15, ldrb
+    ra=13, s=Branch, brch=198, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_identity
+    ra=13, s=Branch, brch=199, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_class
+    ra=13, s=Branch, brch=200, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_block_copy
+    ra=13, s=Branch, brch=201, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_value
+    ra=13, s=Branch, brch=202, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_value
+    seq=Jump, brch=lookup_receiver_class
+special_lookup:
+    d=0, r=Bus, rb=2, ldrb
+lookup_receiver_class:
     ra=2, flags
     seq=ConditionalJump, cc=!Zero, brch=super_class
     read=Vr, vr=6
@@ -177,6 +194,8 @@ method_found:
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=7
+    ra=15, s=Branch, brch=perform_found, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=perform_found
     read=Vr, vr=7
     d=Object, page=Fetch
     d=2, idx=Load
@@ -247,9 +266,129 @@ extended_header:
     ra=2, rb=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=argument_mismatch
     ra=0, s=Bus, d=255, alu=And, rb=0, ldrb
+    d=primitive_method_failed, r=Bus, rb=15, ldrb
+primitive_dispatch:
+    ; Observation boundary: R0 holds the primitive, VR7 its method, and R1
+    ; its argument count. Device models never receive this language metadata.
+    ra=0, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_failed
+    ra=0, s=Branch, brch=19, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Sign, brch=primitive_integer
+    ra=0, s=Branch, brch=40, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Sign, brch=primitive_nonfloat
+    ra=0, s=Branch, brch=55, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Sign, brch=primitive_float
+primitive_nonfloat:
+    ra=0, s=Branch, brch=60, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
+    ra=0, s=Branch, brch=61, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
+    ra=0, s=Branch, brch=62, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
+    ra=0, s=Branch, brch=63, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
+    ra=0, s=Branch, brch=64, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
+    ra=0, s=Branch, brch=65, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_stream
+    ra=0, s=Branch, brch=66, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_stream
+    ra=0, s=Branch, brch=67, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_stream
+    ra=0, s=Branch, brch=68, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
+    ra=0, s=Branch, brch=69, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
+    ra=0, s=Branch, brch=73, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
+    ra=0, s=Branch, brch=74, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
+    ra=0, s=Branch, brch=83, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_perform
+    ra=0, s=Branch, brch=84, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_perform
+    ra=0, s=Branch, brch=85, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_scheduler
+    ra=0, s=Branch, brch=86, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_scheduler
+    ra=0, s=Branch, brch=87, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_scheduler
+    ra=0, s=Branch, brch=88, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_scheduler
+    ra=0, s=Branch, brch=89, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_scheduler
+    ra=0, s=Branch, brch=93, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_input_semaphore
+    ra=0, s=Branch, brch=90, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_mouse_point
+    ra=0, s=Branch, brch=91, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_cursor_position
+    ra=0, s=Branch, brch=92, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_cursor_link
+    ra=0, s=Branch, brch=94, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_sample_interval
+    ra=0, s=Branch, brch=95, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_input_word
+    ra=0, s=Branch, brch=98, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_clock
+    ra=0, s=Branch, brch=99, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_clock
+    ra=0, s=Branch, brch=100, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_timer
+    ra=0, s=Branch, brch=101, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_bitmap
+    ra=0, s=Branch, brch=102, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_bitmap
+    ra=0, s=Branch, brch=110, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_identity
+    ra=0, s=Branch, brch=111, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_class
+    ra=0, s=Branch, brch=112, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_capacity
+    ra=0, s=Branch, brch=115, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_capacity
+    ra=0, s=Branch, brch=135, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_snapshot_target
+    ra=0, s=Branch, brch=116, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_low_space
+    ra=0, s=Branch, brch=113, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_system_stop
+    ra=0, s=Branch, brch=114, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_system_stop
+    ra=0, s=Branch, brch=82, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_value_array
+    ra=0, s=Branch, brch=80, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_block_copy
+    ra=0, s=Branch, brch=81, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_value
+    ra=0, s=Branch, brch=72, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_become
+    ra=0, s=Branch, brch=71, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_new
+    ra=0, s=Branch, brch=75, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_identity_number
+    ra=0, s=Branch, brch=76, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_identity_object
+    ra=0, s=Branch, brch=77, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_instances
+    ra=0, s=Branch, brch=78, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_instances
+    ra=0, s=Branch, brch=79, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_new_method
     ra=0, s=Branch, brch=70, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=primitive_new
     ; Unimplemented or failed primitive methods execute their Smalltalk body.
+    seq=Jump, brch=activate
+primitive_failed:
+    d=Register, ra=15, seq=Bus
+primitive_method_failed:
+    ; Primitive scratch may replace the numeric header cache. The tagged method
+    ; remains in VR7 until the primitive has irrevocably succeeded.
+    read=Vr, vr=7
+    d=Object, page=Fetch
+    d=2, idx=Load
+    mem=Read
+    d=Object, r=Bus, rb=5, ldrb
     seq=Jump, brch=activate
 
 activate:
@@ -333,39 +472,6 @@ copy_argument:
     d=Object, ldvr, vr=0
     d=0, r=Bus, rb=15, ldrb, seq=Jump, brch=load_context
 
-; Pointer-format primitive 70 (new) supplies an ordinary allocated guest object.
-; Other formats, indexable classes, and arguments fail into the method body.
-primitive_new:
-    ra=1, flags
-    seq=ConditionalJump, cc=!Zero, brch=activate
-    read=Vr, vr=6
-    d=Object, page=Fetch
-    d=4, idx=Load
-    mem=Read
-    d=Object, r=Bus, rb=0, ldrb
-    ra=0, s=Bus, d=0x4000, alu=And, flags
-    seq=ConditionalJump, cc=Zero, brch=activate
-    ra=0, s=Bus, d=0x1000, alu=And, flags
-    seq=ConditionalJump, cc=!Zero, brch=activate
-    ra=0, s=Bus, d=2047, alu=And, rb=4, ldrb
-    ra=4, s=Branch, brch=1, alu=Add, rb=6, ldrb
-    read=Vr, vr=6
-    d=Object, page=Allocate, size=ra, ra=6, scan=1
-    d=Object, ldvr, vr=5
-    d=1, idx=Load
-    ra=4, shift=Left, rb=0, ldrb
-    ra=0, shift=Left, rb=0, ldrb
-    ra=0, shift=Left, rb=0, ldrb
-    d=Register, ra=0, mem=Write
-    d=2, r=Bus, rb=7, ldrb
-initialize_object:
-    ra=6, rb=7, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Sign, brch=send_result
-    d=Register, ra=7, idx=Load
-    d=NIL, mem=Write
-    ra=7, s=Branch, brch=1, alu=Add, rb=7, ldrb
-    seq=Jump, brch=initialize_object
-
 ; Quick methods and successful allocation replace receiver+arguments by a result
 ; without an activation. In particular, no dummy MethodContext is allocated.
 send_result:
@@ -387,8 +493,17 @@ clear_send_operands:
     seq=Jump, brch=load_context
 
 return_sender:
-    ; Object response still contains the sender; result is rooted in VR5.
+    ; Result and destination must both survive a destination refill.
     d=Object, ldvr, vr=7
+    read=Vr, vr=7
+    d=Object, page=Fetch
+    d=3, idx=Load
+    mem=Read
+    d=NIL, ldsym
+    d=Object, seq=ConditionalJump, cc=Symbol, brch=cannot_return
+    read=Vr, vr=0
+    d=Object, page=Fetch
+    d=2, idx=Load
     d=NIL, mem=Write
     idx=Increment
     d=NIL, mem=Write
@@ -398,7 +513,7 @@ return_sender:
 resume_result:
     read=Vr, vr=5
     d=Object, ldsym, seq=Jump, brch=push
-lookup_failed:
+recursive_not_understood:
     d=6, r=Bus, rb=15, ldrb, seq=Jump, brch=save_context
 argument_mismatch:
     d=7, r=Bus, rb=15, ldrb, seq=Jump, brch=save_context

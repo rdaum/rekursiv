@@ -1,4 +1,4 @@
-// Fixed-capacity system wrapper used by Marlin and generic integration checks.
+// System wrapper used by Marlin and generic integration checks.
 //
 // cpu_enable_i selects the command producer: the host's standalone OBJEKT port
 // or the autonomous LOGIK processor. The response follows the same ownership.
@@ -8,8 +8,11 @@
 // The command/response enable inputs inject backpressure in protocol tests.
 // Tie both high in a system that does not need this test facility. Memory and
 // backing-store channels remain independent and can stall in either mode.
-// Capacities: 16 pager slots, 512 object-memory words, 1024 microinstructions,
+// Capacities: 16 pager slots, 512 object-memory words, 4096 microinstructions,
 // 256 NAM words, 1024 opcode-map entries, and 32 words in each resident stack.
+`ifndef REKURSIV_SIM_MEMORY_WORDS
+`define REKURSIV_SIM_MEMORY_WORDS 512
+`endif
 module objekt_tb(
     input wire clk_i, input wire rst_i, input wire run_i,
     input wire cmd_valid_i, output wire cmd_ready_o,
@@ -29,7 +32,7 @@ module objekt_tb(
     output wire mem_write_o, output wire [23:0] mem_addr_o, output wire [39:0] mem_data_o,
     input wire mem_rsp_valid_i, output wire mem_rsp_ready_o,
     input wire [39:0] mem_rsp_data_i, input wire mem_rsp_error_i,
-    output wire store_valid_o, input wire store_ready_i, output wire [2:0] store_op_o,
+    output wire store_valid_o, input wire store_ready_i, output wire [3:0] store_op_o,
     output wire [39:0] store_ref_o, output wire [39:0] store_class_o,
     output wire [23:0] store_size_o, output wire store_cond_o,
     output wire [23:0] store_offset_o, output wire [39:0] store_data_o,
@@ -38,6 +41,7 @@ module objekt_tb(
     input wire [39:0] store_rsp_ref_i, input wire [39:0] store_rsp_class_i,
     input wire [23:0] store_rsp_size_i, input wire store_rsp_cond_i, input wire [39:0] store_rsp_data_i,
     output wire [37:0] dbg_next_identity_o, output wire [24:0] dbg_body_cursor_o,
+    output wire [24:0] dbg_memory_words_o,
     output wire dbg_maintenance_o, input wire [1:0] dbg_class_code_i,
     output wire dbg_class_valid_o, output wire [39:0] dbg_compact_class_o,
     input wire [2:0] dbg_vr_i, output wire [39:0] dbg_vr_o,
@@ -93,9 +97,16 @@ module objekt_tb(
     output wire [23:0] cpu_cstkr_o,
     output wire [39:0] cpu_symbol_o,
     output wire [39:0] cpu_object_o,
+    output wire io_valid_o, input wire io_ready_i,
+    output wire io_write_o, output wire [31:0] io_address_o, output wire [31:0] io_data_o,
+    input wire io_response_i, output wire io_response_ready_o,
+    input wire io_error_i, input wire [31:0] io_result_i,
+    output wire [31:0] cpu_device_result_o,
+    output wire [39:0] cpu_dbg_root_o,
     output wire [31:0] cpu_q_o,
     output wire [63:0] cpu_product_o,
     output wire [4:0] cpu_flags_o,
+    output wire [4:0] cpu_fp_flags_o,
     output wire  cpu_lastcc_o,
     output wire [15:0] cpu_ucar_o,
     output wire [29:0] cpu_namarg_o,
@@ -109,7 +120,11 @@ module objekt_tb(
 wire gc_valid, gc_ready, gc_response, gc_response_ready, gc_committed;
 wire [3:0] gc_operation, gc_status;
 wire [39:0] gc_data, gc_root, gc_result;
-logik #(.CODE_WORDS(1024)) processor(
+logik #(.CODE_WORDS(4096)) processor(
+    .io_valid_o(io_valid_o), .io_ready_i(io_ready_i), .io_write_o(io_write_o),
+    .io_address_o(io_address_o), .io_data_o(io_data_o), .io_response_i(io_response_i),
+    .io_response_ready_o(io_response_ready_o), .io_error_i(io_error_i), .io_result_i(io_result_i),
+    .device_result_o(cpu_device_result_o), .dbg_root_o(cpu_dbg_root_o),
     .gc_enable_i(cpu_gc_enable_i),.gc_entry_i(cpu_gc_entry_i),.gc_active_o(cpu_gc_active_o),
     .gc_valid_o(gc_valid),.gc_ready_i(gc_ready),.gc_operation_o(gc_operation),.gc_data_o(gc_data),.gc_root_o(gc_root),
     .gc_response_i(gc_response),.gc_response_ready_o(gc_response_ready),.gc_status_i(gc_status),
@@ -164,6 +179,7 @@ logik #(.CODE_WORDS(1024)) processor(
     .q_o(cpu_q_o),
     .product_o(cpu_product_o),
     .flags_o(cpu_flags_o),
+    .fp_flags_o(cpu_fp_flags_o),
     .lastcc_o(cpu_lastcc_o),
     .ucar_o(cpu_ucar_o),
     .namarg_o(cpu_namarg_o),
@@ -173,7 +189,8 @@ logik #(.CODE_WORDS(1024)) processor(
     .dbg_cstk_o(cpu_dbg_cstk_o),
     .dbg_code_valid_o(cpu_dbg_code_valid_o),.dbg_code_data_o(cpu_dbg_code_data_o),.dbg_code_type_o(cpu_dbg_code_type_o)
 );
-objekt #(.PAGER_BITS(4), .MEMORY_WORDS(512)) core(
+assign dbg_memory_words_o = 25'(`REKURSIV_SIM_MEMORY_WORDS);
+objekt #(.PAGER_BITS(4), .MEMORY_WORDS(`REKURSIV_SIM_MEMORY_WORDS)) core(
     .gc_enable_i(cpu_gc_enable_i),.gc_active_i(cpu_gc_active_o),
     .gc_valid_i(gc_valid),.gc_ready_o(gc_ready),.gc_operation_i(gc_operation),.gc_data_i(gc_data),.gc_root_i(gc_root),
     .gc_response_o(gc_response),.gc_response_ready_i(gc_response_ready),.gc_status_o(gc_status),

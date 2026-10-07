@@ -118,13 +118,14 @@ impl fmt::Display for Status {
 }
 impl std::error::Error for Status {}
 codes!(Pager { None = 0, ProbeBus = 1, ProbeVr = 2, ProbeType = 3, ProbeRepresentation = 4,
-    Fetch = 5, Allocate = 6 });
+    Fetch = 5, Allocate = 6, Exchange = 7, NextObject = 8, FindObject = 9 });
 codes!(Index { None = 0, Load = 1, Clear = 2, One = 3, Two = 4, Increment = 5,
     Decrement = 6, Step = 7, Next = 8, FromReg = 9 });
 codes!(Register { None = 0, Load = 1, Increment = 2, Decrement = 3, FromIndex = 4 });
 codes!(Memory { None = 0, Read = 1, Write = 2 });
 codes!(Read { None = 0, Vr = 1, Reference = 2, Size = 3, Type = 4, Base = 5,
-    Representation = 6, Index = 7, IndexReg = 8, Flags = 9 });
+    Representation = 6, Index = 7, IndexReg = 8, Flags = 9,
+    FreeWords = 10, FreeIdentities = 11 });
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Command {
@@ -194,20 +195,32 @@ impl Command {
         }
     }
     pub fn validate(self) -> Result<Self, Status> {
-        if matches!(self.pager, Pager::Fetch | Pager::Allocate)
-            && (self.index != Index::None
-                || self.register != Register::None
-                || self.memory != Memory::None
-                || self.read != Read::None
-                || self.load_vr
-                || self.expected_type.is_some())
+        if matches!(
+            self.pager,
+            Pager::Fetch
+                | Pager::Allocate
+                | Pager::Exchange
+                | Pager::NextObject
+                | Pager::FindObject
+        ) && (self.index != Index::None
+            || self.register != Register::None
+            || self.memory != Memory::None
+            || self.read != Read::None
+            || self.load_vr
+            || self.expected_type.is_some())
         {
             return Err(Status::BadCommand);
+        }
+        if matches!(self.pager, Pager::NextObject | Pager::FindObject)
+            && !self.data.is_reference()
+            && self.data.bits() > ID_MASK
+        {
+            return Err(Status::BadValue);
         }
         if self.alloc_size >= ADDRESS_LIMIT {
             return Err(Status::BadValue);
         }
-        if self.pager == Pager::Allocate && !self.data.is_reference() {
+        if matches!(self.pager, Pager::Allocate | Pager::Exchange) && !self.data.is_reference() {
             return Err(Status::InvalidReference);
         }
         if self.vr > 7
@@ -462,7 +475,7 @@ mod tests {
     }
 }
 
-codes!(StoreOp { Metadata = 0, ReadWord = 1, BeginSave = 2, WriteWord = 3, CommitSave = 4 });
+codes!(StoreOp { Metadata = 0, ReadWord = 1, BeginSave = 2, WriteWord = 3, CommitSave = 4, BeginBatch = 5, CommitBatch = 6, AbortBatch = 7, NextRecord = 8, FindRecord = 9 });
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StoreRequest {
     pub op: StoreOp,
