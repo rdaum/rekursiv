@@ -10,7 +10,6 @@ impl Model {
         };
         let mut begun = false;
         let result = (|| {
-            c.validate()?;
             let keys = [c.data, self.state.vr[c.vr as usize]];
             if keys.iter().any(|k| !k.is_reference()) {
                 return Err(Status::InvalidReference);

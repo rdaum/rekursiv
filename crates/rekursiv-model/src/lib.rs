@@ -50,6 +50,15 @@ pub struct Model {
     pub persistent_roots: Vec<bool>,
     pub maintenance: bool,
 }
+impl Outcome {
+    fn error(status: Status) -> Self {
+        Self {
+            response: Response::error(status),
+            memory: Vec::new(),
+            store: Vec::new(),
+        }
+    }
+}
 impl Model {
     pub fn new(pager_entries: usize, memory_words: usize) -> Self {
         assert!(pager_entries.is_power_of_two() && pager_entries >= 2);
@@ -97,15 +106,23 @@ impl Model {
     fn selected(&self) -> Result<Entry, Status> {
         self.resolve(self.state.selected.ok_or(Status::NoSelection)?.reference)
     }
+    /// Native command boundary: validate once, without constructing wire ports.
+    /// Keep validation before the maintenance check, as in encode-then-execute.
     pub fn execute(&mut self, command: Command, memory_error: bool) -> Outcome {
-        match command.encode() {
-            Ok(p) => self.execute_raw(p, memory_error),
-            Err(e) => Outcome {
-                response: Response::error(e),
-                memory: Vec::new(),
-                store: Vec::new(),
-            },
+        let command = match command.validate() {
+            Ok(command) => command,
+            Err(status) => return Outcome::error(status),
+        };
+        if self.maintenance {
+            return Outcome::error(Status::BadCommand);
         }
+        self.execute_validated(
+            command,
+            Faults {
+                memory_at: memory_error.then_some(0),
+                store_at: None,
+            },
+        )
     }
     pub fn execute_raw(&mut self, ports: Ports, memory_error: bool) -> Outcome {
         self.execute_faults(
@@ -116,24 +133,29 @@ impl Model {
             },
         )
     }
+    /// External wire boundary. Decoding checks numeric fields and validates the
+    /// resulting command. Maintenance rejects requests before inspecting ports.
     pub fn execute_faults(&mut self, ports: Ports, faults: Faults) -> Outcome {
         if self.maintenance {
-            return Outcome {
-                response: Response::error(Status::BadCommand),
-                memory: Vec::new(),
-                store: Vec::new(),
-            };
+            return Outcome::error(Status::BadCommand);
         }
-        if let Ok(c) = ports.decode() {
-            if matches!(c.pager, Pager::NextObject | Pager::FindObject) {
-                return self.execute_directory(c, faults);
+        match ports.decode() {
+            Ok(command) => self.execute_validated(command, faults),
+            Err(status) => Outcome::error(status),
+        }
+    }
+    // Both entry points have checked the command and maintenance lock. Keep
+    // dispatch and all memory/store effects shared; only wire conversion differs.
+    fn execute_validated(&mut self, command: Command, faults: Faults) -> Outcome {
+        match command.pager {
+            Pager::NextObject | Pager::FindObject => {
+                return self.execute_directory(command, faults);
             }
-            if c.pager == Pager::Exchange {
-                return self.execute_exchange(c, faults);
+            Pager::Exchange => return self.execute_exchange(command, faults),
+            Pager::Fetch | Pager::Allocate => {
+                return self.transfer_validated(command, faults);
             }
-            if matches!(c.pager, Pager::Fetch | Pager::Allocate) {
-                return self.execute_transfer(c, faults);
-            }
+            _ => {}
         }
         let memory_error = faults.memory_at == Some(0);
         let mut effect = None;
@@ -141,9 +163,7 @@ impl Model {
         // memory write or replacing state. Cloning the complete disk image on
         // every register read adds no rollback protection and makes original
         // image execution prohibitively expensive.
-        let result = ports
-            .decode()
-            .and_then(|c| self.transition(c, memory_error, &mut effect));
+        let result = self.transition(command, memory_error, &mut effect);
         match result {
             Ok(data) => Outcome {
                 response: Response::ok(data),
@@ -443,6 +463,147 @@ mod tests {
         m.execute(Command::probe(e.reference), false);
         m
     }
+    #[test]
+    fn native_and_wire_commands_match_effects_and_complete_state() {
+        let reference = |id| Word::reference(id, true).unwrap();
+        // Two pager slots force dirty eviction and refill, in addition to the
+        // resident, allocation, exchange, and directory command paths.
+        let mut model = Model::new(2, 64);
+        let mut commands = vec![
+            Command::allocate(reference(100), 3, true).unwrap(),
+            Command::index(1).unwrap(),
+            Command::write_field(Word::ZERO),
+            Command::index(2).unwrap(),
+            Command::write_field(Word::signed(17)),
+            Command {
+                load_vr: true,
+                vr: 7,
+                data: reference(1),
+                ..Command::default()
+            },
+            Command::allocate(reference(100), 3, true).unwrap(),
+            Command::index(1).unwrap(),
+            Command::write_field(Word::ZERO),
+            Command::index(2).unwrap(),
+            Command::write_field(Word::signed(18)),
+            Command::allocate(reference(100), 3, true).unwrap(),
+            Command::fetch(reference(1)),
+            Command {
+                pager: Pager::Exchange,
+                data: reference(2),
+                vr: 7,
+                ..Command::default()
+            },
+            Command {
+                pager: Pager::NextObject,
+                ..Command::default()
+            },
+            Command {
+                pager: Pager::FindObject,
+                data: reference(1),
+                ..Command::default()
+            },
+            Command::fetch(reference(1)),
+            Command::index(2).unwrap(),
+            Command::read_field(),
+        ];
+        for read in [
+            Read::Vr,
+            Read::Reference,
+            Read::Size,
+            Read::Type,
+            Read::Base,
+            Read::Representation,
+            Read::Index,
+            Read::IndexReg,
+            Read::Flags,
+            Read::FreeWords,
+            Read::FreeIdentities,
+        ] {
+            commands.push(Command::read(read));
+        }
+        for command in commands {
+            for memory_error in [true, false] {
+                let mut native = model.clone();
+                let mut wire = model.clone();
+                let actual = native.execute(command, memory_error);
+                let expected = wire.execute_raw(command.encode().unwrap(), memory_error);
+                assert_eq!(actual, expected, "{command:?}, fault={memory_error}");
+                assert_eq!(native, wire, "{command:?}, fault={memory_error}");
+                if !memory_error {
+                    assert_eq!(actual.response.status, Status::Ok, "{command:?}");
+                    model = native;
+                }
+            }
+        }
+        assert!(!model.store.records.is_empty());
+    }
+
+    #[test]
+    fn command_boundaries_preserve_validation_and_maintenance_error_priority() {
+        for command in [
+            Command {
+                vr: 8,
+                ..Command::default()
+            },
+            Command {
+                expected_type: Some(Word::ZERO),
+                ..Command::default()
+            },
+            Command {
+                pager: Pager::Allocate,
+                ..Command::default()
+            },
+            Command {
+                alloc_size: ADDRESS_LIMIT,
+                ..Command::default()
+            },
+        ] {
+            let expected = command.validate().unwrap_err();
+            for maintenance in [false, true] {
+                let mut model = setup();
+                model.maintenance = maintenance;
+                let before = model.clone();
+                assert_eq!(model.execute(command, true), Outcome::error(expected));
+                assert_eq!(model, before);
+                // The public transfer entry point must still validate itself.
+                assert_eq!(
+                    model.execute_transfer(command, Faults::default()),
+                    Outcome::error(expected)
+                );
+                assert_eq!(model, before);
+            }
+        }
+        let mut model = setup();
+        model.maintenance = true;
+        let before = model.clone();
+        let command = Command::read_field();
+        assert_eq!(
+            model.execute(command, false),
+            Outcome::error(Status::BadCommand)
+        );
+        assert_eq!(
+            model.execute_raw(command.encode().unwrap(), false),
+            Outcome::error(Status::BadCommand)
+        );
+        // A malformed data word normally reports BadValue; maintenance wins at
+        // the wire boundary, before any decode or side effect.
+        let ports = Ports {
+            data: 1 << 40,
+            ..Ports::default()
+        };
+        assert_eq!(
+            model.execute_raw(ports, false),
+            Outcome::error(Status::BadCommand)
+        );
+        assert_eq!(model, before);
+        model.maintenance = false;
+        assert_eq!(
+            model.execute_raw(ports, false),
+            Outcome::error(Status::BadValue)
+        );
+    }
+
     #[test]
     fn old_state_and_atomic_failure() {
         let mut m = setup();

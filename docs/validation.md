@@ -403,3 +403,17 @@ Post-startup mutator instructions fall from 47,060,397 to 43,060,337, an 8.5% re
 Across three alternating runs, median post-startup time falls from 4.407 to 4.172 seconds, increasing guest throughput by 5.6%.
 Startup time falls from 5.510 to 5.446 seconds, about 1.2%; most early drawing happens before low-space registration.
 The separate original-image regression still uses the advancing clock and reaches 60 million mutator instructions without a premature low-space notification.
+
+### Direct native object commands
+
+Native OBJEKT execution validates a command without encoding and decoding wire fields.
+The external port path still decodes and validates requests; both paths share dispatch, memory effects, and backing-store operations.
+Tests compare complete state and transaction histories across allocation, dirty eviction, refill, exchange, directory lookup, and memory faults.
+Invalid-command tests also preserve validation and maintenance-lock error priority.
+All 112 enabled model, emulator, and RTL tests pass, plus the four original-image emulator tests. Clippy and formatting checks pass.
+
+Using the revised low-space microcode in both versions, the same three-run benchmark measures 11.08 million microinstructions/s at startup and 11.48 million afterward.
+This improves on 10.26 and 10.49 million respectively: about 8.0% and 9.4% from the direct command path.
+Both versions preserve final PCs, retired counts, collections, object commands, device requests, and framebuffer hashes at each fixed-step checkpoint.
+A final post-startup cycle profile attributes 0.25% to memory copying, with no sampled processor clone or wire encode/decode calls.
+Instruction preparation remains the largest sampled cost; device ticking and backing-record lookup remain measurable costs.

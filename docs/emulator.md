@@ -171,6 +171,8 @@ The Verilator adapter drives their request/reply handshakes. The emulator waits 
 The executor prepares scalar values and indexed writes before it issues an object or device request.
 It commits these writes only after success, preserving all local destinations on failure.
 Each indexed write uses the original operand and address; preparation does not copy the register file, stacks, or roots.
+Native OBJEKT commands are validated directly; they need no wire encoding and decoding.
+External wire requests retain numeric-field validation and share the same command execution and fault handling.
 The GUI uses [winit](https://docs.rs/winit/0.30/winit/) for window events and [softbuffer](https://docs.rs/softbuffer/0.4/softbuffer/) for pixel presentation.
 Presentation needs no GPU renderer. Guest microcode still performs all drawing and supplies the published bitmap.
 It has no access to guest objects through the presentation helpers.

@@ -1,13 +1,19 @@
 use super::*;
 impl Model {
     pub fn execute_transfer(&mut self, command: Command, faults: Faults) -> Outcome {
+        match command.validate() {
+            Ok(command) => self.transfer_validated(command, faults),
+            Err(status) => Outcome::error(status),
+        }
+    }
+    // Caller has validated the command; transfer-specific checks remain below.
+    pub(super) fn transfer_validated(&mut self, c: Command, faults: Faults) -> Outcome {
         let mut out = Outcome {
             response: Response::ok(Word::NIL),
             memory: Vec::new(),
             store: Vec::new(),
         };
         let result = (|| {
-            let c = command.validate()?;
             if c.pager == Pager::Fetch {
                 match self.resolve(c.data) {
                     Ok(e) => {

@@ -8,7 +8,6 @@ impl Model {
             store: vec![],
         };
         let result = (|| {
-            let c = c.validate()?;
             let cursor = c.data.bits() & ID_MASK;
             let next = c.pager == Pager::NextObject;
             let mut found = self
