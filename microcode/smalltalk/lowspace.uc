@@ -149,9 +149,20 @@ low_space_recheck:
     read=Vr, vr=5
     d=Object, page=Fetch
     d=3, idx=Load
-    d=low_space_check_ids, r=Bus, rb=7, ldrb, seq=Jump, brch=low_space_chunks
+    ; Read the three tagged chunks through the old OBJ register: a local
+    ; destination consumes the previous reply while OBJEKT reads the next.
+    ; Memory reads use old IDX, so increment can accompany each read.
+    mem=Read, idx=Increment
+    d=Object, r=Bus, rb=4, ldrb, mem=Read, idx=Increment
+    d=Object, r=Bus, s=Branch, brch=14, alu=Rotate, rb=2, ldrb, mem=Read
+    d=Object, r=Bus, s=Branch, brch=28, alu=Rotate, rb=3, ldrb
+    ra=4, rb=2, alu=Or, ldrb
+    ; Rotating chunk 2 puts its low nibble in bits 28..31; the remaining
+    ; five identity bits wrap to bits 0..4. Keep the halves separate.
+    ra=3, s=Bus, d=0xf0000000, alu=And, ldq
+    r=Q, rb=2, alu=Or, ldrb
 low_space_check_ids:
-    read=FreeIdentities
+    ra=3, s=Branch, brch=31, alu=And, rb=3, ldrb, read=FreeIdentities
     d=Object, ldsym, r=Bus, rb=4, ldrb
     d=SymbolHigh, r=Bus, rb=5, ldrb
     ra=5, rb=3, alu=Sub, cin=One, flags
@@ -161,9 +172,15 @@ low_space_check_ids:
     seq=ConditionalJump, cc=!Carry, brch=low_space_signal
 low_space_check_words:
     d=6, idx=Load
-    d=low_space_words_checked, r=Bus, rb=7, ldrb, seq=Jump, brch=low_space_chunks
+    ; Word thresholds have only 32 bits. Their top chunk has at most four
+    ; bits, so its rotation needs neither a high-half result nor a mask.
+    mem=Read, idx=Increment
+    d=Object, r=Bus, rb=4, ldrb, mem=Read, idx=Increment
+    d=Object, r=Bus, s=Branch, brch=14, alu=Rotate, rb=2, ldrb, mem=Read
+    d=Object, r=Bus, s=Branch, brch=28, alu=Rotate, rb=3, ldrb
+    ra=4, rb=2, alu=Or, ldrb
 low_space_words_checked:
-    read=FreeWords
+    ra=3, rb=2, alu=Or, ldrb, read=FreeWords
     d=Object, r=Bus, rb=4, ldrb
     ra=4, rb=2, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Carry, brch=low_space_collect
@@ -190,22 +207,3 @@ low_space_signal:
     ra=7, d=NIL, ldroot
     d=85, r=Bus, rb=0, ldrb
     d=1, r=Bus, rb=1, ldrb, seq=Jump, brch=scheduler_load
-
-; Rebuild an unsigned value from three positive 14-bit SmallInteger chunks
-; at IDX..IDX+2. R2/R3 receive low32/high bits, R4 is scratch, R7 is return.
-low_space_chunks:
-    mem=Read
-    d=Object, r=Bus, rb=2, ldrb
-    idx=Increment
-    mem=Read
-    d=Object, r=Bus, s=Branch, brch=14, alu=Rotate, rb=4, ldrb
-    ra=2, rb=4, alu=Or, ldq
-    d=Q, r=Bus, rb=2, ldrb
-    idx=Increment
-    mem=Read
-    d=Object, r=Bus, s=Branch, brch=28, alu=Rotate, rb=3, ldrb
-    ra=3, s=Bus, d=0xf0000000, alu=And, rb=4, ldrb
-    ra=2, rb=4, alu=Or, ldq
-    d=Q, r=Bus, rb=2, ldrb
-    ra=3, s=Branch, brch=31, alu=And, rb=3, ldrb
-    d=Register, ra=7, seq=Bus

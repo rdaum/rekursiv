@@ -2302,44 +2302,54 @@ fn positive_bytes(image: &mut source::Image, id: u16, value: u64) {
 
 #[test]
 fn low_space_uses_full_width_thresholds_and_signals_only_after_strict_crossing() -> Result<()> {
-    let remaining = 0x1_0000_0020;
-    for (allocate_after, word_limit) in [(false, 0), (true, 0), (false, 0xffff_ffff)] {
-        let mut code = vec![112, 32, 33, 34, 132, 3, 3, 135];
-        if allocate_after {
-            code.extend([36, 213, 135]);
-        }
-        code.extend([119, 124]);
-        let mut image = scheduler_fixture(&code, &[312, 220, 222, SELECTOR, CLASS, 132], 1, 3);
-        primitive_method(&mut image, 116, 3, &[16, 124]);
-        method(&mut image, 336, 7, 0, &[oop(70), 216], &[116, 124]);
-        dictionary(&mut image, META, 2, 338, 340, &[(132, 336)]);
-        positive_bytes(&mut image, 220, remaining - 1);
-        positive_bytes(&mut image, 222, word_limit);
-        let e = execute_prepared(image, ROOT, true, |image| {
-            image.next_identity = (1 << 37) - remaining
-        })?;
-        assert_eq!((e.status, e.result), (1, i(2)));
-        assert_eq!(e.allocations, 1 + u64::from(allocate_after));
-        let signaled = allocate_after || word_limit != 0;
-        assert_eq!(e.proactive_collections, usize::from(word_limit != 0));
-        assert_eq!(
-            e.records[&r(312).identity()?].body[1..],
-            [r(2), r(2), i(i32::from(signaled))]
-        );
-        assert!(e.collections > 0);
-        assert!(
-            e.device_requests.is_empty(),
-            "low-space decisions must not call an external device"
-        );
-        if signaled {
-            assert_eq!(e.roots[30], r(2));
-        } else {
-            let registration = &e.records[&e.roots[30].identity()?];
-            assert_eq!(registration.class, r(16));
+    for remaining in [0x4001, 0x1000_0001, 0x1_0000_0020, 0x1f_abcd_ef12] {
+        for (allocate_after, word_limit) in [(false, 0), (true, 0), (false, 0xffff_ffff)] {
+            let mut code = vec![112, 32, 33, 34, 132, 3, 3, 135];
+            if allocate_after {
+                code.extend([36, 213, 135]);
+            }
+            code.extend([119, 124]);
+            let mut image = scheduler_fixture(&code, &[312, 220, 222, SELECTOR, CLASS, 132], 1, 3);
+            primitive_method(&mut image, 116, 3, &[16, 124]);
+            method(&mut image, 336, 7, 0, &[oop(70), 216], &[116, 124]);
+            dictionary(&mut image, META, 2, 338, 340, &[(132, 336)]);
+            positive_bytes(&mut image, 220, remaining - 1);
+            positive_bytes(&mut image, 222, word_limit);
+            let e = execute_prepared(image, ROOT, true, |image| {
+                image.next_identity = (1 << 37) - remaining
+            })?;
+            assert_eq!((e.status, e.result), (1, i(2)));
+            assert_eq!(e.allocations, 1 + u64::from(allocate_after));
+            let signaled = allocate_after || word_limit != 0;
+            assert_eq!(e.proactive_collections, usize::from(word_limit != 0));
             assert_eq!(
-                registration.body,
-                vec![Word::raw(56)?, r(312), i(31), i(0), i(16), i(0), i(0), i(0)]
+                e.records[&r(312).identity()?].body[1..],
+                [r(2), r(2), i(i32::from(signaled))]
             );
+            assert!(e.collections > 0);
+            assert!(
+                e.device_requests.is_empty(),
+                "low-space decisions must not call an external device"
+            );
+            if signaled {
+                assert_eq!(e.roots[30], r(2));
+            } else {
+                let registration = &e.records[&e.roots[30].identity()?];
+                assert_eq!(registration.class, r(16));
+                assert_eq!(
+                    registration.body,
+                    vec![
+                        Word::raw(56)?,
+                        r(312),
+                        i(((remaining - 1) & 16383) as i32),
+                        i((((remaining - 1) >> 14) & 16383) as i32),
+                        i(((remaining - 1) >> 28) as i32),
+                        i(0),
+                        i(0),
+                        i(0),
+                    ]
+                );
+            }
         }
     }
     Ok(())

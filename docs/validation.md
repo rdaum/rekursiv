@@ -387,3 +387,19 @@ It measures 50 million startup steps, then 50 million steps after an equal warmu
 Across three runs, median throughput increases from 8.46 to 10.27 million microinstructions/s at startup and from 8.68 to 10.70 million afterward.
 Both intervals preserve their final PCs, retired counts, collections, object commands, device requests, and framebuffer hash.
 These rates describe native execution without external input; they do not predict FPGA or interactive display performance.
+
+### Low-space microcode scheduling
+
+Threshold reconstruction and counter sampling now take 14 control words instead of 34 per full check.
+Parallel operations consume the previous object reply while reading the next chunk; the word threshold also omits unused high bits.
+The registration remains an ordinary Array of tagged SmallInteger chunks. Notification, collection, and scheduler decisions remain in microcode.
+RTL tests cover equality and crossing at chunk boundaries through 37 bits, plus cancellation, rearming, preemption, mutation, and repeated collection.
+All 89 enabled send/primitive tests and four original-image emulator tests pass.
+
+An equal-work comparison uses the same native executor for both microcode versions, pinned to CPU 5 with 16,777,216 memory words.
+It executes 200,000 startup bytecode boundaries, followed by 200,000 more, with no input and a fixed guest clock to isolate execution work.
+Both versions produce identical bytecode-trace and framebuffer hashes, 769 startup BitBlts, and the same collection counts.
+Post-startup mutator instructions fall from 47,060,397 to 43,060,337, an 8.5% reduction.
+Across three alternating runs, median post-startup time falls from 4.407 to 4.172 seconds, increasing guest throughput by 5.6%.
+Startup time falls from 5.510 to 5.446 seconds, about 1.2%; most early drawing happens before low-space registration.
+The separate original-image regression still uses the advancing clock and reaches 60 million mutator instructions without a premature low-space notification.

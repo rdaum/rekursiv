@@ -361,6 +361,8 @@ Primitive 116 accepts a Semaphore with nonnegative identity and word thresholds,
 Identity thresholds support all 37 bits; word thresholds support 32 bits. Invalid arguments preserve the previous registration and enter guest fallback.
 Threshold values are copied into positive SmallInteger chunks in an ordinary rooted Array, so later argument mutation cannot change them.
 At bytecode boundaries, microcode reads each threshold before sampling the corresponding OBJEKT counter, accounting for paging or collection during those reads.
+These reads overlap numeric reconstruction: LOGIK consumes the previous reply while OBJEKT reads the next chunk and advances its index.
+The 32-bit word threshold omits the high-half reconstruction needed for 37-bit identities.
 A word count below its threshold requests one `gc=Collect` pass, then rereads the threshold and available count.
 It signals only if the word count remains below the threshold after collection. Equality does not signal.
 An identity count below its threshold signals directly, because collection does not recycle identities.
