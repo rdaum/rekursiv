@@ -924,6 +924,7 @@ version = "0.1.0"
 dependencies = [
  "eyre",
  "rekursiv-asm",
+ "rekursiv-emulator",
  "rekursiv-model",
  "rekursiv-sim",
  "serde",

@@ -13,3 +13,4 @@ sha2 = "0.10"
 eyre = "0.6"
 rekursiv-model = { path = "../rekursiv-model" }
 rekursiv-sim = { path = "../rekursiv-sim" }
+rekursiv-emulator = { path = "../rekursiv-emulator", default-features = false }

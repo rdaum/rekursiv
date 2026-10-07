@@ -329,6 +329,8 @@ primitive_nonfloat:
     seq=ConditionalJump, cc=Zero, brch=primitive_sample_interval
     ra=0, s=Branch, brch=95, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=primitive_input_word
+    ra=0, s=Branch, brch=96, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_bitblt
     ra=0, s=Branch, brch=98, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=primitive_clock
     ra=0, s=Branch, brch=99, alu=Sub, cin=One, flags

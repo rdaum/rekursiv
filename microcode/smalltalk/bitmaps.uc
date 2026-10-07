@@ -101,6 +101,11 @@ bitmap_validated:
     d=bitmap_stage, r=Bus, rb=7, ldrb, seq=Jump, brch=input_buffer_load
 bitmap_stage:
     ra=12, rb=0, ldrb
+    d=bitmap_registered, r=Bus, rb=15, ldrb
+; Common upload also serves BitBlt refresh. Caller has validated the entire
+; bitmap and device registration. R0=bank, R2/R3=dimensions, VR4=bits,
+; R10/R11=16/32-bit strides, R15=return address. R1 and R8/R9 survive.
+bitmap_upload:
     ra=0, s=Branch, brch=8, alu=Add, rb=7, ldrb
     ra=2, ldq
     ra=7, d=Q, io=Write
@@ -157,6 +162,8 @@ bitmap_write_word:
     seq=ConditionalJump, cc=!Zero, brch=bitmap_row
     ra=0, s=Branch, brch=20, alu=Add, rb=7, ldrb
     ra=7, d=1, io=Write ; atomic visible publication
+    d=Register, ra=15, seq=Bus
+bitmap_registered:
     ; Retain the Form, not a movable body address. Later drawing/refresh paths
     ; can resolve this reference again after eviction, become:, or collection.
     d=29, r=Bus, rb=7, ldrb

@@ -298,7 +298,12 @@ Collector execution uses individual privileged controls. The graph-walking Rust 
 The shared peripheral models preserve the existing RTL handshake tests.
 
 `cargo test --locked -p rekursiv-emulator` also covers failed device writes, recovery failure, framebuffer clipping, keyboard mapping, and microcode-driven input/display changes.
-The ignored native startup test matches all 499 Xerox trace bytecodes and the RTL checkpoint before BitBlt.
+The first ignored native startup test matches all 499 Xerox trace bytecodes and the RTL checkpoint before BitBlt.
+A second runs through 32 successful BitBlts, reaching 9,870 bytecode boundaries, 29 collections, and 33 display publications.
+Directed BitBlt tests compare native and RTL results with a pixel-level oracle for all 16 rules.
+They cover clipping, word alignment, overlapping/shared bitmaps, nil sources, halftones, and invalid operands.
+Both executors also test registered cursor/display refresh and unchanged destinations on failure.
+Small semispaces force collection; RTL memory and device responses include delays.
 `scripts/check-smalltalk-image.sh` includes that test.
 
 A native X11 smoke run also exercised keyboard input, mouse-button input, and cursor movement through the window.

@@ -1488,8 +1488,8 @@ The [image primitive inventory](docs/smalltalk-primitives.md) now accounts for a
 Original LargeInteger arithmetic and String/ByteArray replacement fallbacks now have RTL execution tests.
 CompiledMethod headers are immutable. Literal access preserves full references, while byte access starts at the first bytecode.
 The original method-growth routine runs on RTL with a 37-bit literal, replacing the method through `become:` across collection and paging.
-The original CharacterScanner fallback also measures text on RTL, including character stops and right-edge crossing; its display branch still requires BitBlt.
-Startup beyond the first BitBlt call and full device integration remain stage 5 work.
+The original CharacterScanner fallback also measures text on RTL, including character stops and right-edge crossing; its display branch now uses the machine BitBlt path.
+Stage 5 now executes BitBlt and display refresh; storage and full device integration remain unfinished.
 The saved-context RTL test reaches that call after 2,176 bytecode boundaries and three collections.
 Before that boundary, the original image signals a semaphore and registers its display twice. It does not request storage transfer.
 The generic LOGIK device channel now issues 32-bit reads/writes with delayed retirement and a separate result register.
@@ -1506,7 +1506,8 @@ Primitive 95 returns those words, including boxed unsigned values, and fails wit
 Tests cover ring wraparound, late registration, preemption, physical overrun, and timer delivery while input is backed up.
 Cursor/display registration now validates Forms, packs bitmap rows, publishes complete frames, and retains Form references across collection.
 The native emulator now presents frames and supplies interactive keyboard and mouse input.
-Automatic refresh after drawing and an interactive RTL session remain stage 5 work.
+BitBlt now refreshes registered cursor and display bitmaps through device commands.
+An interactive RTL session remains stage 5 work.
 Snapshot-target registration now copies validated serial bytes and a virtual leader address into a rooted Array.
 Identification and block-storage registers now have complete request/completion contracts.
 Storage page transfer, completion-event integration, and boot capability negotiation remain stage 5 work.
@@ -1523,6 +1524,25 @@ These tests must also pass with collection, paging, and device delays.
 Primitive numbers and class layouts remain runtime definitions, outside the generic RTL decoder.
 
 #### ST-80 stage 5: Interactive image in RTL simulation
+
+Partially implemented. Primitive 96 now executes all 16 Boolean rules, clipping,
+16-bit word alignment, halftone tiling, and overlapping copies in microcode.
+A rooted temporary object captures source pixels before destination writes.
+Drawing refreshes registered cursor/display Forms, including shared bitmap aliases,
+through the generic device channel. No host drawing callback implements the primitive.
+The interpreter still fits below the collector in the 4096-word control store.
+
+Directed native and RTL tests compare pixels, force collection, and exercise delayed transfers.
+An original-image native regression completes 32 BitBlts and checks 33 display publications.
+Longer native runs draw browser, transcript, and workspace windows. This is not yet
+acceptance of a usable desktop, storage, or snapshot save/reload.
+Full-frame validation and publication after each draw remain performance costs.
+Longer native startup runs reach the guest “Space is Low” notifier, even with a larger RAM configuration.
+With 1,048,576 RAM words, the first notification follows 769 successful BitBlts.
+It reports 36,104 available words against a 36,135-word threshold. `FreeWords` counts
+unused allocation space, excluding garbage awaiting collection. Coordinate collection
+with low-space notification before claiming desktop readiness.
+
 
 - Resume the selected image from its saved process and context state.
 - Compare startup execution against available reference traces, accounting for the physical representation conversion.

@@ -22,6 +22,7 @@ pub const INPUT_SOURCE: &str = include_str!("../../../microcode/smalltalk/input.
 pub const STREAMS_SOURCE: &str = include_str!("../../../microcode/smalltalk/streams.uc");
 pub const FLOATS_SOURCE: &str = include_str!("../../../microcode/smalltalk/floats.uc");
 pub const IDENTITIES_SOURCE: &str = include_str!("../../../microcode/smalltalk/identities.uc");
+pub const BITBLT_SOURCE: &str = include_str!("../../../microcode/smalltalk/bitblt.uc");
 pub const COLLECTOR_ENTRY: u16 = 3968;
 
 /// Assemble a root activation whose context and object graph are already
@@ -33,7 +34,7 @@ pub fn assemble(active_context: Word) -> Result<text::Assembly> {
     }
     let assembly = text::assemble(
         &format!(
-            "{SOURCE}\n{SENDS_SOURCE}\n{BLOCKS_SOURCE}\n{MESSAGES_SOURCE}\n{PRIMITIVES_SOURCE}\n{INTEGERS_SOURCE}\n{INDEXED_SOURCE}\n{STORAGE_SOURCE}\n{PERFORM_SOURCE}\n{SCHEDULER_SOURCE}\n{EVENTS_SOURCE}\n{CLOCKS_SOURCE}\n{SYSTEM_SOURCE}\n{LOWSPACE_SOURCE}\n{INPUT_SOURCE}\n{BITMAPS_SOURCE}\n{DISK_SOURCE}\n{STREAMS_SOURCE}\n{FLOATS_SOURCE}\n{IDENTITIES_SOURCE}"
+            "{SOURCE}\n{SENDS_SOURCE}\n{BLOCKS_SOURCE}\n{MESSAGES_SOURCE}\n{PRIMITIVES_SOURCE}\n{INTEGERS_SOURCE}\n{INDEXED_SOURCE}\n{STORAGE_SOURCE}\n{PERFORM_SOURCE}\n{SCHEDULER_SOURCE}\n{EVENTS_SOURCE}\n{CLOCKS_SOURCE}\n{SYSTEM_SOURCE}\n{LOWSPACE_SOURCE}\n{INPUT_SOURCE}\n{BITMAPS_SOURCE}\n{DISK_SOURCE}\n{STREAMS_SOURCE}\n{FLOATS_SOURCE}\n{IDENTITIES_SOURCE}\n{BITBLT_SOURCE}"
         ),
         0,
         &[("ACTIVE_CONTEXT", active_context.bits() as i64)],

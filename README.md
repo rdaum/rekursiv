@@ -71,8 +71,9 @@ The simulation harness supplies external memory and backing storage. The allocat
 collection on the RTL processor.
 
 The Smalltalk microcode executes bytecodes, runtime primitives, and process scheduling. NUMERIK
-supports integer and binary32 arithmetic. The original Smalltalk image reaches display registration.
-BitBlt, disk transfers, snapshot saving, and FPGA board integration remain unfinished.
+supports integer and binary32 arithmetic. BitBlt runs in microcode and refreshes the display
+as the original Smalltalk image draws its desktop.
+Disk transfers, snapshot saving, and FPGA board integration remain unfinished.
 The RTL passes generic synthesis checks. It has not yet been validated on an FPGA board.
 
 ## Build and run

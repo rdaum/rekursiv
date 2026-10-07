@@ -223,10 +223,13 @@ After publication, root 29's private Array retains the Form in component 38 for 
 These references survive eviction and collection. A movable physical body address never becomes a display address.
 Successful registration returns the receiver.
 
-Registration publishes an initial snapshot. Later heap writes do not yet refresh the external frame automatically.
-Stage 5 machine drawing and refresh paths must republish updates; a host heap watcher must not replace those paths.
+Registration publishes an initial snapshot. BitBlt republishes the complete frame after a nonempty draw
+when the destination bitmap matches either registered Form's bits object. Different Forms can share that bitmap.
+The same microcode upload routine packs registration and refresh frames. It retains no physical heap address.
+Arbitrary heap writes become visible on a subsequent BitBlt or registration; the host does not watch the heap.
+Full-frame validation and upload are current performance costs. Dirty-region transfer remains a follow-up.
 The native emulator presents published frames and supplies physical input.
-BitBlt, automatic display refresh, and interactive RTL integration remain stage 5 work.
+Directed RTL tests cover drawing and cursor/display refresh. A complete interactive RTL session remains stage 5 work.
 
 ### Block storage contract
 

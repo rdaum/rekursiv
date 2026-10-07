@@ -40,15 +40,15 @@ Neither check proves that every fallback works.
 | 93 | 1 | Register, replace, or clear the input semaphore; microcode with an explicit GC root and asynchronous delivery |
 | 94 | 1 | Input sampling interval; microcode validates configuration, and the external pointer device samples changed positions |
 | 95 | 1 | Read an input event word; microcode converts raw packets, buffers words, signals per word, and constructs guest integers |
-| 96 | 2 | BitBlt copyBits/copyBitsAgain; machine implementation required in stage 5 |
+| 96 | 2 | BitBlt copyBits/copyBitsAgain; microcode with clipping, halftones, overlap handling, and device refresh |
 | 97 | 1 | Snapshot; machine preparation and device transfer required in stage 5 |
 | 98 | 1 | Seconds clock into a byte object; microcode converts the epoch and packs four little-endian bytes |
 | 99 | 1 | Millisecond clock into a byte object; microcode packs four little-endian bytes |
 | 100 | 1 | Signal a semaphore at a millisecond deadline; microcode validates, expands the deadline, and registers a rooted one-shot recipient |
 | 101 | 1 | Install a cursor bitmap; microcode validates exact device dimensions, packs rows, publishes, and roots the Form |
 | 102 | 1 | Install a display bitmap; microcode validates device limits, packs rows, publishes, and roots the Form |
-| 103 | 1 | Character scanning/drawing accelerator; original guest fallback measures text on RTL; drawing still depends on stage 5 BitBlt |
-| 104 | 1 | BitBlt line-drawing accelerator; fallback depends on working copyBits |
+| 103 | 1 | Character scanning/drawing accelerator; original guest fallback measures text on RTL; native image startup also draws through BitBlt |
+| 104 | 1 | BitBlt line-drawing accelerator; guest fallback uses copyBits; original line-drawing path not yet qualified |
 | 105 | 5 | ByteArray/String range replacement; four original replacement methods exercised through guest fallback |
 | 110–111 | 4 | Identity equality and class lookup; microcode |
 | 112 | 1 | Report currently allocatable 40-bit RAM words; generic OBJEKT counter plus guest integer construction |
@@ -75,7 +75,8 @@ Word capacity excludes collector reserve and unreclaimed ranges. Identity capaci
 Quit leaves machine state available for inspection. Debugger resume restores the caller caches and continues after the completed send.
 Neither operation invokes a host language handler.
 
-Bitmap registration publishes an initial frame. Automatic refresh after drawing or arbitrary heap writes remains stage 5 work.
+Bitmap registration publishes an initial frame. BitBlt republishes matching registered bitmaps after drawing.
+Arbitrary heap writes need a subsequent BitBlt or registration to become visible.
 
 CompiledMethod byte indexing addresses only bytecodes and the source trailer. The header/literal prefix has no byte view.
 The [representation contract](smalltalk-image.md#physical-bodies-and-indexing) defines this port policy and its Version 2 source evidence.
@@ -98,7 +99,7 @@ Those tests keep the original image objects unchanged, force collection, and del
 They establish working paths for selected inputs, not exhaustive arithmetic coverage.
 The original CharacterScanner fallback passes measurement tests for end-of-run, right-edge crossing, character stops, and an empty interval.
 These tests also check destination position, glyph width, source position, and final string index, with collection and delayed transfers.
-The display branch still requires BitBlt. Primitive-failure operand preservation has separate directed tests.
+The display branch now reaches the implemented BitBlt primitive during native startup. Primitive-failure operand preservation has separate directed tests.
 Original Cursor and DisplayScreen registration methods also execute through RTL, with every displayed pixel checked against the original bitmap.
 The original AltoFile snapshot-target method also executes through RTL and retains copied metadata without issuing disk requests.
 The saved-context startup test reaches the first BitBlt call after 2,176 bytecode boundaries and three collections.
@@ -108,7 +109,8 @@ Both registrations publish successfully. The second display measures 640 by 480 
 All 499 bytecodes in the pinned Xerox `trace2` match the beginning of the RTL trace, in order.
 This compares bytecode execution, not the original collector's memory-access sequence or timing.
 The trace reaches primitive 96 at boundary 2,176, before executing that primitive.
-No storage transfer occurs in this prefix. Operations after the first BitBlt remain untraced and require stage 5 execution.
+No storage transfer occurs in this prefix. A separate native regression continues through 32 successful BitBlts, with no BitBlt fallback.
+It reaches 9,870 bytecode boundaries, 29 collections, and 33 display publications; one copy clips to an empty rectangle.
 
 Reproduce the trace with:
 
@@ -124,7 +126,58 @@ An observer stops the test at a stage 5 primitive boundary without supplying a g
 The [device contract](devices.md) records the generic LOGIK transport, implemented peripherals, and specified storage registers.
 Input, clock, timer, and bitmap registration paths are implemented. Snapshot-target registration is implemented; storage transfer primitive 128 remains unfinished.
 The native emulator now supplies interactive presentation, keyboard, and mouse input.
-BitBlt, snapshots, automatic display refresh, and a usable interactive image remain stage 5 work.
+BitBlt and drawing refresh now execute in microcode. Snapshots and complete interactive image qualification remain stage 5 work.
+
+## BitBlt
+
+Primitive 96 lives in `microcode/smalltalk/bitblt.uc`. It takes no arguments and returns its receiver.
+The receiver's first fourteen fields follow the image's BitBlt layout:
+
+```
+destForm sourceForm halftoneForm combinationRule
+destX destY width height sourceX sourceY clipX clipY clipWidth clipHeight
+```
+
+Each Form supplies bits, width, height, and offset. BitBlt uses explicit coordinates; guest methods apply Form offsets.
+Words contain sixteen pixels, most significant bit first. Rows have `ceil(width/16)` words, including padding.
+All non-nil Forms need pointer format, nonnegative SmallInteger dimensions, enough word storage, and raw 16-bit bitmap words.
+Numeric BitBlt fields must be signed 15-bit SmallIntegers. Other numeric representations enter the original guest fallback.
+The complete used storage of each Form is validated before any destination write.
+
+| Rule | Result | Rule | Result |
+| ---: | --- | ---: | --- |
+| 0 | zero | 8 | NOT (source OR destination) |
+| 1 | source AND destination | 9 | NOT (source XOR destination) |
+| 2 | source AND NOT destination | 10 | NOT destination |
+| 3 | source | 11 | source OR NOT destination |
+| 4 | NOT source AND destination | 12 | NOT source |
+| 5 | destination | 13 | NOT source OR destination |
+| 6 | source XOR destination | 14 | NOT (source AND destination) |
+| 7 | source OR destination | 15 | all ones |
+
+A nil source supplies all ones. A non-nil halftone must be 16 by 16 pixels.
+It tiles at absolute destination coordinates and masks the source before applying the Boolean rule.
+Rules outside 0–15 fail the primitive; the image implements its additional paint rule in Smalltalk.
+
+Clipping intersects the requested rectangle, destination bounds, clip rectangle, and any source bounds.
+It advances source and destination together. Empty rectangles succeed without allocation, writes, or publication.
+Masks preserve pixels outside the final rectangle and unused padding bits.
+
+Microcode stages aligned, halftone-masked source words in an opaque object before merging destination words.
+This preserves source pixels for horizontal or vertical overlap, including distinct Forms that share bitmap storage.
+Halftone storage may alias the destination too. The ESTK frame and value registers root temporary references across collection and paging.
+Scratch storage costs one descriptor plus `clipped destination words per row * clipped height` object-memory words.
+This implementation favors simple overlap semantics; directional copying could later reduce scratch allocation.
+
+After a nonempty copy, microcode checks rooted cursor/display registrations for matching bitmap identities.
+Each match uploads a complete frame through the common registration upload routine and publishes it atomically.
+No host callback draws pixels or interprets Forms. Direct bitmap writes need a later BitBlt or registration for presentation.
+Malformed registrations discovered after drawing stop the runtime instead of invoking fallback and repeating a completed drawing operation.
+Full-bitmap validation and full-frame upload on every copy are current performance costs.
+
+Native and RTL tests compare against a pixel-level oracle, with forced collection and delayed RTL transactions.
+The original-image native test also exercises guest text drawing through this primitive.
+Storage transfers, snapshot saving, and complete desktop interaction remain separate work.
 
 ## Hardware boundary
 

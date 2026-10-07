@@ -59,12 +59,11 @@ Fetch the pinned Xerox V2 distribution:
 python3 scripts/fetch-smalltalk-image.py
 ```
 
-Run its saved process up to the current BitBlt boundary:
+Run its saved process and watch it draw the desktop:
 
 ```sh
 cargo run --release --locked -p rekursiv-emulator -- \
-  --smalltalk artifacts/st80/VirtualImage \
-  --stop-at primitive_dispatch --when R0=96
+  --smalltalk artifacts/st80/VirtualImage
 ```
 
 For a reproducible run without a window, use:
@@ -72,16 +71,20 @@ For a reproducible run without a window, use:
 ```sh
 cargo run --release --locked -p rekursiv-emulator --no-default-features -- \
   --headless --smalltalk artifacts/st80/VirtualImage \
-  --stop-at primitive_dispatch --when R0=96 --frame artifacts/startup.ppm
+  --steps 300000000 --frame artifacts/startup.ppm
 ```
 
 The loader verifies and converts the image before execution. It then seeds backing storage and the boot context.
 Runtime bytecode dispatch, method lookup, primitives, process scheduling, and collection execute through microcode.
 The emulator does not supply missing Smalltalk operations through Rust callbacks.
 
-The saved process currently publishes two displays and reaches primitive 96, BitBlt.
-BitBlt, disk transfers, snapshot saving, and later display refresh remain unfinished in the shared runtime.
-This checkpoint is not a usable Smalltalk desktop.
+Primitive 96 now draws and refreshes the display through microcode. Native startup draws the browser, transcript, and workspace.
+Whole-bitmap validation and full-frame uploads make drawing slow. Disk transfers and snapshot saving remain unfinished.
+Longer runs currently reach the guest's “Space is Low” notifier, including with `--memory-words 1048576`.
+A diagnostic run completed 769 BitBlts before the first notification: 36,104 free words against a 36,135-word threshold.
+The counter excludes garbage awaiting collection. Low-space notification and allocation recovery need further integration before claiming a usable desktop.
+The bounded startup regression establishes drawing progress, not complete interaction.
+To stop at the earlier checkpoint before any drawing, add `--stop-at primitive_dispatch --when R0=96`.
 The window presents complete published frames. It does not read a live Form from the heap.
 
 ## Controls and diagnostics
@@ -154,4 +157,6 @@ The allocation and paging tests compare registers and object state with RTL afte
 Other tests cover recovery failure, failed device writes, pixel clipping, keyboard mapping, and microcode-driven input/display changes.
 The original-image regression matches all 499 bytecodes in Xerox's `trace2`.
 It also checks the RTL checkpoint: 2176 bytecode boundaries, three collections, and two display publications before BitBlt.
+A second native test completes 32 BitBlts: 9870 bytecode boundaries, 29 collections, and 33 display publications.
+Directed native and RTL tests independently compare all Boolean rules, clipping, alignment, overlap, and refresh with expected pixels.
 Passing these checks does not replace cycle-level RTL validation.

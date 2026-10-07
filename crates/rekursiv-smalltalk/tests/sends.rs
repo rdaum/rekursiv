@@ -4363,3 +4363,6 @@ fn three_argument_equality_primitive_shell_preserves_all_arguments_for_fallback(
     assert_eq!(fallback.slots, [i(1), i(2), i(3)]);
     Ok(())
 }
+
+#[path = "sends/bitblt.rs"]
+mod bitblt;

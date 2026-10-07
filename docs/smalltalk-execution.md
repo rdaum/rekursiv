@@ -9,7 +9,7 @@ The [microcode reading guide](assembler.md#reading-a-microcode-routine) explains
 
 Sends, blocks, non-local returns, failed sends, and guest process scheduling execute in microcode.
 Identity conversion and instance enumeration also execute in microcode, using generic OBJEKT directory operations.
-Primitive coverage remains incomplete. Storage integration and startup beyond the first BitBlt call remain outstanding.
+Primitive coverage remains incomplete. Storage integration and complete interactive image qualification remain outstanding.
 The default simulation profile has 4096 control words and 512 object-memory words, split into two 256-word semispaces.
 `rekursiv_sim::runtime_with_memory(words)` compiles the same RTL with a larger external RAM capacity and a separate build cache.
 The harness reads the capacity from RTL and sizes its external RAM model accordingly.
@@ -144,6 +144,7 @@ Primitive methods dispatch by their guest primitive number. Failed checks retain
 | 83–84 | Dynamic `perform:` sends with direct arguments or an Array |
 | 85–89 | Semaphore signal/wait, process resume/suspend, and cache flush |
 | 90–95 | Mouse polling, cursor position/link, input registration, timed sampling configuration, and buffered input words |
+| 96 | BitBlt: Boolean rules, clipping, halftones, overlapping copies, and registered bitmap refresh |
 | 98–100 | Clock reads into byte objects; one-shot timer registration, replacement, and cancellation |
 | 101–102 | Cursor/display Form validation, bitmap packing, atomic publication, and rooted registration |
 | 110–111 | Full tagged identity comparison and class lookup |
@@ -155,7 +156,8 @@ Cursor publication updates both coordinates together. The pointer device samples
 Microcode converts raw packets into a rooted word ring and signals the guest input semaphore once per word.
 Primitive 95 returns unsigned words as SmallIntegers or LargePositiveIntegers; empty reads enter guest fallback.
 Bitmap registration publishes a complete initial frame through the [device interface](devices.md#cursor-and-display-bitmaps).
-Automatic refresh and machine BitBlt remain stage 5 work.
+BitBlt updates registered cursor/display bitmaps after drawing, including Forms sharing the same bits object.
+The [BitBlt contract](smalltalk-primitives.md#bitblt) defines validation, clipping, and temporary storage.
 Snapshot-target registration copies four serial bytes and an unsigned 16-bit leader address. It does not write a snapshot.
 `flushCache` succeeds without work because lookup currently has no method cache.
 Integer division distinguishes exact division, floor division, and truncating quotient. Remainder follows floor division.
