@@ -277,6 +277,7 @@ fn instruction(
             "halt" => i.halt = flag()?,
             "ldsym" => i.symbol = flag()?,
             "ldroot" => i.write_root = flag()?,
+            "launch" => i.object_async = flag()?,
             "ldmark" => i.mark = flag()?,
             "ldrb" => i.write_register = flag()?,
             "ldq" => i.load_q = flag()?,
@@ -348,6 +349,14 @@ fn instruction(
             }
             "mem" => {
                 object.memory = enumeration(line, value)?;
+                has_object = true;
+            }
+            "prepare" => {
+                object.prepare = flag()?;
+                has_object = true;
+            }
+            "prepared" => {
+                object.prepared = flag()?;
                 has_object = true;
             }
             "read" => {
@@ -616,6 +625,24 @@ mod tests {
         let bits = p.code[&0].encode().unwrap();
         assert_eq!(bits[6], 1 << 24);
         assert_eq!(p.code[&0].ra, 7);
+    }
+    #[test]
+    fn pipeline_fields_pack_and_reject_conflicting_controls() {
+        let p = assemble("idx=Increment, mem=Read, prepare, prepared, launch", 0, &[]).unwrap();
+        assert_eq!(p.code[&0].encode().unwrap()[7], 0b111 << 3);
+        let c = p.code[&0].object.unwrap();
+        assert_eq!(c.encode().unwrap().decode().unwrap(), c);
+        for source in [
+            "launch",
+            "mem=Read, launch",
+            "prepared",
+            "prepare, page=Fetch",
+            "mem=Read, prepared, launch, halt",
+            "mem=Read, prepared, launch, seq=Service",
+            "mem=Read, prepared, page=Allocate, d=0xa000000001",
+        ] {
+            assert!(assemble(source, 0, &[]).is_err(), "accepted {source}");
+        }
     }
     #[test]
     fn collector_source_assembles_at_distinct_origins() {

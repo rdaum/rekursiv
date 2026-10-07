@@ -72,12 +72,28 @@ pub struct Instruction {
     pub fetch: Fetch,
     /// Uses the processor D bus in place of Command::data.
     pub object: Option<Command>,
+    /// Retire a prepared memory command at acceptance. Independent local words
+    /// may run until the next object/result/device/recovery/stop barrier. That
+    /// barrier publishes the reply or reports the deferred fault before its own
+    /// effects. At most one command may be outstanding.
+    pub object_async: bool,
     pub compact_code: u8,
     pub recovery: Recovery,
     /// Allocation size comes from register A; the D bus still supplies the class.
     pub allocation_dynamic: bool,
 }
 impl Instruction {
+    /// Instructions that must observe a completed asynchronous OBJEKT command.
+    /// Dynamic local validation faults also drain before being reported.
+    pub fn object_barrier(self) -> bool {
+        self.object.is_some()
+            || self.bus == Bus::Object
+            || self.condition == Condition::ObjectOk
+            || self.device != Device::None
+            || self.recovery != Recovery::None
+            || self.halt
+            || self.seq == Seq::Service
+    }
     pub fn literal(data: Word) -> Self {
         Self {
             data,
@@ -93,6 +109,16 @@ impl Instruction {
     /// Check static control-word constraints without packing the wire format.
     /// Executors also use this on fetched instructions, including modified code.
     pub fn validate(self) -> Result<(), Status> {
+        if self.object_async
+            && (self.halt
+                || self.seq == Seq::Service
+                || self.recovery != Recovery::None
+                || !self
+                    .object
+                    .is_some_and(|c| c.prepared && c.memory != crate::Memory::None))
+        {
+            return Err(Status::BadCommand);
+        }
         // A collection request is a standalone instruction. It resumes at the
         // successor only after successful collection, without other effects.
         if self.recovery == Recovery::Collect
@@ -183,6 +209,8 @@ impl Instruction {
             put(141, 40, p.expected_type);
             put(181, 24, p.alloc_size as u64);
             put(205, 1, p.alloc_scan as u64);
+            put(227, 1, p.prepare as u64);
+            put(228, 1, p.prepared as u64);
         }
         put(206, 6, self.compact_code as u64);
         put(212, 4, self.recovery as u64);
@@ -191,6 +219,7 @@ impl Instruction {
         put(221, 3, self.rounding as u64);
         put(224, 2, self.device as u64);
         put(226, 1, self.write_root as u64);
+        put(229, 1, self.object_async as u64);
         Ok(words)
     }
 }

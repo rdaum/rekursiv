@@ -1,9 +1,10 @@
 // OBJEKT resident operations, service access, and transfer publication.
 //
 // The command evaluator computes a candidate state from PRE-COMMAND values.
-// No field forwards into another field: a combined index increment and memory
-// access uses the old index. This contract differs intentionally from LOGIK's
-// explicit SP-to-ESP address forwarding. See docs/interface.md for precedence.
+// Ordinary memory access uses the old index. PREPARE explicitly forwards the
+// new index into an address/check register; PREPARED accesses the old contents
+// of that register while selection and the next address can change independently.
+// See docs/interface.md for precedence and mapping invalidation.
 //
 // Resident operations retire either on acceptance (no external memory) or on
 // successful memory completion. The pending_* registers keep candidate state
@@ -28,6 +29,7 @@ module objekt #(
     input logic cmd_valid_i, output logic cmd_ready_o,
     input logic [3:0] pager_i, input logic [3:0] index_i,
     input logic [2:0] register_i, input logic [1:0] memory_i,
+    input logic prepare_i, prepared_i,
     input logic [3:0] read_i, input logic load_vr_i, input logic [2:0] vr_i,
     input logic [23:0] alloc_size_i, input logic alloc_scan_i,
     input logic [39:0] data_i, input logic check_type_i, input logic [39:0] expected_type_i,
@@ -55,6 +57,8 @@ module objekt #(
     output logic dbg_class_valid_o, output logic [39:0] dbg_compact_class_o,
     input logic [2:0] dbg_vr_i, output logic [39:0] dbg_vr_o,
     output logic [39:0] dbg_idx_o, output logic [39:0] dbg_reg_o,
+    output logic [39:0] dbg_prepared_ref_o, dbg_prepared_index_o,
+    output logic [23:0] dbg_prepared_address_o, output logic [3:0] dbg_prepared_status_o,
     output logic dbg_selected_o, output logic [39:0] dbg_ref_o,
     output logic [39:0] dbg_class_o, output logic [23:0] dbg_size_o,
     output logic [23:0] dbg_base_o, output logic [39:0] dbg_repr_o, output logic [2:0] dbg_flags_o,
@@ -67,6 +71,8 @@ module objekt #(
     localparam [39:0] NIL = 40'hc000000000;
     localparam [3:0] OK=0, BAD_COMMAND=1, BAD_VALUE=2, INVALID_REFERENCE=3,
         NOT_RESIDENT=4, NO_SELECTION=5, BOUNDS=6, INDEX_OVERFLOW=7, TYPE_ERROR=8, MEMORY_ERROR=9;
+    `include "objekt_address.svh"
+    prepared_access_t prepared_access, next_prepared, pending_prepared;
     typedef enum logic [2:0] {IDLE, REQUEST, WAIT_MEMORY, RESPONSE, TRANSFER, EXCHANGE, DIRECTORY} resident_state_t;
     resident_state_t phase;
     // Entry payload: {cond, modified, new, representation, base, class, size, reference}.
@@ -94,6 +100,7 @@ module objekt #(
     logic [2:0] pending_vr;
     logic [39:0] pending_data;
     logic [170:0] pending_snapshot;
+    logic [170:0] pending_memory_entry;
     logic [PAGER_BITS-1:0] pending_slot;
 
     logic resident_mem_write_o;
@@ -251,7 +258,9 @@ module objekt #(
         .response_o(gc_response_o),.response_ready_i(gc_response_ready_i),
         .status_o(gc_status_o),.result_o(gc_result_o),.committed_o(gc_committed_o),
         .slot_o(gc_slot),.entry_valid_i(valid[gc_slot]),.entry_i(entries[gc_slot]),
-        .entry_persistent_i(persistent[gc_slot]),.layout_valid_i(gc_layout_valid),
+        .entry_persistent_i(persistent[gc_slot]),
+        .entry_prepared_i(prepared_access.status==OK && entries[gc_slot][39:0]==prepared_access.reference),
+        .layout_valid_i(gc_layout_valid),
         .commit_o(gc_commit),.retained_o(gc_retained),.bases_o(gc_bases),.cursor_o(gc_cursor),
         .space_o(gc_space),
         .mem_valid_o(gc_mem_valid),.mem_ready_i(mem_ready_i),.mem_write_o(gc_mem_write),
@@ -272,6 +281,10 @@ module objekt #(
     assign dbg_compact_class_o=class_valid[dbg_class_code_i] ? classes[dbg_class_code_i] : 40'b0;
     assign dbg_vr_o=vr[dbg_vr_i];
     assign dbg_idx_o=idx; assign dbg_reg_o=idxreg;
+    assign dbg_prepared_ref_o=prepared_access.reference;
+    assign dbg_prepared_index_o=prepared_access.index;
+    assign dbg_prepared_address_o=prepared_access.address;
+    assign dbg_prepared_status_o=prepared_access.status;
     assign dbg_selected_o=selected;
     assign dbg_ref_o=snapshot[39:0]; assign dbg_size_o=snapshot[63:40];
     assign dbg_class_o=snapshot[103:64]; assign dbg_base_o=snapshot[127:104];
@@ -309,6 +322,9 @@ module objekt #(
 
     logic [3:0] error, old_error, page_error;
     logic [170:0] old_entry, page_entry, next_snapshot;
+    logic [170:0] memory_entry, next_memory_entry;
+    logic [3:0] memory_error;
+    logic signed [39:0] memory_index;
     logic next_selected, need_memory;
     logic [39:0] result_data, page_key;
     logic signed [40:0] next_idx_wide, next_reg_wide;
@@ -322,14 +338,19 @@ module objekt #(
     always_comb begin
         lookup(snapshot[39:0],old_entry,old_error);
         if(!selected) old_error=NO_SELECTION;
+        if(prepared_i) lookup(prepared_access.reference,memory_entry,memory_error);
+        else begin memory_entry=old_entry; memory_error=old_error; end
+        memory_index=prepared_i ? prepared_access.index : idx;
+        next_memory_entry=memory_entry;
+        next_prepared=prepared_access;
         error=OK; page_error=OK; page_entry=0; page_key=data_i;
         next_snapshot=snapshot; next_selected=selected;
         next_idx_wide={idx[39],idx}; next_reg_wide={idxreg[39],idxreg};
         result_data=NIL; need_memory=0; address_wide=0;
-        needs_old=(read_i>=3 && read_i<=6) || read_i==9 || check_type_i || memory_i!=0;
+        needs_old=(read_i>=3 && read_i<=6) || read_i==9 || check_type_i || (memory_i!=0 && !prepared_i);
         if(pager_i>9 || index_i>9 || register_i>4 || memory_i>2 || read_i>11 ||
-           (pager_i!=0 && memory_i!=0) || (pager_i!=0 && index_i==8) || (memory_i!=0 && read_i!=0)) error=BAD_COMMAND;
-        else if((pager_i>=5 && pager_i<=9) && (index_i!=0 || register_i!=0 || memory_i!=0 || read_i!=0 || load_vr_i || check_type_i)) error=BAD_COMMAND;
+           (pager_i!=0 && memory_i!=0 && !prepared_i) || (pager_i!=0 && index_i==8) || (memory_i!=0 && read_i!=0) || (prepared_i && memory_i==0)) error=BAD_COMMAND;
+        else if((pager_i>=5 && pager_i<=9) && (index_i!=0 || register_i!=0 || memory_i!=0 || read_i!=0 || load_vr_i || check_type_i || prepare_i || prepared_i)) error=BAD_COMMAND;
         else if((pager_i==8 || pager_i==9) && !is_ref(data_i) && data_i[39:37]!=0) error=BAD_VALUE;
         else if(check_type_i && !is_ref(expected_type_i)) error=BAD_VALUE;
         else if(pager_i==6 && !is_ref(data_i)) error=INVALID_REFERENCE;
@@ -401,15 +422,23 @@ module objekt #(
                 default: begin end
             endcase
         end
+        if(prepare_i) begin
+            next_prepared.reference=selected ? snapshot[39:0] : NIL;
+            next_prepared.index=next_idx_wide[39:0];
+            {next_prepared.address,next_prepared.status}=prepare_address(next_idx_wide[39:0],old_entry[127:104],old_entry[63:40],old_error);
+        end
         if(error==OK && memory_i!=0) begin
-            address_wide={41'b0,old_entry[127:104]}+{25'b0,idx}-65'd1;
-            if(idx<=0 || $unsigned(idx)>{16'b0,old_entry[63:40]} || address_wide>=65'd16777216 || address_wide>=65'(MEMORY_WORDS)) error=BOUNDS;
-            else if(memory_i==1 && idx==1) result_data=old_entry[167:128];
+            address_wide=prepared_i ? {41'b0,prepared_access.address} : {41'b0,memory_entry[127:104]}+{25'b0,memory_index}-65'd1;
+            if(prepared_i && prepared_access.status!=OK) error=prepared_access.status;
+            else if(memory_error!=OK) error=memory_error;
+            else if(memory_index<=0 || $unsigned(memory_index)>{16'b0,memory_entry[63:40]} || address_wide>=65'd16777216 || address_wide>=65'(MEMORY_WORDS)) error=BOUNDS;
+            else if(memory_i==1 && memory_index==1) result_data=memory_entry[167:128];
             else begin
                 need_memory=1;
                 if(memory_i==2) begin
-                    next_snapshot[169]=1;
-                    if(idx==1) next_snapshot[167:128]=data_i;
+                    next_memory_entry[169]=1;
+                    if(memory_index==1) next_memory_entry[167:128]=data_i;
+                    if(next_selected && next_snapshot[39:0]==memory_entry[39:0]) next_snapshot=next_memory_entry;
                 end
             end
         end
@@ -432,6 +461,8 @@ module objekt #(
     always_ff @(posedge clk_i) begin
         if(rst_i) begin
             phase<=IDLE; maintenance<=0; valid<=0; persistent<=0; class_valid<=0; selected<=0; snapshot<=0;
+            prepared_access.reference<=NIL; prepared_access.index<=0; prepared_access.address<=0; prepared_access.status<=NO_SELECTION;
+            pending_prepared<='0; pending_memory_entry<=0;
             idx<=0; idxreg<=0; rsp_status_o<=OK; rsp_data_o<=NIL;
             resident_mem_write_o<=0;resident_mem_addr_o<=0;resident_mem_data_o<=0;
             pending_idx<=0;pending_reg<=0;pending_selected<=0;pending_load_vr<=0;
@@ -464,6 +495,13 @@ module objekt #(
                 end
             end
             if(gc_commit) begin
+                // A valid prepared reference is a root. Relocate its address
+                // with the pager; leave deferred bounds/selection errors intact.
+                if(prepared_access.status==OK) begin
+                    if(gc_retained[prepared_access.reference[PAGER_BITS-1:0]])
+                        prepared_access.address<=gc_bases[prepared_access.reference[PAGER_BITS-1:0]*24 +: 24]+prepared_access.index[23:0]-24'd1;
+                    else prepared_access.status<=NOT_RESIDENT;
+                end
                 valid<=valid & gc_retained;
                 for(integer k=0;k<ENTRIES;k=k+1)
                     if(valid[k] && gc_retained[k]) entries[k][127:104]<=gc_bases[k*24 +: 24];
@@ -484,14 +522,16 @@ module objekt #(
                         else if(need_memory) begin
                             pending_idx<=next_idx_wide[39:0];pending_reg<=next_reg_wide[39:0];
                             pending_snapshot<=next_snapshot;pending_selected<=next_selected;
+                            pending_prepared<=next_prepared; pending_memory_entry<=next_memory_entry;
                             pending_load_vr<=load_vr_i;pending_vr<=vr_i;pending_data<=data_i;
                             pending_mutator<=1;pending_write<=memory_i==2;
-                            pending_slot<=old_entry[PAGER_BITS-1:0];
+                            pending_slot<=memory_entry[PAGER_BITS-1:0];
                             resident_mem_addr_o<=address_wide[23:0];resident_mem_data_o<=data_i;resident_mem_write_o<=memory_i==2;
                             phase<=REQUEST;
                         end else begin
                             idx<=next_idx_wide[39:0];idxreg<=next_reg_wide[39:0];
                             snapshot<=next_snapshot;selected<=next_selected;
+                            prepared_access<=next_prepared;
                             if(load_vr_i) vr[vr_i]<=data_i;
                             phase<=RESPONSE;
                         end
@@ -503,6 +543,7 @@ module objekt #(
                                 else if(svc_size_i==0 && svc_repr_i!=NIL) rsp_status_o<=BAD_VALUE;
                                 else begin
                                     entries[svc_ref_i[PAGER_BITS-1:0]]<=svc_entry;
+                                    if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==svc_ref_i[PAGER_BITS-1:0]) prepared_access.status<=NOT_RESIDENT;
                                     valid[svc_ref_i[PAGER_BITS-1:0]]<=1;
                                     persistent[svc_ref_i[PAGER_BITS-1:0]]<=!svc_flags_i[0];
                                     if(selected && snapshot[39:0]==svc_ref_i) snapshot<=svc_entry;
@@ -511,7 +552,10 @@ module objekt #(
                             1: begin
                                 if(!is_ref(svc_ref_i)) rsp_status_o<=INVALID_REFERENCE;
                                 else if(!valid[svc_ref_i[PAGER_BITS-1:0]] || entries[svc_ref_i[PAGER_BITS-1:0]][39:0]!=svc_ref_i) rsp_status_o<=NOT_RESIDENT;
-                                else valid[svc_ref_i[PAGER_BITS-1:0]]<=0;
+                                else begin
+                                    valid[svc_ref_i[PAGER_BITS-1:0]]<=0;
+                                    if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==svc_ref_i[PAGER_BITS-1:0]) prepared_access.status<=NOT_RESIDENT;
+                                end
                             end
                             2: begin
                                 if(svc_code_i>3 || !is_ref(svc_class_i)) rsp_status_o<=BAD_VALUE;
@@ -564,9 +608,10 @@ module objekt #(
                     rsp_data_o<=NIL;
                     if(!mem_rsp_error_i && pending_mutator) begin
                         idx<=pending_idx;idxreg<=pending_reg;snapshot<=pending_snapshot;selected<=pending_selected;
+                        prepared_access<=pending_prepared;
                         if(pending_load_vr) vr[pending_vr]<=pending_data;
                         if(pending_write) begin
-                            entries[pending_slot]<=pending_snapshot;
+                            entries[pending_slot]<=pending_memory_entry;
                             rsp_data_o<=pending_data;
                         end else rsp_data_o<=mem_rsp_data_i;
                     end
@@ -586,6 +631,7 @@ module objekt #(
                     rsp_status_o<=transfer_status;
                     rsp_data_o<=(transfer_status==OK) ? transfer_entry[39:0] : NIL;
                     if(transfer_status==OK) begin
+                        if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==transfer_entry[PAGER_BITS-1:0]) prepared_access.status<=NOT_RESIDENT;
                         entries[transfer_entry[PAGER_BITS-1:0]]<=transfer_entry;
                         valid[transfer_entry[PAGER_BITS-1:0]]<=1;
                         persistent[transfer_entry[PAGER_BITS-1:0]]<=!transfer_entry[168];
@@ -597,6 +643,7 @@ module objekt #(
                     rsp_status_o<=exchange_status;
                     rsp_data_o<=exchange_status==OK ? exchange_first : NIL;
                     if(exchange_status==OK && exchange_first!=exchange_second) begin
+                        if(prepared_access.status==OK && (prepared_access.reference==exchange_first || prepared_access.reference==exchange_second)) prepared_access.status<=NOT_RESIDENT;
                         persistent<=persistent | exchange_edges;
                         for(integer k=0;k<ENTRIES;k=k+1)
                             if(valid[k] && (entries[k][39:0]==exchange_first || entries[k][39:0]==exchange_second))

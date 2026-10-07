@@ -21,6 +21,14 @@ fn stalled_write_latches_inputs_and_commits_once() -> Result<()> {
     for fail in [false, true] {
         let mut h = Harness::new(&runtime, Timing::default(), None)?;
         setup(&mut h)?;
+        assert_eq!(
+            h.execute(Command {
+                prepare: true,
+                ..Default::default()
+            })?
+            .status,
+            Status::Ok
+        );
         h.timing = Timing {
             request_delay: 5,
             memory_latency: 9,
@@ -30,6 +38,8 @@ fn stalled_write_latches_inputs_and_commits_once() -> Result<()> {
             index: Index::Increment,
             register: Register::Increment,
             memory: Memory::Write,
+            prepare: true,
+            prepared: true,
             load_vr: true,
             vr: 7,
             data: Word::signed(123),
@@ -141,12 +151,28 @@ fn full_system_reset_at_each_transaction_phase() -> Result<()> {
     for phase in 0..3 {
         let mut h = Harness::new(&runtime, Timing::default(), None)?;
         setup(&mut h)?;
+        assert_eq!(
+            h.execute(Command {
+                prepare: true,
+                ..Default::default()
+            })?
+            .status,
+            Status::Ok
+        );
         h.timing = Timing {
             request_delay: 5,
             memory_latency: 9,
             response_stall: 0,
         };
-        h.drive(Command::write_field(Word::signed(999)).encode()?)?;
+        h.drive(
+            Command {
+                prepared: true,
+                prepare: true,
+                index: Index::Increment,
+                ..Command::write_field(Word::signed(999))
+            }
+            .encode()?,
+        )?;
         h.rtl.run_i = 1;
         h.rtl.cmd_valid_i = 1;
         assert!(h.tick()?.command);

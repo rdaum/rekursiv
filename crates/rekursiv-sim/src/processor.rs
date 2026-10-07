@@ -132,6 +132,8 @@ impl Harness<'_> {
             index: self.rtl.cpu_index_o,
             register: self.rtl.cpu_register_o,
             memory: self.rtl.cpu_memory_o,
+            prepare: self.rtl.cpu_prepare_o,
+            prepared: self.rtl.cpu_prepared_o,
             read: self.rtl.cpu_read_o,
             load_vr: self.rtl.cpu_load_vr_o,
             vr: self.rtl.cpu_vr_o,
@@ -244,12 +246,18 @@ impl Harness<'_> {
         let mut expected_object = None;
         let mut transaction_start = (0, 0, 0);
         let mut response = None;
+        let mut launched = false;
+        let mut accepted_ports = None;
         let mut device_response = None;
         let mut wait = 0u32;
         let mut from_upper = self.oracle.allocation_limit as usize == self.backing.len();
         let mut collection: Option<std::result::Result<rekursiv_model::Model, Status>> = None;
         for cycle in 0..limit {
             if self.rtl.cpu_halted_o != 0 || self.rtl.cpu_service_o != 0 {
+                ensure!(
+                    !launched && expected_object.is_none(),
+                    "processor stopped with an outstanding object command"
+                );
                 return Ok(retired);
             }
             if self.rtl.cpu_gc_active_o != 0 {
@@ -306,6 +314,8 @@ impl Harness<'_> {
                     self.stats.responses,
                 );
                 expected_object = Some(self.oracle.execute_raw(ports, false));
+                accepted_ports = Some(ports);
+                launched = image.code[model.pc as usize].unwrap().object_async;
             }
             let received = self.rtl.rsp_valid_o != 0
                 && self.rtl.cpu_rsp_ready_o != 0
@@ -316,10 +326,21 @@ impl Harness<'_> {
                     data: Word::from_bits(self.rtl.rsp_data_o)?,
                 });
             }
+            // Nonblocking commands retire at acceptance. Their reply stays
+            // private until a dependent instruction or external boundary. A
+            // barrier joins on a separate edge before evaluating its operands.
+            let joining = launched
+                && response.is_some()
+                && (image.code[model.pc as usize].is_none_or(|i| i.object_barrier())
+                    || candidate.as_ref().is_some_and(|c| c.is_err()));
             let device_requests = self.device.requests.len();
             let device_completions = self.device.completions.len();
             self.tick()?;
             if self.device.requests.len() != device_requests {
+                ensure!(
+                    !launched && expected_object.is_none(),
+                    "device request overtook an object command"
+                );
                 let i = image.code[model.pc as usize].expect("device instruction");
                 ensure!(
                     i.device != rekursiv_asm::processor::Device::None,
@@ -353,7 +374,24 @@ impl Harness<'_> {
                     "processor store transactions differ"
                 );
                 self.verify(expected, rsp, transaction_start.0, transaction_start.2)?;
-                self.commands.push((ports, rsp));
+                self.commands.push((accepted_ports.take().unwrap(), rsp));
+            }
+            if joining {
+                let rsp = response.take().unwrap();
+                ensure!(
+                    rsp.status == Status::Ok,
+                    "asynchronous OBJEKT fault {:?}",
+                    rsp.status
+                );
+                model.object = rsp.data.bits();
+                launched = false;
+                candidate = None;
+                ensure!(
+                    self.rtl.cpu_retire_o == 0,
+                    "barrier retired before consuming its reply"
+                );
+                self.compare_processor(model)?;
+                continue;
             }
             if self.rtl.cpu_gc_active_o != 0 {
                 let mut expected = self.oracle.clone();
@@ -415,8 +453,10 @@ impl Harness<'_> {
                     .take()
                     .unwrap()
                     .map_err(|e| eyre::eyre!("RTL retired instruction with model fault {e}"))?;
-                if let Some(rsp) = response.take() {
-                    next.object = rsp.data.bits();
+                if !launched {
+                    if let Some(rsp) = response.take() {
+                        next.object = rsp.data.bits();
+                    }
                 }
                 if let Some(reply) = device_response.take() {
                     ensure!(!reply.error, "processor retired a failed device operation");

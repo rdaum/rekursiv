@@ -17,6 +17,9 @@ impl Model {
         let destination = if from_upper { 0 } else { half };
         let mut work = roots.to_vec();
         work.extend(self.state.vr);
+        if self.state.prepared.status == Status::Ok {
+            work.push(self.state.prepared.reference);
+        }
         work.extend(self.classes.iter().flatten().copied());
         if let Some(e) = self.state.selected {
             work.extend([e.reference, e.class]);
@@ -86,6 +89,7 @@ impl Model {
         }
         candidate.body_cursor = cursor;
         candidate.allocation_limit = destination + half;
+        candidate.relocate_prepared();
         *self = candidate;
         Ok(())
     }

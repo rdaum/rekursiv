@@ -2,9 +2,9 @@
 
 The RAM collector executes as LOGIK microcode, using NUMERIK and privileged OBJEKT controls.
 Allocation or refill exhaustion enters the collector automatically, then retries the interrupted
-command. A standalone `gc=Collect` instruction enters the same collector before exhaustion.
-The RTL executes this path autonomously. The native emulator executes the same microcode against its Rust maintenance datapath.
-Neither executor calls the graph-walking Rust collector used as a test oracle.
+command. A standalone `gc=Collect` instruction enters the same collector before exhaustion. The RTL
+executes this path autonomously. The native emulator executes the same microcode against its Rust
+maintenance datapath. Neither executor calls the graph-walking Rust collector used as a test oracle.
 
 The implementation follows the book's RAM collector on pp. 135–139. It uses the project's 40-bit
 values and control encodings. It is a stopped-mutator collector; persistent-store reclamation and
@@ -46,9 +46,11 @@ body reservation and identity consumption for the failed attempt. Other errors r
 processor faults. A request can trigger one collection before its retry; a second failure halts
 instead of looping indefinitely.
 
-`gc=Collect` requests collection with no pending allocation or refill. It requires an enabled collector and cannot combine other control fields.
-Successful return retires the request once and advances to its successor. Nested requests and requests without a collector are encoding faults.
-The request adds no allocation reservation or transfer-class root. LOGIK holds `gc_explicit_o` throughout collection so OBJEKT ignores stale transfer metadata.
+`gc=Collect` requests collection with no pending allocation or refill. It requires an enabled
+collector and cannot combine other control fields. Successful return retires the request once and
+advances to its successor. Nested requests and requests without a collector are encoding faults. The
+request adds no allocation reservation or transfer-class root. LOGIK holds `gc_explicit_o`
+throughout collection so OBJEKT ignores stale transfer metadata.
 
 LOGIK saves PC, UPCOR, mark, condition history, all sixteen arithmetic registers, Q, product, flags,
 symbol, and the previous object result/status. It retains the failed request's operands and captured
@@ -69,27 +71,32 @@ try again after a device error.
 
 ## Roots and retention
 
+A valid prepared address retains its referenced object through the Slot retention flag. This root
+does not change the ROOT index layout. Commit relocates the prepared physical address with the pager
+entry. A failed collection leaves both unchanged. Before collection entry, LOGIK drains any launched
+object command and publishes its successful result.
+
 The ROOT control reads machine state directly. Its index layout is:
 
-| Indices                   | Source                                                                        |
-| ------------------------- | ----------------------------------------------------------------------------- |
-| 0–7                       | OBJEKT value registers                                                        |
-| 8–9                       | Selected reference and class, or zero when no selection exists                |
-| 10–13                     | Valid compact-class mappings                                                  |
-| 14–15                     | Interrupted D bus and enabled expected-class operand                          |
-| 16–18                     | Frozen ESTKR, saved symbol, saved object result                               |
-| 19                        | Class returned by the interrupted refill metadata lookup                      |
-| 20 onward                 | Evaluation slots, with only `0..SP` contributing values                       |
-| After stack capacity      | Two words per control-store slot: literal and enabled expected-class constant |
+| Indices                   | Source                                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------ |
+| 0–7                       | OBJEKT value registers                                                                     |
+| 8–9                       | Selected reference and class, or zero when no selection exists                             |
+| 10–13                     | Valid compact-class mappings                                                               |
+| 14–15                     | Interrupted D bus and enabled expected-class operand                                       |
+| 16–18                     | Frozen ESTKR, saved symbol, saved object result                                            |
+| 19                        | Class returned by the interrupted refill metadata lookup                                   |
+| 20 onward                 | Evaluation slots, with only `0..SP` contributing values                                    |
+| After stack capacity      | Two words per control-store slot: literal and enabled expected-class constant              |
 | After control-store roots | 32 explicit root words, initialized through boot space 3 and writable by mutator microcode |
 
 Unwritten code and explicit-root slots read as zero. The loader writes all 32 explicit roots from
 `Image::roots`. Mutator microcode can read a slot with `d=Root` or replace it with `ldroot`;
-register A selects slots 0–31. A write publishes only at successful retirement. Collection freezes these slots.
-A language runtime can also anchor a scanned root-table object there or in a value register, then update its fields normally. Rust-local references are not
-machine roots. Indices, control-stack entries, and NUMERIK registers are untagged numeric state. The
-representation cache contributes no independent edge, so opaque data cannot acquire pointer
-semantics through that cache.
+register A selects slots 0–31. A write publishes only at successful retirement. Collection freezes
+these slots. A language runtime can also anchor a scanned root-table object there or in a value
+register, then update its fields normally. Rust-local references are not machine roots. Indices,
+control-stack entries, and NUMERIK registers are untagged numeric state. The representation cache
+contributes no independent edge, so opaque data cannot acquire pointer semantics through that cache.
 
 MARK accepts only complete, matching resident references. Raw words, compacts, nonresident
 references, and pager collisions produce no mark and no backing-store request. Each marked object

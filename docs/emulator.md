@@ -1,22 +1,27 @@
 # Native microcode emulator
 
-`rekursiv-emulator` executes Rekursiv microcode in a native Rust process, without Verilator.
-It uses the same assembler, instruction definitions, and microcode files as the RTL machine.
-The window presents device pixels and supplies keyboard and mouse input.
+`rekursiv-emulator` executes Rekursiv microcode in a native Rust process, without Verilator. It uses
+the same assembler, instruction definitions, and microcode files as the RTL machine. The window
+presents device pixels and supplies keyboard and mouse input.
 
-The emulator operates at instruction boundaries. It does not predict FPGA cycle counts or throughput.
-Verilator remains necessary for handshake, pipeline, stall, reset, and synthesis validation.
+The emulator operates at instruction boundaries. It does not predict FPGA cycle counts or
+throughput. Verilator remains necessary for handshake, pipeline, stall, reset, and synthesis
+validation.
 
-The native executor caches decoded control words whose stack and fetch units are idle.
-It prepares only their scalar writes and skips arithmetic with no observable result.
-Each use checks the current control word; edited words use the general interpreter.
-Local writes commit only after object and device operations succeed. Collector instructions use the general processor path.
-Release builds use thin link-time optimization across the execution, memory, and device crates.
+The native executor caches decoded control words whose stack and fetch units are idle. It prepares
+only their scalar writes and skips arithmetic with no observable result. Each use checks the current
+control word; edited words use the general interpreter. Blocking object and device instructions
+commit local writes only after successful completion. A `launch` instruction commits at command
+acceptance and defers its reply until an
+[object barrier](interface.md#retirement-conditions-and-errors). The emulator preserves the same
+result and fault ordering without simulating memory latency. Collector instructions use the general
+processor path. Release builds use thin link-time optimization across the execution, memory, and
+device crates.
 
 ## Run the workstation demo
 
-Install Rust and a C compiler. The default window build also needs the platform window libraries.
-On Debian or Ubuntu, install them with:
+Install Rust and a C compiler. The default window build also needs the platform window libraries. On
+Debian or Ubuntu, install them with:
 
 ```sh
 sudo apt-get install build-essential libx11-dev libxkbcommon-dev libwayland-dev
@@ -28,14 +33,13 @@ Run the included peripheral demo:
 cargo run --release --locked -p rekursiv-emulator
 ```
 
-The [demo microcode](../microcode/workstation.uc) uploads a stripe pattern and a cursor.
-Mouse movement moves the cursor. A key or mouse-button press inverts the pattern.
-Microcode consumes the input packets and uploads the replacement pixels.
-The window adapter does not draw that pattern or choose its response to input.
+The [demo microcode](../microcode/workstation.uc) uploads a stripe pattern and a cursor. Mouse
+movement moves the cursor. A key or mouse-button press inverts the pattern. Microcode consumes the
+input packets and uploads the replacement pixels. The window adapter does not draw that pattern or
+choose its response to input.
 
-Close the window to exit. Escape goes to the guest.
-A stopped processor leaves its last frame visible, with its micro-PC in the window title.
-The default window session has no instruction limit.
+Close the window to exit. Escape goes to the guest. A stopped processor leaves its last frame
+visible, with its micro-PC in the window title. The default window session has no instruction limit.
 
 ## Run existing microcode
 
@@ -48,16 +52,17 @@ cargo run --release --locked -p rekursiv-emulator --no-default-features -- \
   --headless --microcode microcode/collection.uc --memory-words 512 --pager-entries 16
 ```
 
-The second example executes seven allocations and five collections.
-The emulator executes the existing `ram-collector.uc` instructions for each collection.
-Smalltalk defaults to 16,777,216 RAM words; standalone microcode defaults to 131,072.
-An explicit `--memory-words` value overrides either default and includes both semispaces. Each word carries 40 bits in a Rust `u64`.
-The native pager defaults to 65,536 entries. `--pager-entries N` selects a power of two from 2 through 65,536.
-The loader assembles the collector for that capacity. RTL comparison tests explicitly use the 16-entry hardware test configuration.
+The second example executes seven allocations and five collections. The emulator executes the
+existing `ram-collector.uc` instructions for each collection. Smalltalk defaults to 16,777,216 RAM
+words; standalone microcode defaults to 131,072. An explicit `--memory-words` value overrides either
+default and includes both semispaces. Each word carries 40 bits in a Rust `u64`. The native pager
+defaults to 65,536 entries. `--pager-entries N` selects a power of two from 2 through 65,536. The
+loader assembles the collector for that capacity. RTL comparison tests explicitly use the 16-entry
+hardware test configuration.
 
-A microcode file can supply its own `.collector` directive.
-Otherwise, the loader installs the standard collector at microaddress 8064 and rejects overlap.
-The loader supports the assembler's code, NAM, opcode-map, root, and entry directives.
+A microcode file can supply its own `.collector` directive. Otherwise, the loader installs the
+standard collector at microaddress 8064 and rejects overlap. The loader supports the assembler's
+code, NAM, opcode-map, root, and entry directives.
 
 ## Run the Smalltalk image
 
@@ -67,9 +72,9 @@ Fetch the pinned Xerox V2 distribution:
 python3 scripts/fetch-smalltalk-image.py
 ```
 
-The Smalltalk desktop and initial window use 1024×768 pixels.
-The loader adjusts the saved display configuration before execution. Smalltalk creates the full bitmap and redraws the desktop during startup.
-Resizing the host window scales the guest display.
+The Smalltalk desktop and initial window use 1024×768 pixels. The loader adjusts the saved display
+configuration before execution. Smalltalk creates the full bitmap and redraws the desktop during
+startup. Resizing the host window scales the guest display.
 
 Run its saved process and watch it draw the desktop:
 
@@ -86,70 +91,83 @@ cargo run --release --locked -p rekursiv-emulator --no-default-features -- \
   --steps 300000000 --frame artifacts/startup.ppm
 ```
 
-The loader verifies and converts the image before execution. It then seeds backing storage and the boot context.
-Runtime bytecode dispatch, method lookup, primitives, process scheduling, and collection execute through microcode.
-The emulator does not supply missing Smalltalk operations through Rust callbacks.
+The loader verifies and converts the image before execution. It then seeds backing storage and the
+boot context. Runtime bytecode dispatch, method lookup, primitives, process scheduling, and
+collection execute through microcode. The emulator does not supply missing Smalltalk operations
+through Rust callbacks.
 
-Primitive 96 now draws and refreshes the display through microcode. Native startup draws the browser, transcript, and workspace.
-BitBlt validates accessed words and uploads changed pixel groups. Disjoint copies need no temporary object.
-Disk transfers and snapshot saving remain unfinished.
-Low-space checks now collect before notification and recheck available space afterward.
-The original image passes its former premature warning point with 1,048,576 RAM words.
-A 200-million-step headless run completes 769 BitBlts and continues guest controller activity without a low-space signal.
-This remains bounded execution evidence, not proof of complete desktop interaction.
-The [rendering measurements](validation.md#bitblt-rendering-measurements) compare the same image checkpoint before and after the optimization.
-The bounded startup regression establishes drawing progress, not complete interaction.
-To stop at the earlier checkpoint before any drawing, add `--stop-at primitive_dispatch --when R0=96`.
-The window presents complete published frames. It does not read a live Form from the heap.
+Primitive 96 now draws and refreshes the display through microcode. Native startup draws the
+browser, transcript, and workspace. BitBlt validates accessed words and uploads changed pixel
+groups. Disjoint copies need no temporary object. Disk transfers and snapshot saving remain
+unfinished. Low-space checks now collect before notification and recheck available space afterward.
+The original image passes its former premature warning point with 1,048,576 RAM words. A
+200-million-step headless run completes 769 BitBlts and continues guest controller activity without
+a low-space signal. This remains bounded execution evidence, not proof of complete desktop
+interaction. The [rendering measurements](validation.md#bitblt-rendering-measurements) compare the
+same image checkpoint before and after the optimization. The bounded startup regression establishes
+drawing progress, not complete interaction. To stop at the earlier checkpoint before any drawing,
+add `--stop-at primitive_dispatch --when R0=96`. The window presents complete published frames. It
+does not read a live Form from the heap.
 
 ## Controls and diagnostics
 
-| Option | Behavior |
-| --- | --- |
-| `--microcode FILE` | Assemble and execute a standalone program |
-| `--smalltalk FILE` | Convert and start the pinned Xerox V2 `VirtualImage` |
-| `--headless` | Disable the window and use deterministic device time |
-| `--steps N` | Stop after N instruction steps, including collection and Hold steps |
-| `--pager-entries N` | Set pager capacity; default 65536, power of two from 2 through 65536 |
-| `--memory-words N` | Set external RAM capacity; default 16777216 for Smalltalk, otherwise 131072 words |
-| `--stop-at LABEL` | Stop before an instruction at the named label |
-| `--when Rn=VALUE` | Add a register condition to `--stop-at`; decimal or `0x` hexadecimal |
-| `--objekt-metrics` | Collect and report detailed OBJEKT counters |
-| `--trace FILE` | Record retired micro-PCs, collector mode, object result, and numeric registers |
-| `--frame FILE` | Save the last published display as a PPM, without cursor composition |
-| `--frames N` | Close after N presentation iterations, including those that skip uploads |
+| Option              | Behavior                                                                          |
+| ------------------- | --------------------------------------------------------------------------------- |
+| `--microcode FILE`  | Assemble and execute a standalone program                                         |
+| `--smalltalk FILE`  | Convert and start the pinned Xerox V2 `VirtualImage`                              |
+| `--headless`        | Disable the window and use deterministic device time                              |
+| `--steps N`         | Stop after N instruction steps, including collection and Hold steps               |
+| `--pager-entries N` | Set pager capacity; default 65536, power of two from 2 through 65536              |
+| `--memory-words N`  | Set external RAM capacity; default 16777216 for Smalltalk, otherwise 131072 words |
+| `--stop-at LABEL`   | Stop before an instruction at the named label                                     |
+| `--when Rn=VALUE`   | Add a register condition to `--stop-at`; decimal or `0x` hexadecimal              |
+| `--objekt-metrics`  | Collect and report detailed OBJEKT counters                                       |
+| `--trace FILE`      | Record retired micro-PCs, collector mode, object result, and numeric registers    |
+| `--frame FILE`      | Save the last published display as a PPM, without cursor composition              |
+| `--frames N`        | Close after N presentation iterations, including those that skip uploads          |
 
-Headless execution stops after ten million steps unless `--steps` supplies another limit.
-Processor faults report the micro-PC, fault code, and object status where applicable.
-A library caller can resume an explicit service break with `Machine::resume()`.
-The CLI leaves service breaks stopped.
+Headless execution stops after ten million steps unless `--steps` supplies another limit. Processor
+faults report the micro-PC, fault code, and object status where applicable. A library caller can
+resume an explicit service break with `Machine::resume()`. The CLI leaves service breaks stopped.
 
-The exit summary reports active execution seconds, total elapsed seconds, and retired microinstructions per second for both intervals.
-The rates include mutator and collector instructions. Hold steps and collector entry/return transitions do not count as retired instructions.
-Active time includes instruction execution, emulated devices, recovery setup, and optional trace output. It excludes worker input/clock updates and snapshot publication.
-Elapsed time also includes window startup, frontend work, and time spent displaying a stopped processor.
-Window work runs concurrently with CPU execution, so their measured durations overlap. Both intervals exclude image loading/conversion and final trace flush/frame export.
-The window title updates approximately once per second with the recent active execution rate.
-Headless runs with fixed memory and step counts provide repeatable workloads. Trace output affects throughput.
+The exit summary reports active execution seconds, total elapsed seconds, and retired
+microinstructions per second for both intervals. The rates include mutator and collector
+instructions. Hold steps and collector entry/return transitions do not count as retired
+instructions. Active time includes instruction execution, emulated devices, recovery setup, and
+optional trace output. It excludes worker input/clock updates and snapshot publication. Elapsed time
+also includes window startup, frontend work, and time spent displaying a stopped processor. Window
+work runs concurrently with CPU execution, so their measured durations overlap. Both intervals
+exclude image loading/conversion and final trace flush/frame export. The window title updates
+approximately once per second with the recent active execution rate. Headless runs with fixed memory
+and step counts provide repeatable workloads. Trace output affects throughput.
 
-With `--objekt-metrics`, the exit report includes OBJEKT counters. `--pager-entries` changes pager capacity; `--memory-words` changes RAM capacity only.
+With `--objekt-metrics`, the exit report includes OBJEKT counters. `--pager-entries` changes pager
+capacity; `--memory-words` changes RAM capacity only.
 
-- Fetch and probe counts describe explicit selections, excluding internal metadata revalidation and collector lookups.
-  A collision miss finds an occupied slot with a different full reference. An empty miss finds no mapping.
-  Hit rates exclude compact values and invalid operands. Retries count as additional attempts.
-- Completed evictions count successful allocation/refill replacements. Victims are classified as new, modified persistent, or clean persistent objects.
-  A failed miss is not a completed eviction. Collector discards are counted separately.
-- Allocations and refills report completed objects and body words. Refill words consume RAM space even when the guest creates no new objects.
+- Fetch and probe counts describe explicit selections, excluding internal metadata revalidation and
+  collector lookups. A collision miss finds an occupied slot with a different full reference. An
+  empty miss finds no mapping. Hit rates exclude compact values and invalid operands. Retries count
+  as additional attempts.
+- Completed evictions count successful allocation/refill replacements. Victims are classified as
+  new, modified persistent, or clean persistent objects. A failed miss is not a completed eviction.
+  Collector discards are counted separately.
+- Allocations and refills report completed objects and body words. Refill words consume RAM space
+  even when the guest creates no new objects.
 - Field counters report successful accesses, including reads served by the cached first word.
-- RAM and backing counters report issued requests, including requests from failed commands.
-  Backing traffic includes identity exchange and directory operations. Save commits count requests, not durable disk commits.
-  Payload sizes use five bytes per 40-bit word, excluding metadata, protocol overhead, and physical bus padding.
-- Collector reads and writes are separate from mutator RAM requests. Collection entries distinguish explicit requests, allocation pressure, and refill pressure.
-  Reclaimed words and discarded mappings count successful collector commits. Reclaimed space includes abandoned copies from earlier evictions.
+- RAM and backing counters report issued requests, including requests from failed commands. Backing
+  traffic includes identity exchange and directory operations. Save commits count requests, not
+  durable disk commits. Payload sizes use five bytes per 40-bit word, excluding metadata, protocol
+  overhead, and physical bus padding.
+- Collector reads and writes are separate from mutator RAM requests. Collection entries distinguish
+  explicit requests, allocation pressure, and refill pressure. Reclaimed words and discarded
+  mappings count successful collector commits. Reclaimed space includes abandoned copies from
+  earlier evictions.
 
-These counters exclude image loading and bootstrap services. They measure logical machine activity, not FPGA cycles or disk latency.
-Detailed counters are disabled by default and require no per-object history. Collection adds execution overhead; use the same setting when comparing implementations.
-Library callers enable `machine.objekt_metrics_enabled` before execution and read `machine.stats.objekt`.
+These counters exclude image loading and bootstrap services. They measure logical machine activity,
+not FPGA cycles or disk latency. Detailed counters are disabled by default and require no per-object
+history. Collection adds execution overhead; use the same setting when comparing implementations.
+Library callers enable `machine.objekt_metrics_enabled` before execution and read
+`machine.stats.objekt`.
 
 For a reproducible run with the original image:
 
@@ -159,71 +177,79 @@ cargo run --release --locked -p rekursiv-emulator -- \
   --memory-words 16777216 --steps 100000000 --objekt-metrics
 ```
 
-Add `--pager-entries 16` to reproduce the former capacity. Equal step budgets can include different amounts of collection and guest work.
-The drawing regression compares identical pixels after 32 completed BitBlt operations at both capacities.
+Add `--pager-entries 16` to reproduce the former capacity. Equal step budgets can include different
+amounts of collection and guest work. The drawing regression compares identical pixels after 32
+completed BitBlt operations at both capacities.
 
-The initial keyboard profile uses unshifted US ASCII and separate modifier transitions.
-The frontend maps left/right Shift to 136/137, Control to 138, and Caps Lock to 139.
-Left, middle, and right mouse buttons use codes 130, 129, and 128.
-These values match `InputState class>>initialize` and `InputSensor` in the pinned Xerox V2 sources.
-They belong to the frontend profile, not the CPU or object-memory implementation.
-Other keyboard layouts, text composition, wheel input, and unmapped function keys remain unsupported.
+The initial keyboard profile uses unshifted US ASCII and separate modifier transitions. The frontend
+maps left/right Shift to 136/137, Control to 138, and Caps Lock to 139. Left, middle, and right
+mouse buttons use codes 130, 129, and 128. These values match `InputState class>>initialize` and
+`InputSensor` in the pinned Xerox V2 sources. They belong to the frontend profile, not the CPU or
+object-memory implementation. Other keyboard layouts, text composition, wheel input, and unmapped
+function keys remain unsupported.
 
-Keyboard and mouse-button events preserve short press/release pairs. Focus loss releases held keys and buttons.
-Caps Lock toggles a virtual lock state. Both physical Control keys share one guest state.
-Mouse coordinates follow the scaled display rectangle, with clipping at its edges.
-Published cursor pixels invert the display pixels at the device cursor position.
-The workstation starts with cursor tracking enabled; guest software can explicitly unlink the cursor from the mouse.
-The CPU runs on a worker thread. The main thread owns the window and checks display snapshots at up to 60 Hz.
-The event loop waits between checks and wakes immediately for window or input events. Slow presentation does not pause the CPU.
-The worker checks queued input, host clocks, and shutdown requests approximately every 2 ms.
-Physical input still waits for the window backend to receive it.
-Input batches preserve key order and capture timestamps. A full frontend queue stops execution with an error.
-The exit report also counts overruns in the guest's separate, bounded input FIFO.
+Keyboard and mouse-button events preserve short press/release pairs. Focus loss releases held keys
+and buttons. Caps Lock toggles a virtual lock state. Both physical Control keys share one guest
+state. Mouse coordinates follow the scaled display rectangle, with clipping at its edges. Published
+cursor pixels invert the display pixels at the device cursor position. The workstation starts with
+cursor tracking enabled; guest software can explicitly unlink the cursor from the mouse. The CPU
+runs on a worker thread. The main thread owns the window and checks display snapshots at up to 60
+Hz. The event loop waits between checks and wakes immediately for window or input events. Slow
+presentation does not pause the CPU. The worker checks queued input, host clocks, and shutdown
+requests approximately every 2 ms. Physical input still waits for the window backend to receive it.
+Input batches preserve key order and capture timestamps. A full frontend queue stops execution with
+an error. The exit report also counts overruns in the guest's separate, bounded input FIFO.
 
-The worker publishes immutable peripheral snapshots through one shared slot, at up to 60 Hz.
-The window takes the newest snapshot; intermediate snapshots can be replaced without building a frame queue.
-Published bitmaps share storage until their contents change. Identical guest publications reuse the previous snapshot's pixels.
-The window converts pixels only when the display, cursor, or visible cursor position changes.
-It uploads only changed RGB pixels, except when a resize, focus regain, or repaint requires another submission.
-Winit supplies repaint and resize events directly; the frontend needs no separate X11 repaint connection.
+The worker publishes immutable peripheral snapshots through one shared slot, at up to 60 Hz. The
+window takes the newest snapshot; intermediate snapshots can be replaced without building a frame
+queue. Published bitmaps share storage until their contents change. Identical guest publications
+reuse the previous snapshot's pixels. The window converts pixels only when the display, cursor, or
+visible cursor position changes. It uploads only changed RGB pixels, except when a resize, focus
+regain, or repaint requires another submission. Winit supplies repaint and resize events directly;
+the frontend needs no separate X11 repaint connection.
 
-The window report separates initialization, snapshot checks, pixel conversion, buffer acquisition/submission, scaling, callbacks, and event-loop waiting.
-Each timing category reports its call count, total duration, mean, and maximum.
-Initialization includes event-loop and window/surface creation. Presentation checks and unchanged snapshots have separate counters.
-Window callback time includes redraw work; it overlaps the submission and scaling categories.
-Event-loop waiting includes the time blocked waiting for events or the next snapshot deadline, plus backend dispatch overhead before callbacks.
-The surface-pixel byte count measures submitted buffers after scaling, before protocol overhead or compression. It is not network traffic.
-CPU worker input/clock and snapshot costs are reported separately. Window timings overlap CPU execution.
+The window report separates initialization, snapshot checks, pixel conversion, buffer
+acquisition/submission, scaling, callbacks, and event-loop waiting. Each timing category reports its
+call count, total duration, mean, and maximum. Initialization includes event-loop and window/surface
+creation. Presentation checks and unchanged snapshots have separate counters. Window callback time
+includes redraw work; it overlaps the submission and scaling categories. Event-loop waiting includes
+the time blocked waiting for events or the next snapshot deadline, plus backend dispatch overhead
+before callbacks. The surface-pixel byte count measures submitted buffers after scaling, before
+protocol overhead or compression. It is not network traffic. CPU worker input/clock and snapshot
+costs are reported separately. Window timings overlap CPU execution.
 
-Mouse coordinates arrive through window events. Snapshot checks do not issue synchronous pointer queries or submit unchanged pixels.
-Under forwarded X11, changed frames still require pixel transfers. Softbuffer uses its ordinary X11 image path when shared memory is unavailable.
-The frontend currently submits the full scaled surface for each changed frame, including cursor movement.
-Event-driven input removes repeated polling round trips; it does not remove display bandwidth costs.
+Mouse coordinates arrive through window events. Snapshot checks do not issue synchronous pointer
+queries or submit unchanged pixels. Under forwarded X11, changed frames still require pixel
+transfers. Softbuffer uses its ordinary X11 image path when shared memory is unavailable. The
+frontend currently submits the full scaled surface for each changed frame, including cursor
+movement. Event-driven input removes repeated polling round trips; it does not remove display
+bandwidth costs.
 
 ## Architecture and validation
 
 `rekursiv-model` supplies instruction and object-command semantics, including SoftFloat arithmetic.
-The RTL oracle and native emulator share those semantics. They are not independent implementations of every arithmetic operation.
-The emulator adds an execution loop and a separate model of the OBJEKT maintenance datapath.
-It never calls the graph-walking `collect_ram` oracle.
-Collector microcode chooses every root, mark, pager pass, body read, body write, and commit.
+The RTL oracle and native emulator share those semantics. They are not independent implementations
+of every arithmetic operation. The emulator adds an execution loop and a separate model of the
+OBJEKT maintenance datapath. It never calls the graph-walking `collect_ram` oracle. Collector
+microcode chooses every root, mark, pager pass, body read, body write, and commit.
 
-`rekursiv-devices` supplies the same external peripheral models to both executors.
-The Verilator adapter drives their request/reply handshakes. The emulator waits for device completion before instruction retirement.
-The executor prepares scalar values and indexed writes before it issues an object or device request.
-It commits these writes only after success, preserving all local destinations on failure.
-Each indexed write uses the original operand and address; preparation does not copy the register file, stacks, or roots.
-Native OBJEKT commands are validated directly; they need no wire encoding and decoding.
-External wire requests retain numeric-field validation and share the same command execution and fault handling.
-The GUI uses [winit](https://docs.rs/winit/0.30/winit/) for window events and [softbuffer](https://docs.rs/softbuffer/0.4/softbuffer/) for pixel presentation.
-Presentation needs no GPU renderer. Guest microcode still performs all drawing and supplies the published bitmap.
-It has no access to guest objects through the presentation helpers.
+`rekursiv-devices` supplies the same external peripheral models to both executors. The Verilator
+adapter drives their request/reply handshakes. The emulator waits for device completion before
+instruction retirement. The executor prepares scalar values and indexed writes before it issues an
+object or device request. Blocking instructions commit these writes only after success, preserving
+all local destinations on failure. Launched prepared accesses commit local writes at acceptance and
+defer object errors to the next barrier. Each indexed write uses the original operand and address;
+preparation does not copy the register file, stacks, or roots. Native OBJEKT commands are validated
+directly; they need no wire encoding and decoding. External wire requests retain numeric-field
+validation and share the same command execution and fault handling. The GUI uses
+[winit](https://docs.rs/winit/0.30/winit/) for window events and
+[softbuffer](https://docs.rs/softbuffer/0.4/softbuffer/) for pixel presentation. Presentation needs
+no GPU renderer. Guest microcode still performs all drawing and supplies the published bitmap. It
+has no access to guest objects through the presentation helpers.
 
-Headless clocks advance one millisecond per 1000 device ticks.
-Window clocks follow host elapsed time and UTC. These modes deliberately produce different timing observations.
-Neither mode claims to reproduce RTL cycle timing.
-Tests can schedule deterministic input through the shared device API.
+Headless clocks advance one millisecond per 1000 device ticks. Window clocks follow host elapsed
+time and UTC. These modes deliberately produce different timing observations. Neither mode claims to
+reproduce RTL cycle timing. Tests can schedule deterministic input through the shared device API.
 Transaction history stays disabled in interactive sessions to avoid unbounded memory growth.
 
 Run the emulator tests, including RTL comparisons:
@@ -240,14 +266,16 @@ REKURSIV_ST80_DIR="$PWD/artifacts/st80" \
   --test startup -- --ignored --nocapture
 ```
 
-The allocation and paging tests compare registers and object state with RTL after each mutator retirement.
-Other tests cover recovery failure, failed device writes, pixel clipping, keyboard mapping, and microcode-driven input/display changes.
-Frontend tests compare threaded and direct execution across collection with no snapshot consumer.
-They also check immutable frames, identical publications, ordered input, shutdown, and fault reporting.
-Window tests cover physical key/button transitions, focus loss, and matching display/input scaling through letterboxed viewports.
-A saved-image cursor regression checks that the uploaded arrow follows mouse movement; a frontend test preserves explicit guest unlink behavior.
-The original-image regression matches all 499 bytecodes in Xerox's `trace2`.
-It also checks the RTL checkpoint: 2176 bytecode boundaries, three collections, and two display publications before BitBlt.
-A second native test completes 32 BitBlts: 9870 bytecode boundaries, 24 collections, and 33 display publications.
-Directed native and RTL tests independently compare all Boolean rules, clipping, alignment, overlap, and refresh with expected pixels.
-Passing these checks does not replace cycle-level RTL validation.
+The allocation and paging tests compare registers and object state with RTL after each mutator
+retirement. Other tests cover recovery failure, failed device writes, pixel clipping, keyboard
+mapping, and microcode-driven input/display changes. Frontend tests compare threaded and direct
+execution across collection with no snapshot consumer. They also check immutable frames, identical
+publications, ordered input, shutdown, and fault reporting. Window tests cover physical key/button
+transitions, focus loss, and matching display/input scaling through letterboxed viewports. A
+saved-image cursor regression checks that the uploaded arrow follows mouse movement; a frontend test
+preserves explicit guest unlink behavior. The original-image regression matches all 499 bytecodes in
+Xerox's `trace2`. It also checks the RTL checkpoint: 2176 bytecode boundaries, three collections,
+and two display publications before BitBlt. A second native test completes 32 BitBlts: 9870 bytecode
+boundaries, 24 collections, and 33 display publications. Directed native and RTL tests independently
+compare all Boolean rules, clipping, alignment, overlap, and refresh with expected pixels. Passing
+these checks does not replace cycle-level RTL validation.

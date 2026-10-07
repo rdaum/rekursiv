@@ -3,11 +3,11 @@ name = "rekursiv-sim"
 version.workspace = true
 edition.workspace = true
 [dependencies]
-rekursiv-devices = { path = "../rekursiv-devices" }
 camino = "1.1"
 eyre = "0.6"
 marlin = { version = "=0.7.2", features = ["verilog"] }
 rekursiv-asm = { path = "../rekursiv-asm" }
+rekursiv-devices = { path = "../rekursiv-devices" }
 rekursiv-model = { path = "../rekursiv-model" }
 [dev-dependencies]
 proptest = "1.4"

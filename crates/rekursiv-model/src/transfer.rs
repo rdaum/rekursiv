@@ -186,6 +186,7 @@ impl Model {
                     incoming.representation = value;
                 }
             }
+            self.invalidate_prepared_slot(slot);
             self.entries[slot] = Some(incoming);
             self.persistent_roots[slot] = !incoming.new;
             self.state.selected = Some(incoming);

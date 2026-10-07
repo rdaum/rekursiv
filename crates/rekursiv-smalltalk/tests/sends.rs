@@ -1800,9 +1800,12 @@ fn asynchronous_input_wakes_idle_and_preserves_repeated_notifications() -> Resul
         assert_eq!(e.roots[27], r(312));
         assert_eq!(e.roots[31], Word::ZERO);
         assert_eq!(e.event_acknowledgements, [1 + u64::from(repeated), 0, 0, 0]);
+        // The first packet has an absolute timestamp (three words) and a key
+        // word; the wait consumes one signal. The repeated timestamp needs
+        // only one elapsed-time word plus the key, so it adds two signals.
         assert_eq!(
             e.records[&r(312).identity()?].body[1..],
-            [r(2), r(2), i(3 + 4 * i32::from(repeated))]
+            [r(2), r(2), i(3 + 2 * i32::from(repeated))]
         );
         assert_eq!(e.records[&r(304).identity()?].body[2], r(2));
         assert_eq!(e.records[&r(304).identity()?].body[4], r(2));

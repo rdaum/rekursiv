@@ -73,6 +73,9 @@ impl Harness<'_> {
         let state = self.snapshot()?;
         let mut root_words = roots.values();
         root_words.extend(state.vr);
+        if state.prepared.status == Status::Ok {
+            root_words.push(state.prepared.reference);
+        }
         if let Some(e) = state.selected {
             root_words.extend([e.reference, e.class]);
         }

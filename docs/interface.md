@@ -49,20 +49,22 @@ validates and reconstructs a symbolic command. `Command` implements `Display` fo
 This standalone OBJEKT port encoding has no packed binary image or byte-order convention. Processor
 microinstructions use the separate 256-bit encoding in the processor section.
 
-| Input             | Width | Numeric operation values                                                                          |
-| ----------------- | ----: | ------------------------------------------------------------------------------------------------- |
-| `pager_i`         |     4 | None=0, ProbeBus=1, ProbeVr=2, ProbeType=3, ProbeRepresentation=4, Fetch=5, Allocate=6, Exchange=7, NextObject=8, FindObject=9 |
-| `index_i`         |     4 | None=0, Load=1, Clear=2, One=3, Two=4, Increment=5, Decrement=6, Step=7, Next=8, FromReg=9        |
-| `register_i`      |     3 | None=0, Load=1, Increment=2, Decrement=3, FromIndex=4                                             |
-| `memory_i`        |     2 | None=0, Read=1, Write=2                                                                           |
+| Input             | Width | Numeric operation values                                                                                                           |
+| ----------------- | ----: | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `pager_i`         |     4 | None=0, ProbeBus=1, ProbeVr=2, ProbeType=3, ProbeRepresentation=4, Fetch=5, Allocate=6, Exchange=7, NextObject=8, FindObject=9     |
+| `index_i`         |     4 | None=0, Load=1, Clear=2, One=3, Two=4, Increment=5, Decrement=6, Step=7, Next=8, FromReg=9                                         |
+| `register_i`      |     3 | None=0, Load=1, Increment=2, Decrement=3, FromIndex=4                                                                              |
+| `memory_i`        |     2 | None=0, Read=1, Write=2                                                                                                            |
+| `prepare_i`       |     1 | Prepare an address from the old selection and new index                                                                            |
+| `prepared_i`      |     1 | Use the previous prepared address for this memory operation                                                                        |
 | `read_i`          |     4 | None=0, Vr=1, Reference=2, Size=3, Type=4, Base=5, Representation=6, Index=7, IndexReg=8, Flags=9, FreeWords=10, FreeIdentities=11 |
-| `load_vr_i`       |     1 | Load `data_i` into the selected VR when set                                                       |
-| `vr_i`            |     3 | VR selector, 0–7                                                                                  |
-| `data_i`          |    40 | Bus value, write value, or signed index operand                                                   |
-| `check_type_i`    |     1 | Require equality between the old selected class and `expected_type_i`                             |
-| `expected_type_i` |    40 | Canonical class reference; ignored when `check_type_i` is clear                                   |
-| `alloc_size_i`    |    24 | Body word count for Allocate                                                                      |
-| `alloc_scan_i`    |     1 | Scanning flag for Allocate                                                                        |
+| `load_vr_i`       |     1 | Load `data_i` into the selected VR when set                                                                                        |
+| `vr_i`            |     3 | VR selector, 0–7                                                                                                                   |
+| `data_i`          |    40 | Bus value, write value, or signed index operand                                                                                    |
+| `check_type_i`    |     1 | Require equality between the old selected class and `expected_type_i`                                                              |
+| `expected_type_i` |    40 | Canonical class reference; ignored when `check_type_i` is clear                                                                    |
+| `alloc_size_i`    |    24 | Body word count for Allocate                                                                                                       |
+| `alloc_scan_i`    |     1 | Scanning flag for Allocate                                                                                                         |
 
 All unlisted operation numbers return `BadCommand`. `Fetch` selects `data_i` and automatically
 refills a missing stored object. `Allocate` uses `data_i` as the class reference and returns a newly
@@ -71,16 +73,17 @@ allocation size and scan fields are ignored by other operations.
 
 The following combinations return `BadCommand`:
 
-- A pager operation with a memory operation.
+- A pager operation with a memory operation, unless the access uses `prepared`.
 - A pager operation with `Index::Next`.
 - A memory operation with a read-result selector.
-- Fetch, Allocate, Exchange, NextObject, or FindObject with any index, secondary-register, memory, read-result, VR-load, or class-guard
-  operation.
+- Fetch, Allocate, Exchange, NextObject, or FindObject with any index, secondary-register, memory,
+  read-result, VR-load, or class-guard operation, or either preparation control.
+- `prepared` without a memory operation.
 
-For other combinations, every field reads the state that existed before the command. `ProbeVr` reads
+Except for `prepare`, every field reads the state that existed before the command. `ProbeVr` reads
 the old VR even when the same command loads that VR. A memory operation uses the old index even when
 the command increments it. `Register::FromIndex` saves the old index, and `Index::FromReg` restores
-the old secondary index. There is no forwarding between fields.
+the old secondary index. `prepare` forwards the new index into address generation.
 
 `ProbeBus` selects `data_i`. `ProbeType` and `ProbeRepresentation` probe the old selected object's
 class or representation. `Step` adds the signed bus operand to the primary index. Both index
@@ -112,12 +115,47 @@ write also updates the pager cache and selected snapshot. The new and cond flags
 The class guard is optional exact reference equality. It does not interpret class bodies,
 inheritance, or access-type policies.
 
-`FreeWords` and `FreeIdentities` return raw unsigned capacity counts without requiring an object selection.
-They generate no memory or backing-store transaction and do not change pager entries or allocation cursors.
-`FreeWords` is the allocation limit minus the body cursor, clamped at zero.
-With collection enabled, this excludes the inactive semispace and ranges awaiting reclamation.
-`FreeIdentities` is `2^37 - next_identity`; exhaustion returns zero without wrapping.
-Both include reservations retained after failed transfers. Reads report the allocator state at command acceptance.
+`FreeWords` and `FreeIdentities` return raw unsigned capacity counts without requiring an object
+selection. They generate no memory or backing-store transaction and do not change pager entries or
+allocation cursors. `FreeWords` is the allocation limit minus the body cursor, clamped at zero. With
+collection enabled, this excludes the inactive semispace and ranges awaiting reclamation.
+`FreeIdentities` is `2^37 - next_identity`; exhaustion returns zero without wrapping. Both include
+reservations retained after failed transfers. Reads report the allocator state at command
+acceptance.
+
+## Prepared-address pipeline
+
+`prepare` captures the old selection and the new index ALU result in a separate register. The
+register contains the reference, index, physical address, and deferred status. `prepared` directs a
+memory operation to that register, independently of the current selection and index. An access does
+not consume or clear the register.
+
+A control word can access the previous prepared address and prepare its next address together. It
+can also probe another object without changing the current memory target. A simultaneous `prepare`
+still uses the old selection, before that probe. The class guard also retains its existing meaning:
+it checks the old selected class. Fetch, Allocate, Exchange, and directory operations remain
+standalone commands.
+
+Preparation records selection and bounds errors without failing the command. A later prepared memory
+operation reports that stored error before any memory request or architectural change. This permits
+a loop to prepare past its last element while completing its final valid access. Index arithmetic
+overflow still fails immediately. A memory error discards all accompanying index, selection, VR, and
+preparation changes.
+
+Prepared first-component reads use the current pager cache without a RAM request. Writes update the
+prepared object's metadata, even when another object becomes selected. A write updates the selected
+snapshot only if that snapshot names the written object. Later first-component reads therefore see
+the new value.
+
+Pager replacement, service installation, invalidation, and identity exchange invalidate affected
+prepared addresses with `NotResident`. Refill alone does not restore an invalid address: microcode
+must prepare it again. Machine GC retains a valid prepared reference as an architectural root and
+relocates its address at Commit. Failed GC preserves the original address. The stopped-host
+maintenance utility uses service installation, which invalidates prepared addresses.
+
+Reset initializes the prepared status to `NoSelection`. `idx=Clear, prepare` releases a valid
+prepared root. The new index is invalid for every object. These controls use project encodings for
+the address pipeline described in the book. They do not assert historical binary compatibility.
 
 ## Clock and handshake contract
 
@@ -134,8 +172,8 @@ Resident operations without memory commit on their acceptance edge. Resident mem
 commit on the successful memory-completion edge. Fetch misses and allocations commit their pager
 entry and selection after the complete transfer succeeds. Allocator reservations and transfer side
 effects have the separate failure rules specified below. That commit is architectural retirement:
-registers, metadata, and flags change together. Resident commands preserve architectural state while
-their memory operation waits. The result becomes valid after retirement and remains stable until
+registers, metadata, and flags change together. OBJEKT state remains unchanged while a resident
+memory command waits. The result becomes valid after retirement and remains stable until
 `rsp_ready_i` accepts it. Response consumption does not execute or commit the operation again.
 Neither input channel accepts another operation while a response is pending.
 
@@ -162,7 +200,8 @@ preserved backing store is not implemented.
 ## Halted service interface
 
 All service operations return through the same response channel as commands. Service inputs have the
-widths in `rtl/objekt.sv`. `svc_op_i` is four bits. Only the inputs listed below affect each service operation.
+widths in `rtl/objekt.sv`. `svc_op_i` is four bits. Only the inputs listed below affect each service
+operation.
 
 | `svc_op_i` | Operation                                 | Inputs                                                                              |
 | ---------: | ----------------------------------------- | ----------------------------------------------------------------------------------- |
@@ -174,7 +213,7 @@ widths in `rtl/objekt.sv`. `svc_op_i` is four bits. Only the inputs listed below
 |          5 | Begin recovery and lock the mutator       | None                                                                                |
 |          6 | Set the body cursor during recovery       | `svc_repr_i`, interpreted as an unsigned cursor                                     |
 |          7 | End recovery and release the lock         | None                                                                                |
-|          8 | Reserve existing identities               | `svc_repr_i`, interpreted as the next-identity floor |
+|          8 | Reserve existing identities               | `svc_repr_i`, interpreted as the next-identity floor                                |
 
 Install requires canonical object and class references. Empty objects must have nil representation.
 Installation publishes one complete entry and refreshes a matching selected snapshot. It also
@@ -183,18 +222,18 @@ reference leaves the selection unchanged; later uses must revalidate it. Invalid
 full reference match, including its scan bit. Updating a compact-class mapping also updates a
 matching selected compact value.
 
-ReserveIdentities raises the allocator floor without publishing an object or changing the body cursor.
-It accepts values from 1 through `2^37`, including the exhausted sentinel. Smaller requests never lower
-the current floor. Zero or larger values return `BadValue` without changing allocator state.
-The transfer engine applies this control only through an accepted halted service request.
+ReserveIdentities raises the allocator floor without publishing an object or changing the body
+cursor. It accepts values from 1 through `2^37`, including the exhausted sentinel. Smaller requests
+never lower the current floor. Zero or larger values return `BadValue` without changing allocator
+state. The transfer engine applies this control only through an accepted halted service request.
 
 The initialization service is privileged. The host must install body words before metadata, supply
 the actual first word as representation, and avoid overlapping live object bodies. Class references
 need not themselves be resident. Boot code must account for all existing identities before
-allocation, including class objects and nonresident records. A halted loader can reserve their identity
-range with operation 8, then install only the initial resident objects before starting the mutator. Installation permits metadata with unavailable physical spans;
-field accesses reject such addresses when used. This supports explicit bounds testing without
-truncating metadata.
+allocation, including class objects and nonresident records. A halted loader can reserve their
+identity range with operation 8, then install only the initial resident objects before starting the
+mutator. Installation permits metadata with unavailable physical spans; field accesses reject such
+addresses when used. This supports explicit bounds testing without truncating metadata.
 
 Raw writes are rejected if the address lies inside any currently published object body. To replace a
 body's contents, invalidate its entry, initialize the words, then install coherent metadata.
@@ -305,38 +344,41 @@ after that publication edge.
 ## Object-binding exchange
 
 Exchange takes its first reference from `data_i` and its second from the selected value register.
-Both operands must be canonical stored references with the same scan flag.
-Equal references succeed without writes after the engine validates that the object exists.
+Both operands must be canonical stored references with the same scan flag. Equal references succeed
+without writes after the engine validates that the object exists.
 
-`rtl/objekt_exchange.sv` reads each source from its resident entry or committed backing record.
-It writes that source's class, size, cond flag, and body under the other identity in a private storage batch.
-The engine does not allocate temporary RAM or require both objects to occupy different pager slots.
-Bodies can exceed resident RAM capacity when their source is on the backing device.
+`rtl/objekt_exchange.sv` reads each source from its resident entry or committed backing record. It
+writes that source's class, size, cond flag, and body under the other identity in a private storage
+batch. The engine does not allocate temporary RAM or require both objects to occupy different pager
+slots. Bodies can exceed resident RAM capacity when their source is on the backing device.
 
-CommitBatch publishes both records together. The core then invalidates resident entries for both identities.
-It also clears the selected snapshot if that snapshot names either object. The response returns the first reference.
-Subsequent Fetch commands load the exchanged bindings. Existing references and aliases retain their bit patterns.
-Edges from the published records to resident objects become persistent collector roots at successful completion.
+CommitBatch publishes both records together. The core then invalidates resident entries for both
+identities. It also clears the selected snapshot if that snapshot names either object. The response
+returns the first reference. Subsequent Fetch commands load the exchanged bindings. Existing
+references and aliases retain their bit patterns. Edges from the published records to resident
+objects become persistent collector roots at successful completion.
 
-On error, the engine aborts private writes. Committed records, pager entries, selection, RAM, and allocator counters remain unchanged.
-No other command can run during an exchange. External adapters implement batch storage, not an object-language operation.
+On error, the engine aborts private writes. Committed records, pager entries, selection, RAM, and
+allocator counters remain unchanged. No other command can run during an exchange. External adapters
+implement batch storage, not an object-language operation.
 
 ## Object directory
 
-NextObject returns the object with the smallest identity greater than `data_i`.
-FindObject returns the object with exactly that identity.
-Both accept either a raw 37-bit identity or a canonical stored reference. They ignore the input reference's scan flag.
-The response contains the canonical reference, and `vr_i` selects a value register to receive its class.
-An absent identity or exhausted enumeration succeeds with machine nil in both places.
+NextObject returns the object with the smallest identity greater than `data_i`. FindObject returns
+the object with exactly that identity. Both accept either a raw 37-bit identity or a canonical
+stored reference. They ignore the input reference's scan flag. The response contains the canonical
+reference, and `vr_i` selects a value register to receive its class. An absent identity or exhausted
+enumeration succeeds with machine nil in both places.
 
-`rtl/objekt_directory.sv` combines resident metadata with committed backing-store metadata.
-Resident metadata wins when both sources contain the same identity.
-The engine never reads bodies, refills RAM, or changes the selected object, pager entries, or allocation counters.
-It can enumerate objects larger than RAM. Class filtering and language identity-number conversion belong in microcode.
+`rtl/objekt_directory.sv` combines resident metadata with committed backing-store metadata. Resident
+metadata wins when both sources contain the same identity. The engine never reads bodies, refills
+RAM, or changes the selected object, pager entries, or allocation counters. It can enumerate objects
+larger than RAM. Class filtering and language identity-number conversion belong in microcode.
 
-The request is exclusive until its response completes. A store error leaves the destination value register unchanged.
-Malformed returned references, classes, or identity ordering also produce ServiceError without architectural changes.
-Enumeration is ordered by identity, but does not create a snapshot across separate commands.
+The request is exclusive until its response completes. A store error leaves the destination value
+register unchanged. Malformed returned references, classes, or identity ordering also produce
+ServiceError without architectural changes. Enumeration is ordered by identity, but does not create
+a snapshot across separate commands.
 
 ## Streaming backing-store interface
 
@@ -352,33 +394,33 @@ There is one outstanding store transaction at most.
 | Request field    | Width | Meaning                                                          |
 | ---------------- | ----: | ---------------------------------------------------------------- |
 | `store_op_o`     |     4 | Operation from the table below                                   |
-| `store_ref_o`    |    40 | Canonical reference, or raw identity for directory operations     |
+| `store_ref_o`    |    40 | Canonical reference, or raw identity for directory operations    |
 | `store_class_o`  |    40 | Class for BeginSave, otherwise zero                              |
 | `store_size_o`   |    24 | Body size for BeginSave, otherwise zero                          |
 | `store_cond_o`   |     1 | Cond flag for BeginSave, otherwise zero                          |
 | `store_offset_o` |    24 | Zero-based body offset for ReadWord or WriteWord, otherwise zero |
 | `store_data_o`   |    40 | Body word for WriteWord, otherwise zero                          |
 
-| Value | Operation  | Successful effect                                              |
-| ----: | ---------- | -------------------------------------------------------------- |
-|     0 | Metadata   | Return the complete reference, class, size, and cond flag      |
-|     1 | ReadWord   | Return one committed body word                                 |
-|     2 | BeginSave  | Start an unpublished record with the supplied metadata         |
-|     3 | WriteWord  | Append the next body word to that unpublished record           |
-|     4 | CommitSave | Atomically replace the committed record after all words arrive |
-|     5 | BeginBatch | Start an empty private batch and discard any abandoned staging |
-|     6 | CommitBatch | Atomically publish all completed records in the batch |
-|     7 | AbortBatch | Discard the private batch and any incomplete record |
-|     8 | NextRecord | Return metadata for the smallest committed identity greater than the raw input identity |
-|     9 | FindRecord | Return metadata for the exact raw input identity |
+| Value | Operation   | Successful effect                                                                       |
+| ----: | ----------- | --------------------------------------------------------------------------------------- |
+|     0 | Metadata    | Return the complete reference, class, size, and cond flag                               |
+|     1 | ReadWord    | Return one committed body word                                                          |
+|     2 | BeginSave   | Start an unpublished record with the supplied metadata                                  |
+|     3 | WriteWord   | Append the next body word to that unpublished record                                    |
+|     4 | CommitSave  | Atomically replace the committed record after all words arrive                          |
+|     5 | BeginBatch  | Start an empty private batch and discard any abandoned staging                          |
+|     6 | CommitBatch | Atomically publish all completed records in the batch                                   |
+|     7 | AbortBatch  | Discard the private batch and any incomplete record                                     |
+|     8 | NextRecord  | Return metadata for the smallest committed identity greater than the raw input identity |
+|     9 | FindRecord  | Return metadata for the exact raw input identity                                        |
 
 The completion carries `store_rsp_status_i` (4 bits). Metadata also returns `store_rsp_ref_i` and
 `store_rsp_class_i` (40 bits each), `store_rsp_size_i` (24), and `store_rsp_cond_i` (1). ReadWord
 returns `store_rsp_data_i` (40 bits). Unused reply fields are ignored by the RTL.
 
 NextRecord and FindRecord use the metadata reply fields. Absence returns successful status with
-machine nil reference and class; it is not a store error. Private batch records are invisible.
-These operations inspect the storage directory without interpreting classes or object bodies.
+machine nil reference and class; it is not a store error. Private batch records are invisible. These
+operations inspect the storage directory without interpreting classes or object bodies.
 
 The service keys records by identity and verifies the full reference, including the scan flag.
 Metadata returns `InvalidReference` for a missing identity or mismatched reference. Other store
@@ -393,8 +435,9 @@ external backing-store adapter. The Rust adapter verifies them independently of 
 
 Inside a batch, CommitSave adds a complete record to private batch storage without publishing it.
 Metadata and ReadWord continue to read committed records. CommitBatch requires no incomplete record.
-A failed CommitBatch must publish none of its records. BeginBatch, CommitBatch, and AbortBatch ignore operand fields; RTL sends zeros.
-Reset discards all private staging and retains only previously committed records.
+A failed CommitBatch must publish none of its records. BeginBatch, CommitBatch, and AbortBatch
+ignore operand fields; RTL sends zeros. Reset discards all private staging and retains only
+previously committed records.
 
 ## Transfer failure and space accounting
 
@@ -501,41 +544,65 @@ The packed word is 256 bits. The exact symbolic values are defined in `rekursiv_
 | 211:206                   | Project compact code                                                 |
 | 215:212                   | Recovery operation, defined below                                    |
 | 216                       | Allocation size comes from NUMERIK register A instead of the literal |
-| 220:217                  | Floating-point operation (with ALU Float)                            |
-| 223:221                  | Floating-point rounding mode                                        |
-| 225:224                  | Device operation: None=0, Read=1, Write=2                            |
-| 226                      | Write full D-bus word to explicit root indexed by register A         |
-| 94, 98, 113, 255:227      | Reserved; must be zero                                               |
+| 220:217                   | Floating-point operation (with ALU Float)                            |
+| 223:221                   | Floating-point rounding mode                                         |
+| 225:224                   | Device operation: None=0, Read=1, Write=2                            |
+| 226                       | Write full D-bus word to explicit root indexed by register A         |
+| 227                       | Prepare address from old selection and new index                     |
+| 228                       | Memory operation uses the previous prepared address                  |
+| 229                       | Launch prepared memory command without waiting for its reply         |
+| 94, 98, 113, 255:230      | Reserved; must be zero                                               |
 
 Invalid selectors and reserved bits halt execution before an OBJEKT command can issue. The literal
 field supplies D unless another source is selected. Other sources include cached stack values, the
 previous OBJEKT result, register A, Q, pointers, NAM operand, saved return address, and the
 full-width symbol register (source 11), and SymbolHigh (source 12), which returns symbol bits 39:32.
-Device (source 13) returns the last successful 32-bit device reply.
-Root (source 14) returns the explicit root indexed by register A.
-Full-width sources preserve all 40 bits; narrower sources
-are zero-extended.
+Device (source 13) returns the last successful 32-bit device reply. Root (source 14) returns the
+explicit root indexed by register A. Full-width sources preserve all 40 bits; narrower sources are
+zero-extended.
 
 ### Retirement, conditions, and errors
 
 The [device channel](devices.md#logik-transport) is independent of OBJEKT and backing storage.
 `io=Read` and `io=Write` capture a 32-bit aligned address from register A and write data from D.
-They cannot combine object, Float, or recovery operations. A device instruction retires only after a successful reply.
-Other local destinations use the original operands; the reply becomes available through Device on the next instruction.
-Device transactions also capture their branch condition before waiting. Errors preserve the previous device result and local destinations.
+They cannot combine object, Float, or recovery operations. A device instruction retires only after a
+successful reply. Other local destinations use the original operands; the reply becomes available
+through Device on the next instruction. Device transactions also capture their branch condition
+before waiting. Errors preserve the previous device result and local destinations.
 
-`ldroot` replaces one of the 32 explicit roots with the full D-bus word at retirement.
-The root index comes from register A and must be below 32. `d=Root` reads through the same index.
-The boot loader initializes these slots; microcode can subsequently register, replace, or clear tagged references.
-Reads and writes are prohibited during collection, which scans the frozen root slots through a separate port.
-A failed accompanying object or device command does not publish the root write.
+`ldroot` replaces one of the 32 explicit roots with the full D-bus word at retirement. The root
+index comes from register A and must be below 32. `d=Root` reads through the same index. The boot
+loader initializes these slots; microcode can subsequently register, replace, or clear tagged
+references. Reads and writes are prohibited during collection, which scans the frozen root slots
+through a separate port. A failed accompanying object or device command does not publish the root
+write.
 
 During mutator execution, every local architectural module receives the same retirement pulse.
 During collection, stack and fetch retirement are disabled; arithmetic and sequencing execute the
 collector. A local instruction retires after validation. An object instruction first validates local
 effects and captures its selected condition. It then holds one command until OBJEKT accepts it and
-waits for one response. Only a successful response retires its local effects. Command acceptance,
-response waiting, and response backpressure cannot repeat local writes or command issue.
+waits for one response. For a blocking command, only a successful response retires its local
+effects. Command acceptance, response waiting, and response backpressure cannot repeat local writes
+or command issue.
+
+`launch` permits a prepared memory instruction to retire its local effects when OBJEKT accepts the
+command. Independent local instructions can then execute while RAM completes the access. Only one
+object command can be outstanding. Its response remains private until the next barrier:
+
+- Any OBJEKT command, `d=Object`, or `cc=ObjectOk`.
+- A device instruction or a recovery instruction.
+- Halt, service break, or a local validation fault.
+
+The barrier waits for completion before it evaluates its operands or commits any effects. A
+successful completion updates the Object result. An error halts at the barrier with fault 4 and the
+OBJEKT status. The launch and intervening local instructions remain retired. OBJEKT itself still
+commits its memory command only on success. Microcode that requires all local effects to wait for
+success uses a blocking command.
+
+`launch` requires `prepared` and a memory operation. It cannot share Halt, Service, or recovery
+controls. An ordinary local branch does not force a barrier, unless it reads an object result or
+condition. The RTL can overlap address preparation and independent processor work with one resident
+memory request. It does not queue multiple RAM requests or overlap pager misses.
 
 The selected condition stays fixed throughout command issue and response waiting. IRQ is a
 synchronous input and cannot redirect an already prepared object instruction. Conditions include
@@ -559,7 +626,7 @@ failure contract.
 |     3 | Stack address, argument pointer, or control-word counter overflow           |
 |     4 | OBJEKT returned an error                                                    |
 |     5 | Invalid abstract counter, uninitialized NAM word, or missing opcode mapping |
-|     6 | Device transaction returned an error                                      |
+|     6 | Device transaction returned an error                                        |
 
 Validation checks instruction availability, encoding, next microaddress, stack effects, fetch
 effects, and compact construction in that order. An invalid programming address reports fault 1
@@ -590,18 +657,19 @@ selection from SP forwards the newly calculated SP for the next access. Control-
 increment/decrement operations change the stored counter, not its pointer. All address and counter
 checks occur before writes.
 
-Evaluation-stack operation Wide (5) constructs `{D[7:0], shifted_ALU_result[31:0]}` and updates ESTKR.
-It packs raw bits without choosing a tag or validating a language representation.
-Together with SymbolHigh, it permits microcode to manipulate full 40-bit words through the 32-bit arithmetic datapath.
+Evaluation-stack operation Wide (5) constructs `{D[7:0], shifted_ALU_result[31:0]}` and updates
+ESTKR. It packs raw bits without choosing a tag or validating a language representation. Together
+with SymbolHigh, it permits microcode to manipulate full 40-bit words through the 32-bit arithmetic
+datapath.
 
 NUMERIK implements pass, addition, both subtraction orders, AND, OR, XOR, complement, rotation, and
-signed/unsigned multiplication. The [floating-point extension](numerik-floating-point.md) adds binary32 arithmetic, conversions, comparison, and square root.
-Its result completion uses a handshake; LOGIK waits before retiring architectural effects.
-Carry input is zero, one, or the previous zero flag. Subtraction
-computes `A - B - 1 + carry`; ordinary subtraction therefore selects carry one. Its carry-out means
-no borrow. Multiplication retains a 64-bit product, with separate high-word and low-word reads.
-Destination shifts support left, logical right, and arithmetic right by one bit. Q and register B
-independently load the shifted output.
+signed/unsigned multiplication. The [floating-point extension](numerik-floating-point.md) adds
+binary32 arithmetic, conversions, comparison, and square root. Its result completion uses a
+handshake; LOGIK waits before retiring architectural effects. Carry input is zero, one, or the
+previous zero flag. Subtraction computes `A - B - 1 + carry`; ordinary subtraction therefore selects
+carry one. Its carry-out means no borrow. Multiplication retains a 64-bit product, with separate
+high-word and low-word reads. Destination shifts support left, logical right, and arithmetic right
+by one bit. Q and register B independently load the shifted output.
 
 Zero, sign, carry, overflow, and corrected sign describe the unshifted result. Corrected sign is
 sign XOR overflow. Full object equality uses the separate 40-bit symbol register. Compact
@@ -638,10 +706,11 @@ wrapper prefixes these with `cpu_`. Keep the configuration fixed while the heap 
 [collection contract](recovery.md) defines context preservation, root bounds, semispaces, failure
 behavior, and return.
 
-LOGIK holds `gc_explicit_o` during proactive collection, connected to OBJEKT's `gc_explicit_i`. This suppresses stale transfer size and class inputs.
+LOGIK holds `gc_explicit_o` during proactive collection, connected to OBJEKT's `gc_explicit_i`. This
+suppresses stale transfer size and class inputs.
 
-Recovery controls 1–9 use an internal request/completion port to OBJEKT. Its valid/ready rules match the
-ordinary command channel. The collector datapath never accepts host service requests and never
+Recovery controls 1–9 use an internal request/completion port to OBJEKT. Its valid/ready rules match
+the ordinary command channel. The collector datapath never accepts host service requests and never
 issues backing-store transactions.
 
 | Value | Control   | D-bus operand and result                                                              |
@@ -657,13 +726,14 @@ issues backing-store transactions.
 |     8 | WriteBody | Zero-based destination offset; write the matching buffered word                       |
 |     9 | Commit    | Publish completed relocation and exchange allocation spaces                           |
 |    10 | Return    | Restore processor context and retry; requires successful Commit                       |
-|    11 | Collect   | Standalone mutator request for collection, with no allocation reservation               |
+|    11 | Collect   | Standalone mutator request for collection, with no allocation reservation             |
 
-Slot flags are valid (bit 0), marked (1), scanned (2), persistent-state retention root (3), and NEW
-(4). Retention roots include dirty persistent objects and NEW objects protected by committed saves
-or backing-record edges. ReadBody and WriteBody use the external RAM request/completion channel.
-Stage and Commit return `OUT_OF_SPACE` when their capacity conditions fail. Info on an invalid slot
-returns `NOT_RESIDENT`; invalid indices return `BOUNDS`. Mark ignores nonreferences, nonresident
-objects, and collisions without faulting or fetching. Controls 1–10 require an
-active collector invocation. `gc=Collect` requires mutator mode and an enabled collector, and rejects all other control fields. Collector instructions cannot combine an OBJEKT mutator command or
-alter frozen stacks and fetch state.
+Slot flags are valid (bit 0), marked (1), scanned (2), retention root (3), and NEW (4). Retention
+roots include dirty persistent objects and NEW objects protected by committed saves or
+backing-record edges, and the valid prepared reference. ReadBody and WriteBody use the external RAM
+request/completion channel. Stage and Commit return `OUT_OF_SPACE` when their capacity conditions
+fail. Info on an invalid slot returns `NOT_RESIDENT`; invalid indices return `BOUNDS`. Mark ignores
+nonreferences, nonresident objects, and collisions without faulting or fetching. Controls 1–10
+require an active collector invocation. `gc=Collect` requires mutator mode and an enabled collector,
+and rejects all other control fields. Collector instructions cannot combine an OBJEKT mutator
+command or alter frozen stacks and fetch state.

@@ -81,8 +81,10 @@ impl RecoveryState {
                 self.selected = n as usize;
                 self.copied = None;
                 if let Some(e) = model.entries[self.selected] {
-                    let persistent =
-                        (e.modified && !e.new) || (e.new && model.persistent_roots[self.selected]);
+                    let persistent = (e.modified && !e.new)
+                        || (e.new && model.persistent_roots[self.selected])
+                        || (model.state.prepared.status == Status::Ok
+                            && model.state.prepared.reference == e.reference);
                     result = Word::raw(
                         1 | (u64::from(self.marked[self.selected]) << 1)
                             | (((e.reference.bits() >> 37) & 1) << 2)
@@ -177,6 +179,7 @@ impl RecoveryState {
                         *entry = None;
                     }
                 }
+                model.relocate_prepared();
                 model.body_cursor = self.cursor;
                 model.allocation_limit = self.end;
                 self.committed = true;

@@ -51,23 +51,23 @@ is unclear whether any usable copies survive. Perhaps there is a backup at the b
 [Forth and Clyde canal](https://en.wikipedia.org/wiki/Rekursiv#History).
 
 The first language implementation is **Smalltalk-80**, in place of the original machine’s LINGO.
-Language-specific object layouts, method lookup, and bytecode execution live in microcode.
-The lower-level hardware remains independent of Smalltalk.
+Language-specific object layouts, method lookup, and bytecode execution live in microcode. The
+lower-level hardware remains independent of Smalltalk.
 
 The machine currently runs **Smalltalk-80** from a converted Xerox image, with a graphical desktop,
 keyboard, and mouse. The "Blue Book" was used as a reference to write the microcode which ultimately
 executes on the emulated Rekursiv hardware.
 
-The Smalltalk desktop is tested only in the native software emulator. FPGA board integration remains unfinished.
+The Smalltalk desktop is tested only in the native software emulator. FPGA board integration remains
+unfinished.
 
 ![Smalltalk-80 desktop and System Browser in the Rekursiv emulator](docs/images/st80.png)
 
 _Smalltalk-80 running on Rekursiv microcode in the native emulator._
 
-
-Ultimate success means running this Smalltalk-80 workstation on my Mellanox NV303212A FPGA
-card. It will have the card’s obscene 8 GB of RAM to play with. Display output will use the PCIe
-host machine’s framebuffer to make pretty pictures.
+Ultimate success means running this Smalltalk-80 workstation on my Mellanox NV303212A FPGA card. It
+will have the card’s obscene 8 GB of RAM to play with. Display output will use the PCIe host
+machine’s framebuffer to make pretty pictures.
 
 ## Implementation
 
@@ -77,15 +77,15 @@ microcode with OBJEKT hardware support. It traces objects, copies their bodies b
 regions, restores the interrupted program, and retries the allocation or refill.
 
 The repository includes a text microassembler, a native Rust emulator with display, keyboard, and
-mouse, and a Verilator simulator. A Rust architectural model checks the hardware's results.
-The simulation harness supplies external memory and backing storage. The allocation and collection examples execute their program control flow and garbage
-collection on the RTL processor.
+mouse, and a Verilator simulator. A Rust architectural model checks the hardware's results. The
+simulation harness supplies external memory and backing storage. The allocation and collection
+examples execute their program control flow and garbage collection on the RTL processor.
 
 The Smalltalk microcode executes bytecodes, runtime primitives, and process scheduling. NUMERIK
-supports integer and binary32 arithmetic. BitBlt runs in microcode and refreshes the display
-as the original Smalltalk image draws its desktop.
-Disk transfers, snapshot saving, and FPGA board integration remain unfinished.
-The RTL passes generic synthesis checks. It has not yet been validated on an FPGA board.
+supports integer and binary32 arithmetic. BitBlt runs in microcode and refreshes the display as the
+original Smalltalk image draws its desktop. Disk transfers, snapshot saving, and FPGA board
+integration remain unfinished. The RTL passes generic synthesis checks. It has not yet been
+validated on an FPGA board.
 
 ## Build and run
 
@@ -103,12 +103,12 @@ For the standalone display and input demo:
 cargo run --release --locked -p rekursiv-emulator
 ```
 
-Move the mouse or press a key to exercise the peripheral microcode. Close the window to exit.
-The [emulator guide](docs/emulator.md) covers build dependencies, headless execution, traces, and the Smalltalk image.
-This executable does not require Verilator or Yosys.
+Move the mouse or press a key to exercise the peripheral microcode. Close the window to exit. The
+[emulator guide](docs/emulator.md) covers build dependencies, headless execution, traces, and the
+Smalltalk image. This executable does not require Verilator or Yosys.
 
-For RTL simulation and synthesis, install Rust with `rustfmt` and `clippy`, Verilator, Yosys,
-a C++ compiler, and Make. On Debian or Ubuntu, install the hardware tools with:
+For RTL simulation and synthesis, install Rust with `rustfmt` and `clippy`, Verilator, Yosys, a C++
+compiler, and Make. On Debian or Ubuntu, install the hardware tools with:
 
 ```sh
 sudo apt-get install verilator yosys clang build-essential

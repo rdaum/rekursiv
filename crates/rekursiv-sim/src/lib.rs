@@ -386,6 +386,8 @@ impl<'a> Harness<'a> {
         self.rtl.index_i = p.index;
         self.rtl.register_i = p.register;
         self.rtl.memory_i = p.memory;
+        self.rtl.prepare_i = p.prepare;
+        self.rtl.prepared_i = p.prepared;
         self.rtl.read_i = p.read;
         self.rtl.load_vr_i = p.load_vr;
         self.rtl.vr_i = p.vr;
@@ -605,6 +607,12 @@ impl<'a> Harness<'a> {
             index: Word::from_bits(self.rtl.dbg_idx_o)?.as_index(),
             index_reg: Word::from_bits(self.rtl.dbg_reg_o)?.as_index(),
             selected,
+            prepared: rekursiv_model::PreparedAccess {
+                reference: Word::from_bits(self.rtl.dbg_prepared_ref_o)?,
+                index: Word::from_bits(self.rtl.dbg_prepared_index_o)?.as_index(),
+                address: self.rtl.dbg_prepared_address_o,
+                status: self.rtl.dbg_prepared_status_o.try_into()?,
+            },
         })
     }
     pub fn compare_state(&mut self) -> Result<()> {

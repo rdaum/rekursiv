@@ -8,12 +8,35 @@ pub mod store;
 mod transfer;
 use store::BackingStore;
 
+/// Address-generation pipeline register. Bounds/selection failures are latched
+/// here and reported only when an instruction consumes this access. A speculative
+/// prepare past the end of a loop is therefore harmless. Memory errors instead
+/// leave this register (and all accompanying command effects) unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparedAccess {
+    pub reference: Word,
+    pub index: i64,
+    pub address: u32,
+    pub status: Status,
+}
+impl Default for PreparedAccess {
+    fn default() -> Self {
+        Self {
+            reference: Word::NIL,
+            index: 0,
+            address: 0,
+            status: Status::NoSelection,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct State {
     pub vr: [Word; 8],
     pub index: i64,
     pub index_reg: i64,
     pub selected: Option<Entry>,
+    pub prepared: PreparedAccess,
 }
 impl Default for State {
     fn default() -> Self {
@@ -22,6 +45,7 @@ impl Default for State {
             index: 0,
             index_reg: 0,
             selected: None,
+            prepared: PreparedAccess::default(),
         }
     }
 }
@@ -105,6 +129,53 @@ impl Model {
     }
     fn selected(&self) -> Result<Entry, Status> {
         self.resolve(self.state.selected.ok_or(Status::NoSelection)?.reference)
+    }
+    fn prepare_access(&self, index: i64) -> PreparedAccess {
+        let reference = self
+            .state
+            .selected
+            .map(|e| e.reference)
+            .unwrap_or(Word::NIL);
+        let mut access = PreparedAccess {
+            reference,
+            index,
+            ..PreparedAccess::default()
+        };
+        access.status = match self.selected() {
+            Err(status) => status,
+            Ok(e)
+                if index <= 0
+                    || index > i64::from(e.size)
+                    || u64::from(e.base) + index as u64 > self.memory.len() as u64 =>
+            {
+                Status::BoundsError
+            }
+            Ok(e) => {
+                access.address = e.base + index as u32 - 1;
+                Status::Ok
+            }
+        };
+        access
+    }
+    /// Publishing/replacing a pager mapping invalidates its derived address.
+    /// Re-preparation is required even if a later refill restores that identity.
+    fn invalidate_prepared_slot(&mut self, slot: usize) {
+        if self.state.prepared.status == Status::Ok
+            && self.slot(self.state.prepared.reference) == slot
+        {
+            self.state.prepared.status = Status::NotResident;
+        }
+    }
+    /// Successful GC keeps the prepared reference as a root and relocates its
+    /// address on the same architectural commit as the pager bases.
+    pub fn relocate_prepared(&mut self) {
+        let p = self.state.prepared;
+        if p.status == Status::Ok {
+            match self.resolve(p.reference) {
+                Ok(e) => self.state.prepared.address = e.base + p.index as u32 - 1,
+                Err(status) => self.state.prepared.status = status,
+            }
+        }
     }
     /// Native command boundary: validate once, without constructing wire ports.
     /// Keep validation before the maintenance check, as in encode-then-execute.
@@ -216,6 +287,9 @@ impl Model {
             return Err(Status::IndexOverflow);
         }
         next.index = idx;
+        if c.prepare {
+            next.prepared = self.prepare_access(idx);
+        }
         let reg = match c.register {
             Register::None => before.index_reg,
             Register::Load => c.data.as_index(),
@@ -247,7 +321,7 @@ impl Model {
             c.read,
             Read::Size | Read::Type | Read::Base | Read::Representation | Read::Flags
         ) || c.expected_type.is_some()
-            || c.memory != Memory::None;
+            || (c.memory != Memory::None && !c.prepared);
         let old_entry = if needs_metadata {
             Some(self.selected()?)
         } else {
@@ -279,15 +353,25 @@ impl Model {
             Read::FreeIdentities => Word::raw((ID_MASK + 1).saturating_sub(self.next_identity))?,
         };
         if c.memory != Memory::None {
-            let mut e = old_entry.unwrap();
-            if before.index <= 0 || before.index > e.size as i64 {
+            let (mut e, index, prepared_address) = if c.prepared {
+                let p = before.prepared;
+                if p.status != Status::Ok {
+                    return Err(p.status);
+                }
+                (self.resolve(p.reference)?, p.index, Some(p.address))
+            } else {
+                (old_entry.unwrap(), before.index, None)
+            };
+            if index <= 0 || index > e.size as i64 {
                 return Err(Status::BoundsError);
             }
-            let address = e.base as u64 + before.index as u64 - 1;
+            let address = prepared_address
+                .map(u64::from)
+                .unwrap_or(e.base as u64 + index as u64 - 1);
             if address >= ADDRESS_LIMIT as u64 || address >= self.memory.len() as u64 {
                 return Err(Status::BoundsError);
             }
-            if c.memory == Memory::Read && before.index == 1 {
+            if c.memory == Memory::Read && index == 1 {
                 output = e.representation;
             } else {
                 *effect = Some(MemoryEffect {
@@ -303,12 +387,17 @@ impl Model {
                 } else {
                     self.memory[address as usize] = c.data;
                     e.modified = true;
-                    if before.index == 1 {
+                    if index == 1 {
                         e.representation = c.data;
                     }
                     let slot = self.slot(e.reference);
                     self.entries[slot] = Some(e);
-                    next.selected = Some(e);
+                    if next
+                        .selected
+                        .is_some_and(|selected| selected.reference == e.reference)
+                    {
+                        next.selected = Some(e);
+                    }
                     output = c.data;
                 }
             }
@@ -374,6 +463,7 @@ impl Model {
                     self.next_identity = self.next_identity.max(e.reference.identity()? + 1);
                     self.body_cursor = self.body_cursor.max(e.base + e.size);
                     let slot = self.slot(e.reference);
+                    self.invalidate_prepared_slot(slot);
                     self.entries[slot] = Some(e);
                     self.persistent_roots[slot] = !e.new;
                     if self
@@ -390,6 +480,7 @@ impl Model {
                     if !self.entries[slot].is_some_and(|e| e.reference == r) {
                         return Err(Status::NotResident);
                     }
+                    self.invalidate_prepared_slot(slot);
                     self.entries[slot] = None;
                 }
                 Service::CompactClass { code, class } => {

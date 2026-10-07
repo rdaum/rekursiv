@@ -292,8 +292,8 @@ bb_stage_mask:
     r=Q, rb=11, ldrb
     read=Vr, vr=3
     d=Object, page=Fetch
-    d=Register, ra=11, idx=Load
-    mem=Read
+    d=Register, ra=11, idx=Load, prepare
+    mem=Read, prepared
     d=Object, ldsym, r=Bus, rb=3, ldrb
     ra=2, flags
     seq=ConditionalJump, cc=!Zero, brch=bb_direct_merge
@@ -415,8 +415,8 @@ bb_merge_word:
     d=Object, r=Bus, rb=2, ldrb
     read=Vr, vr=3
     d=Object, page=Fetch
-    d=Register, ra=11, idx=Load
-    mem=Read
+    d=Register, ra=11, idx=Load, prepare
+    mem=Read, prepared
     d=Object, r=Bus, rb=3, ldrb
     d=Register, ra=13, seq=Bus
 bb_rule0:
@@ -508,7 +508,10 @@ bb_masked:
     ra=4, rb=3, alu=Xor, ldq
     r=Q, s=Register, rb=5, alu=And, ldq
     r=Q, s=Register, rb=3, alu=Xor, ldq
-    d=Q, mem=Write
+    ; The prepared destination survives Boolean/mask arithmetic. Complete its
+    ; write while the stack/NUMERIK units advance the rectangle traversal.
+    ; The next object access (or primitive exit) drains the pending write.
+    d=Q, mem=Write, prepared, launch
     d=24, esp=Bus
     estk=Read
     d=Estk, r=Bus, s=Branch, brch=1, alu=Sub, cin=One, flags
@@ -797,6 +800,8 @@ bb_refresh_next:
 bb_invalid:
     d=Register, ra=15, seq=Bus
 bb_success:
+    ; Release the prepared bitmap root after the final pending write completes.
+    idx=Clear, prepare
     read=Vr, vr=6
     d=Object, ldvr, vr=5
     d=27, esp=Bus

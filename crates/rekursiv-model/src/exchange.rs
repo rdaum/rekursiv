@@ -150,6 +150,11 @@ impl Model {
             {
                 self.state.selected = None;
             }
+            if keys.contains(&self.state.prepared.reference)
+                && self.state.prepared.status == Status::Ok
+            {
+                self.state.prepared.status = Status::NotResident;
+            }
             Ok(keys[0])
         })();
         if result.is_err() && begun {

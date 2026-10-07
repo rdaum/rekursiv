@@ -133,6 +133,10 @@ pub struct Command {
     pub index: Index,
     pub register: Register,
     pub memory: Memory,
+    /// Latch the address/checks for the OLD selection and NEW index.
+    pub prepare: bool,
+    /// Use the previously prepared access instead of selection/index.
+    pub prepared: bool,
     pub read: Read,
     pub load_vr: bool,
     pub vr: u8,
@@ -205,6 +209,8 @@ impl Command {
         ) && (self.index != Index::None
             || self.register != Register::None
             || self.memory != Memory::None
+            || self.prepare
+            || self.prepared
             || self.read != Read::None
             || self.load_vr
             || self.expected_type.is_some())
@@ -224,7 +230,8 @@ impl Command {
             return Err(Status::InvalidReference);
         }
         if self.vr > 7
-            || (self.pager != Pager::None && self.memory != Memory::None)
+            || (self.pager != Pager::None && self.memory != Memory::None && !self.prepared)
+            || (self.prepared && self.memory == Memory::None)
             || (self.pager != Pager::None && self.index == Index::Next)
             || (self.memory != Memory::None && self.read != Read::None)
         {
@@ -242,6 +249,8 @@ impl Command {
             index: self.index as u8,
             register: self.register as u8,
             memory: self.memory as u8,
+            prepare: self.prepare as u8,
+            prepared: self.prepared as u8,
             read: self.read as u8,
             load_vr: self.load_vr as u8,
             vr: self.vr,
@@ -257,11 +266,13 @@ impl fmt::Display for Command {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "pager={:?} index={:?} reg={:?} mem={:?} read={:?} vr={} load={} data={}",
+            "pager={:?} index={:?} reg={:?} mem={:?} prepare={} prepared={} read={:?} vr={} load={} data={}",
             self.pager,
             self.index,
             self.register,
             self.memory,
+            self.prepare,
+            self.prepared,
             self.read,
             self.vr,
             self.load_vr,
@@ -283,6 +294,8 @@ pub struct Ports {
     pub index: u8,
     pub register: u8,
     pub memory: u8,
+    pub prepare: u8,
+    pub prepared: u8,
     pub read: u8,
     pub load_vr: u8,
     pub vr: u8,
@@ -294,7 +307,12 @@ pub struct Ports {
 }
 impl Ports {
     pub fn decode(self) -> Result<Command, Status> {
-        if self.load_vr > 1 || self.check_type > 1 || self.alloc_scan > 1 {
+        if self.load_vr > 1
+            || self.check_type > 1
+            || self.alloc_scan > 1
+            || self.prepare > 1
+            || self.prepared > 1
+        {
             return Err(Status::BadCommand);
         }
         Command {
@@ -302,6 +320,8 @@ impl Ports {
             index: self.index.try_into()?,
             register: self.register.try_into()?,
             memory: self.memory.try_into()?,
+            prepare: self.prepare != 0,
+            prepared: self.prepared != 0,
             read: self.read.try_into()?,
             load_vr: self.load_vr != 0,
             alloc_size: self.alloc_size,
@@ -432,6 +452,8 @@ mod tests {
                 index: 5,
                 register: 4,
                 memory: 0,
+                prepare: 0,
+                prepared: 0,
                 read: 7,
                 load_vr: 1,
                 vr: 7,

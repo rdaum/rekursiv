@@ -5,12 +5,15 @@
 // pulse. A local validation error cannot issue an OBJEKT command or partially
 // update local state. OBJEKT keeps its separately documented transfer semantics.
 //
-// An object instruction moves through EXECUTE -> ISSUE -> WAIT_RESPONSE.
+// A blocking object instruction moves through EXECUTE -> ISSUE -> WAIT_RESPONSE.
 // EXECUTE validates every local effect and captures the chosen condition.
 // ISSUE holds the command stable until acceptance. WAIT_RESPONSE cannot reissue
 // it. Only a successful response retires local effects and advances the PC.
 // Capturing the condition before ISSUE prevents IRQ changes during backpressure
 // from changing the selected target. A synchronous, stable IRQ input is assumed.
+// LAUNCH returns from ISSUE to EXECUTE at acceptance, with a pending reply.
+// Local work can execute until an object barrier drains that reply. See the
+// async_* controls below for deferred-error and response-retention behavior.
 //
 // The 256-bit project format is described in rekursiv_control.svh. Book-derived
 // behavior and explicit project choices are explained beside the owning logic.
@@ -35,6 +38,7 @@ module logik #(
     output logic cmd_valid_o, input logic cmd_ready_i,
     output logic [3:0] pager_o, output logic [3:0] index_o,
     output logic [2:0] register_o, output logic [1:0] memory_o,
+    output logic prepare_o, prepared_o,
     output logic [3:0] read_o, output logic load_vr_o, output logic [2:0] vr_o,
     output logic [23:0] alloc_size_o, output logic alloc_scan_o,
     output logic [39:0] data_o, output logic check_type_o, output logic [39:0] expected_type_o,
@@ -70,6 +74,16 @@ module logik #(
     logic io_start, io_done, io_error;
     object_word_t bus_value, symbol, object_result;
     logic [3:0] object_status, service_code;
+    // Nonblocking prepared accesses have an explicit retirement contract:
+    // acceptance retires the issuing word; independent local instructions may
+    // follow. The first barrier drains/publishes the response before executing.
+    // Errors are deferred to that barrier, whose effects do not retire. This is
+    // not speculative execution: intervening arithmetic remains committed.
+    logic async_pending, async_done, async_barrier, async_join;
+    logic [3:0] async_status;
+    object_word_t async_data;
+    logic [3:0] async_completion_status;
+    object_word_t async_completion_data;
     logic [31:0] alu_result, register_a;
     // Recovery reuses this execution pipeline and NUMERIK, not a second CPU.
     // Entry follows a completed space failure or a standalone Collect request.
@@ -90,7 +104,7 @@ module logik #(
     assign response_valid=gc_active_o ? gc_response_i : rsp_valid_i;
     assign response_status=gc_active_o ? gc_status_i : rsp_status_i;
     assign response_data=gc_active_o ? gc_result_i : rsp_data_i;
-    assign gc_request=state==EXECUTE && !gc_active_o && !retried &&
+    assign gc_request=state==EXECUTE && !async_pending && !gc_active_o && !retried &&
         instruction.recovery==11 && local_fault==FAULT_NONE;
     assign gc_enter=gc_request || (state==WAIT_RESPONSE && !gc_active_o && rsp_valid_i &&
         rsp_status_i==11 && gc_enable_i && !retried &&
@@ -127,7 +141,13 @@ module logik #(
     assign service_o = state == SERVICE_BREAK;
     assign service_code_o = service_code;
     assign cmd_valid_o = state == ISSUE && !gc_active_o && !rst_i;
-    assign rsp_ready_o = state == WAIT_RESPONSE && !gc_active_o && !rst_i;
+    assign rsp_ready_o = (state == WAIT_RESPONSE || (async_pending && !async_done)) && !gc_active_o && !rst_i;
+    assign async_barrier=instruction.object_enable || instruction.bus_source==BUS_OBJECT ||
+        instruction.condition==CC_OBJECT_OK || instruction.device!=0 || instruction.recovery!=0 ||
+        instruction.halt || instruction.sequence_op==SEQ_SERVICE || local_fault!=FAULT_NONE;
+    assign async_completion_status=async_done ? async_status : rsp_status_i;
+    assign async_completion_data=async_done ? async_data : rsp_data_i;
+    assign async_join=state==EXECUTE && async_pending && async_barrier && (async_done || rsp_valid_i);
 
     logik_store #(.CODE_WORDS(CODE_WORDS), .NAM_WORDS(NAM_WORDS)) instruction_store (
         .clk_i(clk_i), .rst_i(rst_i), .retire_i(retire && !gc_active_o),
@@ -238,6 +258,9 @@ module logik #(
             instruction.s_source > SOURCE_BRANCH || instruction.carry > CARRY_ZERO_FLAG ||
             instruction.estk > ESTK_WIDE || instruction.cstk > CSTK_DECREMENT ||
             instruction.compact_code > 3) local_fault = FAULT_ENCODING;
+        else if(instruction.object_async && (!instruction.object_enable || !instruction.object_prepared ||
+            instruction.object_memory==0 || instruction.halt || instruction.sequence_op==SEQ_SERVICE || instruction.recovery!=0)) local_fault=FAULT_ENCODING;
+        else if(!instruction.object_enable && (instruction.object_prepare || instruction.object_prepared)) local_fault=FAULT_ENCODING;
         else if ((instruction.write_root || instruction.bus_source == BUS_ROOT) &&
             (gc_active_o || register_a >= 32)) local_fault = FAULT_ENCODING;
         else if (instruction.device > 2 ||
@@ -270,7 +293,10 @@ module logik #(
         unique case (state)
             HALTED: if (start) next_state = EXECUTE;
             EXECUTE: begin
-                if (local_fault != FAULT_NONE) next_state = HALTED;
+                if (async_pending && async_barrier) begin
+                    if(async_join && async_completion_status!=0) next_state=HALTED;
+                end
+                else if (local_fault != FAULT_NONE) next_state = HALTED;
                 else if (gc_request) next_state = EXECUTE;
                 // HOLD freezes the whole instruction, unconditionally. Relative
                 // zero is different: it retires effects and then revisits itself.
@@ -290,7 +316,10 @@ module logik #(
                 retire=local_fault==FAULT_NONE;
                 if(local_fault!=FAULT_NONE) next_state=HALTED;
             end
-            ISSUE: if (gc_active_o ? gc_ready_i : cmd_ready_i) next_state = WAIT_RESPONSE;
+            ISSUE: if (gc_active_o ? gc_ready_i : cmd_ready_i) begin
+                if(instruction.object_async && !gc_active_o) begin next_state=EXECUTE; retire=1; end
+                else next_state = WAIT_RESPONSE;
+            end
             WAIT_RESPONSE: if (response_valid) begin
                 if(gc_enter) next_state=EXECUTE;
                 else if (response_status != 0) next_state = HALTED;
@@ -324,6 +353,7 @@ module logik #(
             symbol <= '0;
             object_result <= '0;
             object_status <= '0;
+            async_pending<=0; async_done<=0; async_status<=0; async_data<=0;
             service_code <= '0;
         end else begin
             state <= next_state;
@@ -331,8 +361,19 @@ module logik #(
             if (boot_fault) fault_o <= FAULT_ENCODING;
             if (start) begin fault_o <= FAULT_NONE; retried<=0; end
             if (state == EXECUTE) begin
-                if (local_fault != FAULT_NONE) fault_o <= local_fault;
+                if (local_fault != FAULT_NONE && !async_pending) fault_o <= local_fault;
                 else if (next_state == ISSUE || next_state == NUMERIC_WAIT || next_state == DEVICE_WAIT) issued_condition <= (!gc_active_o && retried) ? saved_issued_condition : condition_value;
+            end
+            if(state==ISSUE && cmd_ready_i && instruction.object_async && !gc_active_o) begin
+                async_pending<=1; async_done<=0;
+            end
+            if(async_pending && !async_done && rsp_valid_i) begin
+                async_done<=1; async_status<=rsp_status_i; async_data<=rsp_data_i;
+            end
+            if(async_join) begin
+                async_pending<=0; async_done<=0; last_status_o<=async_completion_status;
+                if(async_completion_status!=0) fault_o<=FAULT_OBJECT;
+                else begin object_result<=async_completion_data; object_status<=async_completion_status; end
             end
             if (state == DEVICE_WAIT && io_done && io_error) fault_o <= FAULT_DEVICE;
             if (state == WAIT_RESPONSE && response_valid) begin
@@ -368,6 +409,8 @@ module logik #(
     assign index_o = instruction.object_index;
     assign register_o = instruction.object_register;
     assign memory_o = instruction.object_memory;
+    assign prepare_o = instruction.object_prepare;
+    assign prepared_o = instruction.object_prepared;
     assign read_o = instruction.object_read;
     assign load_vr_o = instruction.load_value_register;
     assign vr_o = instruction.value_register;

@@ -1,5 +1,43 @@
 # OBJEKT and processor validation
 
+## OBJEKT address pipeline
+
+The pipeline tests execute the same control words in the native emulator and RTL. They compare
+processor retirements, pager metadata, prepared registers, RAM contents, and command traffic.
+Directed cases cover new-index forwarding, selection changes, first-component cache coherence,
+deferred bounds errors, memory errors, and reset during stalled accesses. Refill and exchange tests
+verify that failed transfers preserve preparation and successful mapping changes invalidate it. GC
+tests retain an object whose only root is the prepared reference, then read it through its relocated
+address.
+
+`launch` tests verify arithmetic retirement before memory completion and response retention during
+floating-point execution. Object reads, object commands, condition checks, devices, collection,
+halt, and service breaks act as barriers. A local validation fault drains the pending command first.
+An object error takes precedence over that local fault. A failed launched write preserves
+intervening arithmetic but suppresses the barrier's effects. Command and response backpressure do
+not repeat writes or retirements.
+
+The four-word [stream program](../microcode/pipeline.uc) produces identical final state with and
+without `launch`. The RTL test measures these complete-program cycle counts, including allocation
+and initialization:
+
+| RAM request delay / latency / response stall | Blocking | Pipelined |
+| -------------------------------------------- | -------: | --------: |
+| 0 / 0 / 0                                    |       96 |        87 |
+| 4 / 13 / 5                                   |      335 |       320 |
+
+The harness also applies periodic command backpressure. These counts demonstrate latency overlap,
+not FPGA clock frequency or whole-image speedup. BitBlt uses launched destination writes during
+rectangle traversal on both its direct and staged paths.
+
+Focused checks:
+
+```sh
+cargo test --locked -p rekursiv-sim --test pipeline -- --test-threads=1
+cargo test --locked -p rekursiv-emulator --test pipeline -- --nocapture
+cargo test --locked -p rekursiv-sim --test protocol
+```
+
 ## Machine collector and text assembler
 
 The current collector executes ordinary LOGIK microinstructions from `microcode/ram-collector.uc`.
@@ -69,35 +107,39 @@ work.
 ## Smalltalk bytecode execution
 
 `cargo test --locked -p rekursiv-smalltalk --test execution` compares guest instruction boundaries
-against an independent test interpreter. The target executes standalone microcode on actual RTL.
-The checks cover stack and variable operations, branches, integer arithmetic, explicit failure,
-and context-root retention during machine collection.
+against an independent test interpreter. The target executes standalone microcode on actual RTL. The
+checks cover stack and variable operations, branches, integer arithmetic, explicit failure, and
+context-root retention during machine collection.
 `cargo test --locked -p rekursiv-smalltalk --test sends` covers lookup, activation, normal returns,
 argument transfer, quick methods, primitive fallback, and guest allocation under memory pressure.
-See the [execution contract](smalltalk-execution.md).
-`scripts/check-smalltalk-image.sh` also executes original methods from the pinned Xerox image, including a send to `Behavior>>basicNew`.
+See the [execution contract](smalltalk-execution.md). `scripts/check-smalltalk-image.sh` also
+executes original methods from the pinned Xerox image, including a send to `Behavior>>basicNew`.
 
 ### Smalltalk stage 4 acceptance
 
-The stage 4 requirements cover interpreter/runtime execution and device interface definitions.
-The runtime suite and full pinned-image check pass for this checkpoint.
-The latter includes all eight original-method send tests, saved-image startup, complete conversion verification, and primitive inventory generation.
-The [primitive inventory](smalltalk-primitives.md) separates implemented primitives, tested guest fallbacks, and operations assigned to stage 5 image integration.
-The [method representation contract](smalltalk-image.md#physical-bodies-and-indexing) records the typed literal access policy and its image-port consequences.
+The stage 4 requirements cover interpreter/runtime execution and device interface definitions. The
+runtime suite and full pinned-image check pass for this checkpoint. The latter includes all eight
+original-method send tests, saved-image startup, complete conversion verification, and primitive
+inventory generation. The [primitive inventory](smalltalk-primitives.md) separates implemented
+primitives, tested guest fallbacks, and operations assigned to stage 5 image integration. The
+[method representation contract](smalltalk-image.md#physical-bodies-and-indexing) records the typed
+literal access policy and its image-port consequences.
 
-| Requirement | Evidence |
-| --- | --- |
-| Bytecodes, blocks, returns, and failed sends | `tests/execution.rs` compares guest instruction boundaries. `tests/sends.rs` checks block reuse, escaped homes, non-local return, `cannotReturn:`, `doesNotUnderstand:`, and `mustBeBoolean`. |
-| Primitive execution and failure | `tests/sends.rs` covers integer/Float arithmetic, indexing, streams, allocation, dynamic sends, identity conversion/enumeration, and `become:`. Rejected calls preserve the receiver and arguments. Original LargeInteger and replacement fallbacks execute on RTL. |
-| Method construction and access | Directed tests check immutable headers and 37-bit literals. The original `needsStack:encoder:` allocates, copies, and exchanges a method across paging and collection, preserving code and source bytes. |
-| Scheduling, priorities, and semaphores | Guest tests check priority preemption, FIFO ordering, excess signals, waits, suspension, idle wakeup, repeated input, simultaneous timer/input delivery, and low-space notification. |
-| Image primitive accounting and startup | Offline inventory tests check every declared primitive and its class/selector binding. The saved-image RTL test matches all 499 bytecodes in Xerox's `trace2`, then reaches the first BitBlt call at boundary 2,176. |
-| Device interfaces | [The register contract](devices.md) specifies discovery, events, clocks, input, cursor/display upload, and block request/completion fields. Generic LOGIK tests cover delayed replies, errors, reset, captured branch conditions, and one-time retirement. |
-| Collection, paging, and device delays | Guest fixtures force allocation/refill recovery and apply request, memory, and reply delays. The saved-image startup performs three collections and publishes both display registrations. |
-| Execution stays on the machine | `execute_machine` checks that the host service count does not change after boot. The startup harness checks the same invariant. The Rust oracle observes microinstructions and object transactions; it supplies no guest results or scheduling decisions. |
+| Requirement                                  | Evidence                                                                                                                                                                                                                                                            |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bytecodes, blocks, returns, and failed sends | `tests/execution.rs` compares guest instruction boundaries. `tests/sends.rs` checks block reuse, escaped homes, non-local return, `cannotReturn:`, `doesNotUnderstand:`, and `mustBeBoolean`.                                                                       |
+| Primitive execution and failure              | `tests/sends.rs` covers integer/Float arithmetic, indexing, streams, allocation, dynamic sends, identity conversion/enumeration, and `become:`. Rejected calls preserve the receiver and arguments. Original LargeInteger and replacement fallbacks execute on RTL. |
+| Method construction and access               | Directed tests check immutable headers and 37-bit literals. The original `needsStack:encoder:` allocates, copies, and exchanges a method across paging and collection, preserving code and source bytes.                                                            |
+| Scheduling, priorities, and semaphores       | Guest tests check priority preemption, FIFO ordering, excess signals, waits, suspension, idle wakeup, repeated input, simultaneous timer/input delivery, and low-space notification.                                                                                |
+| Image primitive accounting and startup       | Offline inventory tests check every declared primitive and its class/selector binding. The saved-image RTL test matches all 499 bytecodes in Xerox's `trace2`, then reaches the first BitBlt call at boundary 2,176.                                                |
+| Device interfaces                            | [The register contract](devices.md) specifies discovery, events, clocks, input, cursor/display upload, and block request/completion fields. Generic LOGIK tests cover delayed replies, errors, reset, captured branch conditions, and one-time retirement.          |
+| Collection, paging, and device delays        | Guest fixtures force allocation/refill recovery and apply request, memory, and reply delays. The saved-image startup performs three collections and publishes both display registrations.                                                                           |
+| Execution stays on the machine               | `execute_machine` checks that the host service count does not change after boot. The startup harness checks the same invariant. The Rust oracle observes microinstructions and object transactions; it supplies no guest results or scheduling decisions.           |
 
-The guest test files are in `crates/rekursiv-smalltalk/tests/`. Generic transport, directory, exchange, and floating-point tests are in `crates/rekursiv-sim/tests/`.
-NUMERIK's independent numerical checks and synthesis evidence are recorded in [the floating-point contract](numerik-floating-point.md#validation).
+The guest test files are in `crates/rekursiv-smalltalk/tests/`. Generic transport, directory,
+exchange, and floating-point tests are in `crates/rekursiv-sim/tests/`. NUMERIK's independent
+numerical checks and synthesis evidence are recorded in
+[the floating-point contract](numerik-floating-point.md#validation).
 
 Reproduce the runtime and pinned-image checks with:
 
@@ -106,53 +148,58 @@ cargo test --locked -p rekursiv-smalltalk
 bash scripts/check-smalltalk-image.sh
 ```
 
-The startup observer stops before executing primitive 96. It does not supply a BitBlt result or bypass the guest call.
-Successful storage transfers, actual snapshots, drawing, interactive presentation, and startup beyond that boundary require stage 5 integration.
-The missing-storage test executes the original Alto fallback and checks its error field, unchanged buffer, and untouched semaphore.
-It establishes failure behavior, not a functioning disk implementation.
+The startup observer stops before executing primitive 96. It does not supply a BitBlt result or
+bypass the guest call. Successful storage transfers, actual snapshots, drawing, interactive
+presentation, and startup beyond that boundary require stage 5 integration. The missing-storage test
+executes the original Alto fallback and checks its error field, unchanged buffer, and untouched
+semaphore. It establishes failure behavior, not a functioning disk implementation.
 
 ## FPGA resource estimate
 
-The full-size synthesis flow keeps 8,192 control words. Generic synthesis retains inferred memories, while `scripts/synth-area.sh` maps the complete wrapper to UltraScale+ primitives.
-The area run includes integer and floating-point NUMERIK, LOGIK, OBJEKT, and collector hardware with 16 pager slots.
-Object RAM, backing storage, DDR controllers, PCIe, and board peripherals are external to this wrapper.
+The full-size synthesis flow keeps 8,192 control words. Generic synthesis retains inferred memories,
+while `scripts/synth-area.sh` maps the complete wrapper to UltraScale+ primitives. The area run
+includes integer and floating-point NUMERIK, LOGIK, OBJEKT, and collector hardware with 16 pager
+slots. Object RAM, backing storage, DDR controllers, PCIe, and board peripherals are external to
+this wrapper.
 
-Control-store validity uses eight lane bits per word and a per-word completeness check before read-address selection.
-Completeness bits are grouped into 256-word banks for address selection.
-This avoids whole-vector write masks and eight-bit reads from a 65,536-bit validity vector during synthesis.
-The banks also bound Verilator concatenations and Yosys address decoders.
-RTL regression checks cover partial programming, repeated lanes, reset, and the highest control-store address.
+Control-store validity uses eight lane bits per word and a per-word completeness check before
+read-address selection. Completeness bits are grouped into 256-word banks for address selection.
+This avoids whole-vector write masks and eight-bit reads from a 65,536-bit validity vector during
+synthesis. The banks also bound Verilator concatenations and Yosys address decoders. RTL regression
+checks cover partial programming, repeated lanes, reset, and the highest control-store address.
 
 ### Full 8,192-word configuration
 
-Yosys 0.33 maps the complete `objekt_tb` wrapper with `synth_xilinx -family xcup -noiopad`.
-The configuration has 16 pager entries, 32 words per stack, 256 NAM words, and 1,024 opcode-map entries.
-The external memory capacity parameter is 16,777,216 object words; the memory itself is outside the synthesized design.
+Yosys 0.33 maps the complete `objekt_tb` wrapper with `synth_xilinx -family xcup -noiopad`. The
+configuration has 16 pager entries, 32 words per stack, 256 NAM words, and 1,024 opcode-map entries.
+The external memory capacity parameter is 16,777,216 object words; the memory itself is outside the
+synthesized design.
 
-| Block | Logic LUT primitives |
-| --- | ---: |
-| OBJEKT, including collector hardware | 24,418 |
-| Control store, NAM, opcode map, and access logic | 108,645 |
-| NUMERIK, including binary32 floating point | 6,559 |
-| Evaluation and control stacks | 2,357 |
-| Sequencer, device channel, and integration | 1,427 |
-| **Total** | **143,406** |
+| Block                                            | Logic LUT primitives |
+| ------------------------------------------------ | -------------------: |
+| OBJEKT, including collector hardware             |               24,418 |
+| Control store, NAM, opcode map, and access logic |              108,645 |
+| NUMERIK, including binary32 floating point       |                6,559 |
+| Evaluation and control stacks                    |                2,357 |
+| Sequencer, device channel, and integration       |                1,427 |
+| **Total**                                        |          **143,406** |
 
-The mapped design also contains 78,124 flip-flops, 10 DSP48E2 blocks, one RAMB36E2, and one RAMB18E2.
-Dedicated routing logic includes 1,183 CARRY4, 21,190 MUXF7, 10,085 MUXF8, and 661 MUXF9 primitives.
-Logic LUT counts sum LUT1 through LUT6 cells before placement and packing.
+The mapped design also contains 78,124 flip-flops, 10 DSP48E2 blocks, one RAMB36E2, and one
+RAMB18E2. Dedicated routing logic includes 1,183 CARRY4, 21,190 MUXF7, 10,085 MUXF8, and 661 MUXF9
+primitives. Logic LUT counts sum LUT1 through LUT6 cells before placement and packing.
 
-The control store adds **53,760 RAM64M8 primitives**, separate from those logic LUTs.
-A complete [RAM64M8 primitive](https://docs.amd.com/r/en-US/ug974-vivado-ultrascale-libraries/RAM64M8) occupies eight LUTs.
-Multiplying the raw macro count gives 430,080 nominal RAM LUTs, or 573,486 LUT equivalents including logic.
-However, this netlist drives only the `DIG` data input of each macro; the other data inputs are undefined and their outputs are unused.
-There are 53,760 active 64-bit memory columns, giving 197,166 LUT equivalents if all unused macro capacity is removed.
-The raw eight-LUT macro total includes that unused capacity.
-Vendor implementation must establish whether it trims and repacks these macros; neither count is a placed resource total or proof of device fit.
+The control store adds **53,760 RAM64M8 primitives**, separate from those logic LUTs. A complete
+[RAM64M8 primitive](https://docs.amd.com/r/en-US/ug974-vivado-ultrascale-libraries/RAM64M8) occupies
+eight LUTs. Multiplying the raw macro count gives 430,080 nominal RAM LUTs, or 573,486 LUT
+equivalents including logic. However, this netlist drives only the `DIG` data input of each macro;
+the other data inputs are undefined and their outputs are unused. There are 53,760 active 64-bit
+memory columns, giving 197,166 LUT equivalents if all unused macro capacity is removed. The raw
+eight-LUT macro total includes that unused capacity. Vendor implementation must establish whether it
+trims and repacks these macros; neither count is a placed resource total or proof of device fit.
 
-The 256-bit control store has asynchronous instruction, debug, and collector reads.
-These reads produce replicated distributed memory and large address-selection networks.
-Changing the read schedule to use block RAM is the main area-saving opportunity; this estimate assumes no such change.
+The 256-bit control store has asynchronous instruction, debug, and collector reads. These reads
+produce replicated distributed memory and large address-selection networks. Changing the read
+schedule to use block RAM is the main area-saving opportunity; this estimate assumes no such change.
 There is no placement, routing, or timing-closure result yet.
 
 Reproduce the mapping with:
@@ -161,18 +208,20 @@ Reproduce the mapping with:
 scripts/synth-area.sh
 ```
 
-The script writes `artifacts/rekursiv-xcup.log` and `artifacts/rekursiv-xcup.json`.
-The measured mapping completed in 9 minutes 35 seconds with a peak resident set of 3.34 GiB.
-Yosys `check -assert` reported zero problems.
+The script writes `artifacts/rekursiv-xcup.log` and `artifacts/rekursiv-xcup.json`. The measured
+mapping completed in 9 minutes 35 seconds with a peak resident set of 3.34 GiB. Yosys
+`check -assert` reported zero problems.
 
-The validity implementation passes 229 release-profile workspace tests, with 15 explicitly ignored tests.
-Formatting, Clippy with warnings denied, RTL lint, generic synthesis, floating-point synthesis, and delayed-I/O examples also pass locally.
-The examples include machine collection without host recovery commands.
+The validity implementation passes 229 release-profile workspace tests, with 15 explicitly ignored
+tests. Formatting, Clippy with warnings denied, RTL lint, generic synthesis, floating-point
+synthesis, and delayed-I/O examples also pass locally. The examples include machine collection
+without host recovery commands.
 
 ### Earlier 256-word estimate
 
 The following estimate uses the original 256-word control store. The current wrapper has 8192 words.
-These figures are not a current resource estimate. `scripts/synth.sh` now checks the 8192-word LOGIK configuration.
+These figures are not a current resource estimate. `scripts/synth.sh` now checks the 8192-word LOGIK
+configuration.
 
 On 2026-10-06, Yosys 0.33 mapped the combined `objekt_tb` wrapper to Xilinx 7-series primitives. The
 configuration had 16 pager entries, 32 words per stack, 256 microinstructions, 256 NAM words, and
@@ -350,24 +399,26 @@ outside the implemented scope.
 
 ## Native microcode emulator
 
-The [native emulator](emulator.md) executes the same assembled programs without Verilator.
-Its differential regression compares CPU and object state with RTL after each mutator retirement across paging and five collections.
-Collector execution uses individual privileged controls. The graph-walking Rust collector remains a separate oracle.
-The shared peripheral models preserve the existing RTL handshake tests.
+The [native emulator](emulator.md) executes the same assembled programs without Verilator. Its
+differential regression compares CPU and object state with RTL after each mutator retirement across
+paging and five collections. Collector execution uses individual privileged controls. The
+graph-walking Rust collector remains a separate oracle. The shared peripheral models preserve the
+existing RTL handshake tests.
 
-`cargo test --locked -p rekursiv-emulator` also covers failed device writes, recovery failure, framebuffer clipping, keyboard mapping, and microcode-driven input/display changes.
-The first ignored native startup test matches all 499 Xerox trace bytecodes and the RTL checkpoint before BitBlt.
-A second runs through 32 successful BitBlts, reaching 9,870 bytecode boundaries, 24 collections, and 33 display publications.
-Directed BitBlt tests compare native and RTL results with a pixel-level oracle for all 16 rules.
-They cover clipping, word alignment, overlapping/shared bitmaps, nil sources, halftones, and invalid operands.
-Both executors also test registered cursor/display refresh and unchanged destinations on failure.
-Small semispaces force collection; RTL memory and device responses include delays.
-`scripts/check-smalltalk-image.sh` includes that test.
+`cargo test --locked -p rekursiv-emulator` also covers failed device writes, recovery failure,
+framebuffer clipping, keyboard mapping, and microcode-driven input/display changes. The first
+ignored native startup test matches all 499 Xerox trace bytecodes and the RTL checkpoint before
+BitBlt. A second runs through 32 successful BitBlts, reaching 9,870 bytecode boundaries, 24
+collections, and 33 display publications. Directed BitBlt tests compare native and RTL results with
+a pixel-level oracle for all 16 rules. They cover clipping, word alignment, overlapping/shared
+bitmaps, nil sources, halftones, and invalid operands. Both executors also test registered
+cursor/display refresh and unchanged destinations on failure. Small semispaces force collection; RTL
+memory and device responses include delays. `scripts/check-smalltalk-image.sh` includes that test.
 
-A native X11 smoke run also exercised keyboard input, mouse-button input, and cursor movement through the window.
-Every screenshot pixel matched the published scanout plus the cursor at the expected coordinates.
-The emulator does not validate FPGA timing, and shared architectural semantics limit independence from the Rust RTL oracle.
-
+A native X11 smoke run also exercised keyboard input, mouse-button input, and cursor movement
+through the window. Every screenshot pixel matched the published scanout plus the cursor at the
+expected coordinates. The emulator does not validate FPGA timing, and shared architectural semantics
+limit independence from the Rust RTL oracle.
 
 ### BitBlt rendering measurements
 
@@ -378,130 +429,154 @@ Both versions produce 33 display publications and this SHA-256 of the little-end
 5c88b1fc4cd078c333f200091c7dab230cbbb9a0ba8a3b35e222a26b43fa9115
 ```
 
-| Measurement | Before | After |
-| --- | ---: | ---: |
-| Mutator microinstructions | 22,163,025 | 6,883,624 |
-| Collector microinstructions | 2,329,356 | 2,148,003 |
-| OBJEKT commands | 5,033,755 | 1,320,860 |
-| Device requests | 307,689 | 34,562 |
-| Collections | 29 | 24 |
-| Observed native execution time | 4.38 s | 1.47 s |
+| Measurement                    |     Before |     After |
+| ------------------------------ | ---------: | --------: |
+| Mutator microinstructions      | 22,163,025 | 6,883,624 |
+| Collector microinstructions    |  2,329,356 | 2,148,003 |
+| OBJEKT commands                |  5,033,755 | 1,320,860 |
+| Device requests                |    307,689 |    34,562 |
+| Collections                    |         29 |        24 |
+| Observed native execution time |     4.38 s |    1.47 s |
 
-These release-build timings include startup and collection, with 131,072 RAM words. They exclude image conversion and compilation.
-The elapsed times are individual local measurements, not FPGA timing estimates.
-The new profile has 8,192 control words, compared with 4,096 before. Its collector therefore scans more control-store roots per collection.
-The regression checks the framebuffer checksum and bounds instruction and device-request counts. It does not assert wall time.
+These release-build timings include startup and collection, with 131,072 RAM words. They exclude
+image conversion and compilation. The elapsed times are individual local measurements, not FPGA
+timing estimates. The new profile has 8,192 control words, compared with 4,096 before. Its collector
+therefore scans more control-store roots per collection. The regression checks the framebuffer
+checksum and bounds instruction and device-request counts. It does not assert wall time.
 
-Directed native and RTL tests also cover sparse uploads, pixel-group edges, changed geometry, alias geometry, and atomic publication failure.
-A two-row, one-pixel-wide copy uploads two pixel words after registration, regardless of the full framebuffer size.
-Disjoint bitmap copies allocate no scratch object. Aliased source or halftone storage still uses a snapshot.
-The larger control-store profile passes RTL lint and the RTL regressions.
-OBJEKT generic synthesis passes. The 8,192-word LOGIK synthesis run was stopped after nine minutes during process lowering; its result remains unverified.
-These checks do not establish board timing or a mapped LUT count.
+Directed native and RTL tests also cover sparse uploads, pixel-group edges, changed geometry, alias
+geometry, and atomic publication failure. A two-row, one-pixel-wide copy uploads two pixel words
+after registration, regardless of the full framebuffer size. Disjoint bitmap copies allocate no
+scratch object. Aliased source or halftone storage still uses a snapshot. The larger control-store
+profile passes RTL lint and the RTL regressions. OBJEKT generic synthesis passes. The 8,192-word
+LOGIK synthesis run was stopped after nine minutes during process lowering; its result remains
+unverified. These checks do not establish board timing or a mapped LUT count.
 
-Native profiling also found redundant control-word encoding on every instruction fetch.
-Execution now checks the same constraints without constructing the wire representation.
-Three paired release runs of 20 million steps took 2.405–2.484 seconds before and 2.051–2.138 seconds after this change.
-These runs used the original image, 1,048,576 RAM words, and headless presentation.
-They produced identical framebuffers, final micro-PCs, instruction counts, collection counts, and device-request counts.
-The window loop also removes the sleep after its former 8 ms execution budget.
-It now executes for approximately 16.7 ms before presentation. Interactive performance for this change remains unmeasured.
+Native profiling also found redundant control-word encoding on every instruction fetch. Execution
+now checks the same constraints without constructing the wire representation. Three paired release
+runs of 20 million steps took 2.405–2.484 seconds before and 2.051–2.138 seconds after this change.
+These runs used the original image, 1,048,576 RAM words, and headless presentation. They produced
+identical framebuffers, final micro-PCs, instruction counts, collection counts, and device-request
+counts. The window loop also removes the sleep after its former 8 ms execution budget. It now
+executes for approximately 16.7 ms before presentation. Interactive performance for this change
+remains unmeasured.
 
 ### Proactive collection and longer execution
 
-Native and RTL regressions exercise the standalone `gc=Collect` request through the existing collector microcode.
-They cover empty heaps, repeated requests, saved CPU state, and live objects that leave no room for a stale allocation reservation.
-Requests without a collector, nested requests, and malformed control words fault without issuing mutator commands.
-Smalltalk tests cover reclaimable pressure, genuine low-space notification, strict thresholds, rearming, and scheduler preemption.
-The reclaimable-pressure test verifies that the notification remains armed after collection restores sufficient space.
-Workspace tests, original-image tests, RTL lint, and Clippy pass.
-Generic synthesis passes for OBJEKT and a reduced LOGIK profile with 32 control words, four stack words, and 16 NAM words.
-The full 8,192-word profile remains covered by RTL simulation and lint, without a completed synthesis result.
+Native and RTL regressions exercise the standalone `gc=Collect` request through the existing
+collector microcode. They cover empty heaps, repeated requests, saved CPU state, and live objects
+that leave no room for a stale allocation reservation. Requests without a collector, nested
+requests, and malformed control words fault without issuing mutator commands. Smalltalk tests cover
+reclaimable pressure, genuine low-space notification, strict thresholds, rearming, and scheduler
+preemption. The reclaimable-pressure test verifies that the notification remains armed after
+collection restores sufficient space. Workspace tests, original-image tests, RTL lint, and Clippy
+pass. Generic synthesis passes for OBJEKT and a reduced LOGIK profile with 32 control words, four
+stack words, and 16 NAM words. The full 8,192-word profile remains covered by RTL simulation and
+lint, without a completed synthesis result.
 
-The original-image regression executes 60 million mutator instructions with 1,048,576 RAM words.
-It completes 769 BitBlts and 27 proactive collections without reaching `low_space_signal`.
-A separate 200-million-step run executes 177,560,709 mutator instructions and 22,438,887 collector instructions.
-It completes 202 collections, including 152 proactive requests, with no low-space notification.
-Its desktop framebuffer matches the earlier frame at the premature warning boundary.
+The original-image regression executes 60 million mutator instructions with 1,048,576 RAM words. It
+completes 769 BitBlts and 27 proactive collections without reaching `low_space_signal`. A separate
+200-million-step run executes 177,560,709 mutator instructions and 22,438,887 collector
+instructions. It completes 202 collections, including 152 proactive requests, with no low-space
+notification. Its desktop framebuffer matches the earlier frame at the premature warning boundary.
 
 Profiling that longer run attributes 31% of sampled native CPU cycles to instruction preparation.
-Memory copying accounts for another 10%, with 3% attributed separately to CPU-state cloning.
-Within microcode, rebuilding threshold chunks consumes 18,135,870 instructions, about 10% of mutator execution, before other low-space checks.
-Context handling and method lookup are also prominent. Guest bytecode counts include point/rectangle operations and controller searches.
-These observations identify optimization candidates, not measured gains from changes to those paths.
+Memory copying accounts for another 10%, with 3% attributed separately to CPU-state cloning. Within
+microcode, rebuilding threshold chunks consumes 18,135,870 instructions, about 10% of mutator
+execution, before other low-space checks. Context handling and method lookup are also prominent.
+Guest bytecode counts include point/rectangle operations and controller searches. These observations
+identify optimization candidates, not measured gains from changes to those paths.
 
-The emulator now reports retired microinstructions per second against active execution time and total elapsed time.
-A local 20-million-step headless run reported approximately 9.52 million microinstructions/s, including collector execution.
-Zero-step and Hold-only CLI checks report zero retired instructions/s. Window-title throughput remains unverified on a live display in this session.
+The emulator now reports retired microinstructions per second against active execution time and
+total elapsed time. A local 20-million-step headless run reported approximately 9.52 million
+microinstructions/s, including collector execution. Zero-step and Hold-only CLI checks report zero
+retired instructions/s. Window-title throughput remains unverified on a live display in this
+session.
 
 ### Native pending writes
 
-The native executor now prepares pending writes instead of copying the whole processor per instruction.
-Directed tests check simultaneous register, root, stack, pointer, and scalar destinations after success and after local, object, or device failure.
-All 25 processor RTL tests and four original-image emulator tests pass, including the Xerox bytecode trace and low-space recovery.
+The native executor now prepares pending writes instead of copying the whole processor per
+instruction. Directed tests check simultaneous register, root, stack, pointer, and scalar
+destinations after success and after local, object, or device failure. All 25 processor RTL tests
+and four original-image emulator tests pass, including the Xerox bytecode trace and low-space
+recovery.
 
-A deterministic headless benchmark uses the original image, 16,777,216 memory words, and release builds on a Cortex-X925 pinned to CPU 5.
-It measures 50 million startup steps, then 50 million steps after an equal warmup, excluding image loading.
-Across three runs, median throughput increases from 8.46 to 10.27 million microinstructions/s at startup and from 8.68 to 10.70 million afterward.
-Both intervals preserve their final PCs, retired counts, collections, object commands, device requests, and framebuffer hash.
-These rates describe native execution without external input; they do not predict FPGA or interactive display performance.
+A deterministic headless benchmark uses the original image, 16,777,216 memory words, and release
+builds on a Cortex-X925 pinned to CPU 5. It measures 50 million startup steps, then 50 million steps
+after an equal warmup, excluding image loading. Across three runs, median throughput increases from
+8.46 to 10.27 million microinstructions/s at startup and from 8.68 to 10.70 million afterward. Both
+intervals preserve their final PCs, retired counts, collections, object commands, device requests,
+and framebuffer hash. These rates describe native execution without external input; they do not
+predict FPGA or interactive display performance.
 
 ### Low-space microcode scheduling
 
-Threshold reconstruction and counter sampling now take 14 control words instead of 34 per full check.
-Parallel operations consume the previous object reply while reading the next chunk; the word threshold also omits unused high bits.
-The registration remains an ordinary Array of tagged SmallInteger chunks. Notification, collection, and scheduler decisions remain in microcode.
-RTL tests cover equality and crossing at chunk boundaries through 37 bits, plus cancellation, rearming, preemption, mutation, and repeated collection.
-All 89 enabled send/primitive tests and four original-image emulator tests pass.
+Threshold reconstruction and counter sampling now take 14 control words instead of 34 per full
+check. Parallel operations consume the previous object reply while reading the next chunk; the word
+threshold also omits unused high bits. The registration remains an ordinary Array of tagged
+SmallInteger chunks. Notification, collection, and scheduler decisions remain in microcode. RTL
+tests cover equality and crossing at chunk boundaries through 37 bits, plus cancellation, rearming,
+preemption, mutation, and repeated collection. All 89 enabled send/primitive tests and four
+original-image emulator tests pass.
 
-An equal-work comparison uses the same native executor for both microcode versions, pinned to CPU 5 with 16,777,216 memory words.
-It executes 200,000 startup bytecode boundaries, followed by 200,000 more, with no input and a fixed guest clock to isolate execution work.
-Both versions produce identical bytecode-trace and framebuffer hashes, 769 startup BitBlts, and the same collection counts.
-Post-startup mutator instructions fall from 47,060,397 to 43,060,337, an 8.5% reduction.
-Across three alternating runs, median post-startup time falls from 4.407 to 4.172 seconds, increasing guest throughput by 5.6%.
-Startup time falls from 5.510 to 5.446 seconds, about 1.2%; most early drawing happens before low-space registration.
-The separate original-image regression still uses the advancing clock and reaches 60 million mutator instructions without a premature low-space notification.
+An equal-work comparison uses the same native executor for both microcode versions, pinned to CPU 5
+with 16,777,216 memory words. It executes 200,000 startup bytecode boundaries, followed by 200,000
+more, with no input and a fixed guest clock to isolate execution work. Both versions produce
+identical bytecode-trace and framebuffer hashes, 769 startup BitBlts, and the same collection
+counts. Post-startup mutator instructions fall from 47,060,397 to 43,060,337, an 8.5% reduction.
+Across three alternating runs, median post-startup time falls from 4.407 to 4.172 seconds,
+increasing guest throughput by 5.6%. Startup time falls from 5.510 to 5.446 seconds, about 1.2%;
+most early drawing happens before low-space registration. The separate original-image regression
+still uses the advancing clock and reaches 60 million mutator instructions without a premature
+low-space notification.
 
 ### Direct native object commands
 
-Native OBJEKT execution validates a command without encoding and decoding wire fields.
-The external port path still decodes and validates requests; both paths share dispatch, memory effects, and backing-store operations.
-Tests compare complete state and transaction histories across allocation, dirty eviction, refill, exchange, directory lookup, and memory faults.
-Invalid-command tests also preserve validation and maintenance-lock error priority.
-All 112 enabled model, emulator, and RTL tests pass, plus the four original-image emulator tests. Clippy and formatting checks pass.
+Native OBJEKT execution validates a command without encoding and decoding wire fields. The external
+port path still decodes and validates requests; both paths share dispatch, memory effects, and
+backing-store operations. Tests compare complete state and transaction histories across allocation,
+dirty eviction, refill, exchange, directory lookup, and memory faults. Invalid-command tests also
+preserve validation and maintenance-lock error priority. All 112 enabled model, emulator, and RTL
+tests pass, plus the four original-image emulator tests. Clippy and formatting checks pass.
 
-Using the revised low-space microcode in both versions, the same three-run benchmark measures 11.08 million microinstructions/s at startup and 11.48 million afterward.
-This improves on 10.26 and 10.49 million respectively: about 8.0% and 9.4% from the direct command path.
-Both versions preserve final PCs, retired counts, collections, object commands, device requests, and framebuffer hashes at each fixed-step checkpoint.
-A final post-startup cycle profile attributes 0.25% to memory copying, with no sampled processor clone or wire encode/decode calls.
-Instruction preparation remains the largest sampled cost; device ticking and backing-record lookup remain measurable costs.
+Using the revised low-space microcode in both versions, the same three-run benchmark measures 11.08
+million microinstructions/s at startup and 11.48 million afterward. This improves on 10.26 and 10.49
+million respectively: about 8.0% and 9.4% from the direct command path. Both versions preserve final
+PCs, retired counts, collections, object commands, device requests, and framebuffer hashes at each
+fixed-step checkpoint. A final post-startup cycle profile attributes 0.25% to memory copying, with
+no sampled processor clone or wire encode/decode calls. Instruction preparation remains the largest
+sampled cost; device ticking and backing-record lookup remain measurable costs.
 
 ### Decoded scalar execution and refill lookup
 
-The native executor uses a smaller write set when stack and fetch controls are idle.
-It caches static validation, checks the complete source word before each use, and skips arithmetic whose results have no destination.
-Multiplication still updates the product latch. Dynamic faults retain their priority, and local writes wait for successful external operations.
-Edited control words, collector execution, floating point, and other complex words use the general processor path.
-These choices depend on control-word fields and do not recognize guest language operations.
+The native executor uses a smaller write set when stack and fetch controls are idle. It caches
+static validation, checks the complete source word before each use, and skips arithmetic whose
+results have no destination. Multiplication still updates the product latch. Dynamic faults retain
+their priority, and local writes wait for successful external operations. Edited control words,
+collector execution, floating point, and other complex words use the general processor path. These
+choices depend on control-word fields and do not recognize guest language operations.
 
-Object refill borrows the backing record once after victim publication, avoiding a tree lookup for each body word.
-The model retains each streaming request, memory write, and fault-injection position.
-Release builds also enable thin LTO and one code-generation unit.
+Object refill borrows the backing record once after victim publication, avoiding a tree lookup for
+each body word. The model retains each streaming request, memory write, and fault-injection
+position. Release builds also enable thin LTO and one code-generation unit.
 
-Measurements on 2026-10-07 compare commit `af1328f` with these changes on a Cortex-X925, pinned to CPU 5.
-Both builds use Rust 1.98.1 and the same Xerox V2 image and microcode.
-Each run executes 100 million headless steps with deterministic device clocks and no external input; loading is outside the measured interval.
-The table gives medians from three alternating before/after pairs for each heap size.
+Measurements on 2026-10-07 compare commit `af1328f` with these changes on a Cortex-X925, pinned to
+CPU 5. Both builds use Rust 1.98.1 and the same Xerox V2 image and microcode. Each run executes 100
+million headless steps with deterministic device clocks and no external input; loading is outside
+the measured interval. The table gives medians from three alternating before/after pairs for each
+heap size.
 
 | External memory words | Before, million instructions/s | After, million instructions/s | Throughput increase |
-| ---: | ---: | ---: | ---: |
-| 16,777,216 | 10.81 | 17.57 | 62.6% |
-| 1,048,576 | 11.21 | 16.41 | 46.4% |
+| --------------------: | -----------------------------: | ----------------------------: | ------------------: |
+|            16,777,216 |                          10.81 |                         17.57 |               62.6% |
+|             1,048,576 |                          11.21 |                         16.41 |               46.4% |
 
-The small-heap row precedes the final inlining of native matching and retirement; the large-heap row includes it.
-At each heap size, all runs match the final PC, mutator and collector instruction counts, collection count, device requests, and framebuffer hash.
-The large heap performs seven collections and retires 628,087 collector instructions; the small heap performs 109 collections and retires 14,274,765.
-These are native execution measurements; they do not establish FPGA timing or interactive frame rates.
+The small-heap row precedes the final inlining of native matching and retirement; the large-heap row
+includes it. At each heap size, all runs match the final PC, mutator and collector instruction
+counts, collection count, device requests, and framebuffer hash. The large heap performs seven
+collections and retires 628,087 collector instructions; the small heap performs 109 collections and
+retires 14,274,765. These are native execution measurements; they do not establish FPGA timing or
+interactive frame rates.
 
 Reproduce one run with:
 
@@ -512,8 +587,10 @@ taskset -c 5 target/release/rekursiv-emulator --headless \
   --steps 100000000 --frame artifacts/native-performance.ppm
 ```
 
-Choose an available CPU for affinity, and repeat with `--memory-words 1048576` for the collection-heavy case.
-The workspace suite passes 232 tests, including native/RTL comparisons and refill fault injection.
-A generated test compares 30,000 scalar preparations against the general processor, including simultaneous writes and dynamic faults.
-Directed tests cover changed or removed control words and failed object operations without local retirement.
-The native unit/integration tests and all four original-image regressions also pass with the final release profile; formatting and Clippy pass.
+Choose an available CPU for affinity, and repeat with `--memory-words 1048576` for the
+collection-heavy case. The workspace suite passes 232 tests, including native/RTL comparisons and
+refill fault injection. A generated test compares 30,000 scalar preparations against the general
+processor, including simultaneous writes and dynamic faults. Directed tests cover changed or removed
+control words and failed object operations without local retirement. The native unit/integration
+tests and all four original-image regressions also pass with the final release profile; formatting
+and Clippy pass.

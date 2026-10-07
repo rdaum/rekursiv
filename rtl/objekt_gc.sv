@@ -19,6 +19,7 @@ module objekt_gc #(
     output logic [PAGER_BITS-1:0] slot_o,
     input logic entry_valid_i, input logic [170:0] entry_i,
     input logic entry_persistent_i,
+    input logic entry_prepared_i,
     input logic layout_valid_i,
     output logic commit_o,
     output logic [(1<<PAGER_BITS)-1:0] retained_o,
@@ -96,7 +97,7 @@ module objekt_gc #(
                             else begin
                                 selected_slot<=data_i[PAGER_BITS-1:0];
                                 result_o<={35'b0,entry.is_new,
-                                    (entry.modified && !entry.is_new) || (entry.is_new && entry_persistent_i),
+                                    (entry.modified && !entry.is_new) || (entry.is_new && entry_persistent_i) || entry_prepared_i,
                                     entry.reference[37],marks[slot_o],entry_valid_i};
                                 copied_word<=0;
                             end

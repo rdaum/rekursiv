@@ -8,13 +8,13 @@ default = ["window"]
 window = ["dep:winit", "dep:softbuffer"]
 
 [dependencies]
-rekursiv-asm = { path = "../rekursiv-asm" }
-rekursiv-model = { path = "../rekursiv-model" }
-rekursiv-devices = { path = "../rekursiv-devices" }
-rekursiv-smalltalk = { path = "../rekursiv-smalltalk" }
 eyre = "0.6"
-winit = { version = "0.30", optional = true }
+rekursiv-asm = { path = "../rekursiv-asm" }
+rekursiv-devices = { path = "../rekursiv-devices" }
+rekursiv-model = { path = "../rekursiv-model" }
+rekursiv-smalltalk = { path = "../rekursiv-smalltalk" }
 softbuffer = { version = "0.4", optional = true, default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
+winit = { version = "0.30", optional = true }
 
 [dev-dependencies]
 rekursiv-sim = { path = "../rekursiv-sim" }

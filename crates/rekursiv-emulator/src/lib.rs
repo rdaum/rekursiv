@@ -7,7 +7,7 @@
 use eyre::{ensure, Result};
 use rekursiv_asm::{
     processor::{Device as Io, Recovery, Seq},
-    Command, Pager, Status, Word,
+    Command, Pager, Response, Status, Word,
 };
 use rekursiv_devices::{Device, Request};
 use rekursiv_model::{
@@ -103,6 +103,10 @@ pub struct Machine {
     /// Optional detailed observations; leave disabled for normal execution.
     pub objekt_metrics_enabled: bool,
     pub fault: Option<Fault>,
+    // The cycle-independent executor can finish RAM immediately, but keeps the
+    // reply private until the same architectural barrier as LOGIK. Guest work
+    // still executes from the shared microcode; this is not a host primitive.
+    pending_object: Option<Response>,
     recovery: Option<RecoveryState>,
     retry_irq: Option<bool>,
     // Snapshot of eligible words, not an alternate program. The image remains
@@ -151,6 +155,7 @@ impl Machine {
             stats: Statistics::default(),
             objekt_metrics_enabled: false,
             fault: None,
+            pending_object: None,
             recovery: None,
             retry_irq: None,
             scalar_code,
@@ -192,13 +197,11 @@ impl Machine {
         if self.cpu.service {
             return Ok(Step::Service(self.cpu.service_code));
         }
-        let instruction = self
-            .image
-            .code
-            .get(self.cpu.pc as usize)
-            .copied()
-            .flatten()
-            .ok_or_else(|| self.fail(2, None))?;
+        let instruction = self.image.code.get(self.cpu.pc as usize).copied().flatten();
+        if instruction.is_none_or(|i| i.object_barrier()) {
+            self.join_object()?;
+        }
+        let instruction = instruction.ok_or_else(|| self.fail(2, None))?;
         if self.recovery.is_some() && instruction.recovery == Recovery::Return {
             // Validate even the return word; it cannot smuggle a stack write or
             // a device operation into the frozen mutator state.
@@ -239,7 +242,13 @@ impl Machine {
                 .prepare_writes(&self.image, irq)
                 .map(|(w, c)| (Writes::General(w), c))
         };
-        let (mut next, command) = prepared.map_err(|code| self.fail(code, None))?;
+        let (mut next, command) = match prepared {
+            Ok(p) => p,
+            Err(code) => {
+                self.join_object()?;
+                return Err(self.fail(code, None).into());
+            }
+        };
         if instruction.recovery == Recovery::Collect && self.retry_irq.is_none() {
             self.enter_recovery(None, irq)?;
             self.devices.tick(None, false)?;
@@ -306,10 +315,13 @@ impl Machine {
                 self.devices.tick(None, false)?;
                 return Ok(Step::RecoveryEntered);
             }
-            if response.status != Status::Ok {
+            if instruction.object_async {
+                self.pending_object = Some(response);
+            } else if response.status != Status::Ok {
                 return Err(self.fail(4, Some(response.status)).into());
+            } else {
+                next.object(response.data.bits());
             }
-            next.object(response.data.bits());
         }
         if instruction.device != Io::None {
             let request = Request {
@@ -353,6 +365,15 @@ impl Machine {
             self.retry_irq = None;
         }
         Ok(Step::Retired)
+    }
+    fn join_object(&mut self) -> Result<()> {
+        if let Some(response) = self.pending_object.take() {
+            if response.status != Status::Ok {
+                return Err(self.fail(4, Some(response.status)).into());
+            }
+            self.cpu.object = response.data.bits();
+        }
+        Ok(())
     }
     fn enter_recovery(&mut self, command: Option<Command>, irq: bool) -> Result<()> {
         // Proactive collection has no pending transfer, required allocation,

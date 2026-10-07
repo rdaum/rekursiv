@@ -2,8 +2,8 @@
 
 The files in `microcode/` contain executable LOGIK microcode. They assemble through the same checked
 256-bit encoder used by the Rust API. The RAM collector, Smalltalk interpreter, and allocation and
-collection examples use these files directly. Rust-sequenced OBJEKT test routines remain in Rust; they are not
-processor microcode.
+collection examples use these files directly. Rust-sequenced OBJEKT test routines remain in Rust;
+they are not processor microcode.
 
 The syntax uses the book's horizontal style: one line specifies controls that act in parallel. `d`
 names the data-bus source and `brch` supplies the branch field. Control names and encodings describe
@@ -38,8 +38,9 @@ Overlapping code produces an error.
 ## Reading a microcode routine
 
 Start with [the allocation example](../microcode/allocation.uc), then read
-[the Smalltalk interpreter](../microcode/smalltalk/interpreter.uc). Read its register convention before following the labels.
-[Message sends](../microcode/smalltalk/sends.uc) reuse several registers, so that file has its own convention.
+[the Smalltalk interpreter](../microcode/smalltalk/interpreter.uc). Read its register convention
+before following the labels. [Message sends](../microcode/smalltalk/sends.uc) reuse several
+registers, so that file has its own convention.
 
 Each instruction is one 256-bit control word. Read it in four parts:
 
@@ -49,27 +50,28 @@ Each instruction is one 256-bit control word. Read it in four parts:
 4. **Sequence:** Which microinstruction executes next?
 
 Commas separate simultaneous controls. Their order on the line does not specify execution order.
-Controls generally read state from before the instruction; their writes become available to the next instruction.
-An instruction can take several clock cycles while OBJEKT completes a command.
+Controls generally read state from before the instruction; their writes become available to the next
+instruction. An instruction can take several clock cycles while OBJEKT completes a command.
 
 ### Registers and buses
 
-| Name | Meaning |
-| --- | --- |
-| `D`, selected by `d=` | Shared 40-bit bus: a literal, register value, object response, or another selected source |
-| `R0`–`R15`, selected by `ra` and `rb` | NUMERIK's 32-bit registers for arithmetic, counters, offsets, and microaddresses |
-| `r`, `s` | ALU operand-source selectors; these are not register numbers |
-| `Q` | A 32-bit NUMERIK result register, written with `ldq` |
-| `VR0`–`VR7`, selected by `vr` | OBJEKT's 40-bit value registers; these preserve tags and act as collector roots |
-| `Object` | The response latch from the most recent completed OBJEKT command |
-| `SYMBOL` | A rooted 40-bit value register, written from D with `ldsym` |
-| `ESTKR`, read as `d=Estk` | LOGIK's cached expression-stack value; also used to construct compact values |
-| `IDX` | OBJEKT's component index, controlled by `idx`; distinct from NUMERIK's register selectors |
+| Name                                  | Meaning                                                                                   |
+| ------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `D`, selected by `d=`                 | Shared 40-bit bus: a literal, register value, object response, or another selected source |
+| `R0`–`R15`, selected by `ra` and `rb` | NUMERIK's 32-bit registers for arithmetic, counters, offsets, and microaddresses          |
+| `r`, `s`                              | ALU operand-source selectors; these are not register numbers                              |
+| `Q`                                   | A 32-bit NUMERIK result register, written with `ldq`                                      |
+| `VR0`–`VR7`, selected by `vr`         | OBJEKT's 40-bit value registers; these preserve tags and act as collector roots           |
+| `Object`                              | The response latch from the most recent completed OBJEKT command                          |
+| `SYMBOL`                              | A rooted 40-bit value register, written from D with `ldsym`                               |
+| `ESTKR`, read as `d=Estk`             | LOGIK's cached expression-stack value; also used to construct compact values              |
+| `IDX`                                 | OBJEKT's component index, controlled by `idx`; distinct from NUMERIK's register selectors |
 
-The Smalltalk evaluation stack lives in context objects. It is separate from LOGIK's hardware expression stack.
+The Smalltalk evaluation stack lives in context objects. It is separate from LOGIK's hardware
+expression stack.
 
-NUMERIK registers cannot preserve a complete 40-bit object reference.
-Keep live references in rooted locations such as VRs, SYMBOL, or reachable object fields across allocation and refill.
+NUMERIK registers cannot preserve a complete 40-bit object reference. Keep live references in rooted
+locations such as VRs, SYMBOL, or reachable object fields across allocation and refill.
 
 ### Loading and calculating
 
@@ -77,26 +79,26 @@ Keep live references in rooted locations such as VRs, SYMBOL, or reachable objec
 d=7, r=Bus, rb=8, ldrb
 ```
 
-Read this as: drive D with 7, select D as ALU operand R, and write the result into register R8.
-The omitted `alu` defaults to `Pass`, so the result is its R operand. Without `ldrb`, R8 would remain unchanged.
-Omitted `ra` and `rb` select register 0; an omitted `seq` continues to the next instruction.
+Read this as: drive D with 7, select D as ALU operand R, and write the result into register R8. The
+omitted `alu` defaults to `Pass`, so the result is its R operand. Without `ldrb`, R8 would remain
+unchanged. Omitted `ra` and `rb` select register 0; an omitted `seq` continues to the next
+instruction.
 
-By default, the ALU reads R from `R[ra]` and S from `R[rb]`.
-Thus `rb` can select both an input register and the destination register:
+By default, the ALU reads R from `R[ra]` and S from `R[rb]`. Thus `rb` can select both an input
+register and the destination register:
 
 ```text
 alu=Sub, ra=8, rb=8, s=Branch, brch=1, cin=One, ldrb, flags
 seq=ConditionalJump, cc=!Zero, brch=loop
 ```
 
-The first line computes `R8 - 1`, writes R8, and saves the arithmetic flags.
-`s=Branch` uses the signed 16-bit `brch` field as an immediate operand.
-Subtraction computes `R + ~S + carry`; `cin=One` gives ordinary subtraction.
-The second line jumps to `loop` if the saved result was nonzero.
+The first line computes `R8 - 1`, writes R8, and saves the arithmetic flags. `s=Branch` uses the
+signed 16-bit `brch` field as an immediate operand. Subtraction computes `R + ~S + carry`; `cin=One`
+gives ordinary subtraction. The second line jumps to `loop` if the saved result was nonzero.
 
-`flags` is an explicit write enable. Without it, arithmetic leaves the saved flags unchanged.
-A branch on the same line as `flags` tests the **previous** flags.
-Also, `brch` is one shared field: an immediate operand and a branch destination cannot have different values on one line.
+`flags` is an explicit write enable. Without it, arithmetic leaves the saved flags unchanged. A
+branch on the same line as `flags` tests the **previous** flags. Also, `brch` is one shared field:
+an immediate operand and a branch destination cannot have different values on one line.
 
 For a comparison without a register write, omit `ldrb`:
 
@@ -105,17 +107,18 @@ ra=9, rb=12, alu=Sub, cin=One, flags
 seq=ConditionalJump, cc=Sign, brch=bad_state
 ```
 
-Here R9 contains the guest stack pointer, and R12 contains the evaluation-stack floor.
-For a MethodContext, that floor is the temporary count. For a BlockContext, it is zero.
-The code rejects a stack pointer below the temporaries. These values are bounded nonnegative counts.
-For general signed comparisons with possible overflow, use `CorrectedSign` instead of `Sign`.
+Here R9 contains the guest stack pointer, and R12 contains the evaluation-stack floor. For a
+MethodContext, that floor is the temporary count. For a BlockContext, it is zero. The code rejects a
+stack pointer below the temporaries. These values are bounded nonnegative counts. For general signed
+comparisons with possible overflow, use `CorrectedSign` instead of `Sign`.
 
 `shift=Left` and `shift=Right` shift the ALU result by one bit before the destination write.
 Arithmetic flags describe the result **before** that shift.
 
 ### Reading an object component
 
-This sequence reads component 2 of the method held in VR1, then preserves its complete value in SYMBOL:
+This sequence reads component 2 of the method held in VR1, then preserves its complete value in
+SYMBOL:
 
 ```text
 read=Vr, vr=1
@@ -134,11 +137,13 @@ Follow the value through each instruction:
 5. Copy the response from D into SYMBOL.
 
 `page=Fetch` can require a refill from backing storage. LOGIK waits for completion before advancing.
-The backing-storage model supplies data; the RTL and microcode perform the object operation and any collection.
+The backing-storage model supplies data; the RTL and microcode perform the object operation and any
+collection.
 
-Treat `Object` as temporary. Every OBJEKT command replaces its response latch, including a command that loads a VR.
-If another command intervenes, preserve the value first or read it back from its VR.
-Likewise, loading IDX and reading memory need separate instructions: memory access uses the old index.
+Treat `Object` as temporary. Each blocking OBJEKT command replaces its response latch, including a
+command that loads a VR. A launched command replaces that latch at its next object barrier. If
+another command intervenes, preserve the value first or read it back from its VR. Likewise, loading
+IDX and reading memory need separate instructions: memory access uses the old index.
 
 The interpreter often calculates a component index through Q:
 
@@ -149,8 +154,34 @@ mem=Read
 d=Object, r=Bus, rb=0, ldrb
 ```
 
-This computes `guest IP - literal count`, sets IDX, reads the bytecode component, and puts its raw byte into R0.
-The intermediate Q matters: D cannot select the ALU result being produced by that same instruction.
+This computes `guest IP - literal count`, sets IDX, reads the bytecode component, and puts its raw
+byte into R0. The intermediate Q matters: D cannot select the ALU result being produced by that same
+instruction.
+
+### Preparing and overlapping object accesses
+
+The explicit pipeline controls separate address preparation from memory access:
+
+```text
+idx=Two, prepare
+mem=Read, prepared, prepare, idx=Increment, launch
+ra=1, rb=1, alu=Add, s=Branch, brch=1, ldrb
+d=Object, ldsym
+```
+
+The first line prepares component 2 of the selected object. The second starts its read and prepares
+component 3. `launch` lets the register increment execute while the read waits for memory. The final
+line waits for that read, then loads its result into SYMBOL.
+
+`prepare` forwards the new index but uses the old selection. `prepared` uses the previously latched
+address and status. Bounds errors stay deferred until an access uses that address. A simultaneous
+probe can change selection without redirecting the prepared memory operation.
+
+Without `launch`, the memory instruction waits for completion before local retirement. With
+`launch`, an error reports at the next object barrier, after any intervening local instructions.
+Object commands, object-result dependencies, devices, recovery, and processor stops all form
+barriers. The [interface contract](interface.md#prepared-address-pipeline) defines GC retention and
+invalidation. The [stream example](../microcode/pipeline.uc) sums four words with this pipeline.
 
 ### Raw numbers and tagged values
 
@@ -160,17 +191,18 @@ ra=4, estk=Compact, compact=2
 d=Estk, ldsym
 ```
 
-The first line loads the raw integer 42 into R4.
-The second constructs a tagged compact signed integer in ESTKR from the ALU result.
-The third preserves that 40-bit value in SYMBOL.
-In this interpreter, compact code 2 represents a SmallInteger. The generic hardware does not assign it Smalltalk language semantics.
+The first line loads the raw integer 42 into R4. The second constructs a tagged compact signed
+integer in ESTKR from the ALU result. The third preserves that 40-bit value in SYMBOL. In this
+interpreter, compact code 2 represents a SmallInteger. The generic hardware does not assign it
+Smalltalk language semantics.
 
-Distinguish raw zero, guest `nil`, and a tagged SmallInteger containing zero. They have different bit patterns and uses.
+Distinguish raw zero, guest `nil`, and a tagged SmallInteger containing zero. They have different
+bit patterns and uses.
 
 ### Following control flow
 
-Labels name microcode addresses. Ordinary instructions continue at the next address unless `seq` changes the sequence.
-Here is the interpreter's call to its byte-fetch helper:
+Labels name microcode addresses. Ordinary instructions continue at the next address unless `seq`
+changes the sequence. Here is the interpreter's call to its byte-fetch helper:
 
 ```text
 cycle:
@@ -179,9 +211,9 @@ decoded:
     ra=0, rb=13, ldrb
 ```
 
-The first instruction stores the continuation address `decoded` in R7 and jumps to `fetch_byte`.
-At the helper's end, `d=Register, ra=7, seq=Bus` jumps to that saved address.
-This helper uses an explicit continuation convention; reading `seq=Jump` alone does not imply a pushed return address.
+The first instruction stores the continuation address `decoded` in R7 and jumps to `fetch_byte`. At
+the helper's end, `d=Register, ra=7, seq=Bus` jumps to that saved address. This helper uses an
+explicit continuation convention; reading `seq=Jump` alone does not imply a pushed return address.
 
 At `decoded`, the interpreter copies the returned byte from R0 into R13, then dispatches:
 
@@ -194,33 +226,35 @@ seq=Dispatch
 
 The byte selects a NAM entry, which selects a CSMAP entry, which supplies the microcode destination.
 These steps occupy separate instructions because each consumes state produced by the preceding step.
-The `.nam` and `.map` directives initialize those tables during loading; they are not executed instructions.
+The `.nam` and `.map` directives initialize those tables during loading; they are not executed
+instructions.
 
 For a first Smalltalk walkthrough, follow these labels:
 
-| Path | What to watch |
-| --- | --- |
-| `cycle` → `fetch_byte` → `decoded` | Read one guest byte and dispatch to its microcode handler |
-| `push_integer` → `push` → `boundary` | Construct a value, write the context stack, and save IP/SP |
-| `send_literal` → `send_prepare` | Obtain the selector, argument count, and receiver |
-| `lookup_class` → `probe_selector` → `method_found` | Search dictionaries and follow superclass links |
-| `activate` → `copy_argument` → `load_context` | Allocate a context, transfer arguments, and enter the selected method |
-| `return_value` → `return_sender` → `resume_result` → `push` | Resume a sender and push the returned value |
+| Path                                                        | What to watch                                                         |
+| ----------------------------------------------------------- | --------------------------------------------------------------------- |
+| `cycle` → `fetch_byte` → `decoded`                          | Read one guest byte and dispatch to its microcode handler             |
+| `push_integer` → `push` → `boundary`                        | Construct a value, write the context stack, and save IP/SP            |
+| `send_literal` → `send_prepare`                             | Obtain the selector, argument count, and receiver                     |
+| `lookup_class` → `probe_selector` → `method_found`          | Search dictionaries and follow superclass links                       |
+| `activate` → `copy_argument` → `load_context`               | Allocate a context, transfer arguments, and enter the selected method |
+| `return_value` → `return_sender` → `resume_result` → `push` | Resume a sender and push the returned value                           |
 
 The return path shown assumes a non-nil sender. A return from the diagnostic root halts instead.
 Quick methods and supported primitives can produce a result without allocating a new context.
 
-Keep [the interpreter's state and root conventions](smalltalk-execution.md) beside the source when tracing sends.
-The Smalltalk library assembles `interpreter.uc` and `sends.uc` together and installs the collector.
-Use its integration tests to execute complete examples:
+Keep [the interpreter's state and root conventions](smalltalk-execution.md) beside the source when
+tracing sends. The Smalltalk library assembles `interpreter.uc` and `sends.uc` together and installs
+the collector. Use its integration tests to execute complete examples:
 
 ```sh
 cargo test --locked -p rekursiv-smalltalk --test execution
 cargo test --locked -p rekursiv-smalltalk --test sends
 ```
 
-For the collector, read [its recovery contract](recovery.md) before tracing [its source](../microcode/ram-collector.uc).
-Its `gc=` controls invoke privileged hardware recovery operations. The contract explains what each operation does beyond the microcode loop.
+For the collector, read [its recovery contract](recovery.md) before tracing
+[its source](../microcode/ram-collector.uc). Its `gc=` controls invoke privileged hardware recovery
+operations. The contract explains what each operation does beyond the microcode loop.
 
 ## Syntax
 
@@ -254,37 +288,40 @@ control aliases are not implemented.
 
 ## Control fields
 
-| Fields                              | Values                                                                                                          |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Fields                              | Values                                                                                                                                          |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `d`                                 | Literal expression or `Estk`, `Cstk`, `Object`, `Register`, `Apc`, `Ap`, `Sp`, `Namarg`, `Upcor`, `Q`, `Symbol`, `SymbolHigh`, `Device`, `Root` |
-| `seq`, `cc`, `brch`                 | Sequence operation, condition with optional `!`, and label or 16-bit expression                                 |
-| `ra`, `rb`                          | Register numbers 0–15                                                                                           |
-| `alu`, `r`, `s`, `cin`, `shift`     | Arithmetic operation, operand sources, carry source, destination shift                                          |
-| `fp`, `round`                     | Floating-point operation and rounding mode with `alu=Float`; see [numeric contract](numerik-floating-point.md) |
-| `io`                              | `Read` or `Write`; register A holds the aligned 32-bit device address, D supplies write data |
-| `esp`, `sp`, `estk`, `csp`, `cstk`  | Stack address, pointer, and data controls                                                                       |
-| `apc`, `fetch`                      | Abstract program counter and NAM/CSMAP fetch controls                                                           |
-| `page`, `idx`, `reg`, `mem`, `read` | OBJEKT command controls                                                                                         |
-| `vr`, `class`                       | Value-register selector and expected-class guard                                                                |
-| `size`, `scan`                      | Literal allocation size or `ra` for register A; scan flag 0 or 1                                                |
-| `compact`                           | Compact construction code 0–3                                                                                   |
-| `gc`                                | Collector operation or standalone `Collect` request                                                                                   |
+| `seq`, `cc`, `brch`                 | Sequence operation, condition with optional `!`, and label or 16-bit expression                                                                 |
+| `ra`, `rb`                          | Register numbers 0–15                                                                                                                           |
+| `alu`, `r`, `s`, `cin`, `shift`     | Arithmetic operation, operand sources, carry source, destination shift                                                                          |
+| `fp`, `round`                       | Floating-point operation and rounding mode with `alu=Float`; see [numeric contract](numerik-floating-point.md)                                  |
+| `io`                                | `Read` or `Write`; register A holds the aligned 32-bit device address, D supplies write data                                                    |
+| `esp`, `sp`, `estk`, `csp`, `cstk`  | Stack address, pointer, and data controls                                                                                                       |
+| `apc`, `fetch`                      | Abstract program counter and NAM/CSMAP fetch controls                                                                                           |
+| `page`, `idx`, `reg`, `mem`, `read` | OBJEKT command controls                                                                                                                         |
+| `vr`, `class`                       | Value-register selector and expected-class guard                                                                                                |
+| `size`, `scan`                      | Literal allocation size or `ra` for register A; scan flag 0 or 1                                                                                |
+| `compact`                           | Compact construction code 0–3                                                                                                                   |
+| `gc`                                | Collector operation or standalone `Collect` request                                                                                             |
 
-Flags without operands are `halt`, `ldsym`, `ldmark`, `ldrb`, `ldq`, `flags`, `ldap`, `ldvr`, and `ldroot`.
-`ldroot` writes D to an explicit root slot indexed by register A (0–31). `d=Root` reads that slot.
-Both controls are mutator operations; the collector observes the frozen slots through its root interface.
+Flags without operands are `halt`, `ldsym`, `ldmark`, `ldrb`, `ldq`, `flags`, `ldap`, `ldvr`,
+`ldroot`, `prepare`, `prepared`, and `launch`. `ldroot` writes D to an explicit root slot indexed by
+register A (0–31). `d=Root` reads that slot. Both controls are mutator operations; the collector
+observes the frozen slots through its root interface.
 
-`gc=Collect` requests the loaded collector from mutator microcode. It cannot combine other control fields.
-It preserves the interrupted state, collects once, and then advances to the successor. Failure restores the request address and stops execution.
+`gc=Collect` requests the loaded collector from mutator microcode. It cannot combine other control
+fields. It preserves the interrupted state, collects once, and then advances to the successor.
+Failure restores the request address and stops execution.
 
 `read=FreeWords` and `read=FreeIdentities` return OBJEKT allocation capacity through the Object bus.
-They do not require an object selection or issue external transfers. Counts include reservations retained after a failed allocation.
+They do not require an object selection or issue external transfers. Counts include reservations
+retained after a failed allocation.
 
-`d=SymbolHigh` reads the symbol register's high byte, zero-extended.
-`estk=Wide` packs the D bus's low byte above the 32-bit arithmetic result and writes the full 40-bit stack word.
-It applies no compact-value encoding or language-specific tag policy.
-`nop` emits an otherwise empty control word. Unspecified fields take the encoder's default values.
-Symbolic values match the enums in [processor.rs](../crates/rekursiv-asm/src/processor.rs) and
+`d=SymbolHigh` reads the symbol register's high byte, zero-extended. `estk=Wide` packs the D bus's
+low byte above the 32-bit arithmetic result and writes the full 40-bit stack word. It applies no
+compact-value encoding or language-specific tag policy. `nop` emits an otherwise empty control word.
+Unspecified fields take the encoder's default values. Symbolic values match the enums in
+[processor.rs](../crates/rekursiv-asm/src/processor.rs) and
 [lib.rs](../crates/rekursiv-asm/src/lib.rs). For example, `r=Register` selects register A and
 `s=Register` selects register B. `r=Bus` and `s=Branch` select D and the signed 16-bit branch field.
 The [interface specification](interface.md#project-control-word-encoding) defines field timing and
