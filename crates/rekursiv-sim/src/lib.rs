@@ -77,12 +77,7 @@ pub fn runtime_with_memory(memory_words: usize) -> Result<VerilatorRuntime> {
     )
     .map_err(|e| eyre!("Verilator runtime: {e}"))
 }
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Timing {
-    pub request_delay: u32,
-    pub memory_latency: u32,
-    pub response_stall: u32,
-}
+pub use rekursiv_devices::Timing;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Statistics {
     pub cycles: u64,

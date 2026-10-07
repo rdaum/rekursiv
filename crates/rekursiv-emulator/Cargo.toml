@@ -1,0 +1,19 @@
+[package]
+name = "rekursiv-emulator"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["window"]
+window = ["dep:minifb"]
+
+[dependencies]
+rekursiv-asm = { path = "../rekursiv-asm" }
+rekursiv-model = { path = "../rekursiv-model" }
+rekursiv-devices = { path = "../rekursiv-devices" }
+rekursiv-smalltalk = { path = "../rekursiv-smalltalk" }
+eyre = "0.6"
+minifb = { version = "0.28", optional = true }
+
+[dev-dependencies]
+rekursiv-sim = { path = "../rekursiv-sim" }

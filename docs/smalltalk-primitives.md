@@ -123,7 +123,8 @@ An observer stops the test at a stage 5 primitive boundary without supplying a g
 
 The [device contract](devices.md) records the generic LOGIK transport, implemented peripherals, and specified storage registers.
 Input, clock, timer, and bitmap registration paths are implemented. Snapshot-target registration is implemented; storage transfer primitive 128 remains unfinished.
-BitBlt, snapshots, automatic display refresh, and interactive presentation remain stage 5 work.
+The native emulator now supplies interactive presentation, keyboard, and mouse input.
+BitBlt, snapshots, automatic display refresh, and a usable interactive image remain stage 5 work.
 
 ## Hardware boundary
 

@@ -1,4 +1,5 @@
-//! Independent test oracle. These results never drive guest execution or I/O.
+//! SoftFloat numeric semantics for the RTL oracle and native emulator.
+//! RTL execution uses HardFloat and never receives these computed results.
 use rekursiv_asm::processor::{FloatOp, Rounding};
 use std::sync::Mutex;
 static REFERENCE: Mutex<()> = Mutex::new(());

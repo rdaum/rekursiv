@@ -1,0 +1,7 @@
+[package]
+name = "rekursiv-devices"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+eyre = "0.6"

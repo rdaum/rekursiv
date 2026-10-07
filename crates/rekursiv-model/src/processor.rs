@@ -1,6 +1,6 @@
-//! Test reference model: predicts register and memory results after each instruction.
-//! It does not run the machine. Tests compare these results against the Verilog,
-//! which implements clock cycles and request/response handshakes.
+//! Instruction semantics shared by the RTL test oracle and native emulator.
+//! This layer predicts local retirement only. Executors supply object/device
+//! responses and recovery control. RTL alone defines cycle timing.
 use rekursiv_asm::{processor::*, Command, Word};
 
 // Matches the simulation wrapper. Individual RTL modules remain parameterized.
@@ -184,10 +184,27 @@ impl Processor {
         }
     }
     pub fn prepare(&self, image: &Image, irq: bool) -> Result<(Self, Option<Command>), u8> {
+        self.prepare_mode(image, irq, false)
+    }
+    /// Local retirement while LOGIK runs privileged collector microcode.
+    /// The caller implements recovery requests and restores the interrupted CPU.
+    pub fn prepare_recovery(
+        &self,
+        image: &Image,
+        irq: bool,
+    ) -> Result<(Self, Option<Command>), u8> {
+        self.prepare_mode(image, irq, true)
+    }
+    fn prepare_mode(
+        &self,
+        image: &Image,
+        irq: bool,
+        recovering: bool,
+    ) -> Result<(Self, Option<Command>), u8> {
         if self.roots.is_none() {
             let mut initialized = self.clone();
             initialized.roots = Some(image.roots);
-            return initialized.prepare(image, irq);
+            return initialized.prepare_mode(image, irq, recovering);
         }
         let i = image
             .code
@@ -196,9 +213,23 @@ impl Processor {
             .flatten()
             .ok_or(2u8)?;
         i.encode().map_err(|_| 1u8)?;
-        // This method models mutator retirement. Recovery transitions are
-        // specified by collect_ram; privileged controls cannot run here.
-        if i.recovery != Recovery::None
+        if (!recovering && i.recovery != Recovery::None)
+            || (recovering
+                && (i.object.is_some()
+                    || i.halt
+                    || i.seq == Seq::Service
+                    || i.sp != Pointer::Hold
+                    || i.esp != Address::Hold
+                    || i.csp != Pointer::Hold
+                    || i.estk != Estk::Hold
+                    || i.cstk != Cstk::Hold
+                    || i.load_ap
+                    || i.apc != Apc::Hold
+                    || i.fetch != Fetch::Hold
+                    || i.device != Device::None
+                    || i.alu == Alu::Float
+                    || i.write_root
+                    || i.bus == Bus::Root))
             || (i.device != Device::None && self.rf[i.ra as usize] & 3 != 0)
         {
             return Err(1);
@@ -338,7 +369,10 @@ impl Processor {
         if i.halt {
             target = self.pc as i64;
         }
-        if !(0..CODE_WORDS as i64).contains(&target) {
+        // Collector Return restores the saved sequencer instead of its target.
+        if !(0..CODE_WORDS as i64).contains(&target)
+            && !(recovering && i.recovery == Recovery::Return)
+        {
             return Err(2);
         }
         n.pc = target as u16;

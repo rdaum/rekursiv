@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "crates/rekursiv-devices",
+    "crates/rekursiv-emulator",
     "crates/rekursiv-asm",
     "crates/rekursiv-model",
     "crates/rekursiv-sim",

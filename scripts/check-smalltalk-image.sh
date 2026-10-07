@@ -10,6 +10,7 @@ cargo test --locked -p rekursiv-smalltalk --test execution -- --ignored
 # the full differential checks, but optimize their large record comparisons.
 cargo test --release --locked -p rekursiv-smalltalk --test sends -- --ignored
 cargo test --release --locked -p rekursiv-smalltalk --test startup -- --ignored
+cargo test --release --locked -p rekursiv-emulator --no-default-features --test startup -- --ignored
 cargo run --locked -p rekursiv-smalltalk -- import \
     "$REKURSIV_ST80_DIR/VirtualImage" "$REKURSIV_ST80_DIR/rekursiv-image.json"
 cargo run --locked -p rekursiv-smalltalk -- audit \

@@ -131,5 +131,6 @@ A separate test resets the unit during division and while a completed response i
 Processor tests check single retirement, interrupt-condition capture, and exception preservation across collection.
 Smalltalk tests cover arithmetic, comparisons, signed conversion, truncation, fraction, exponent, scaling, and primitive fallback under delayed memory and collection.
 
-The C reference exists only in the architectural oracle. It is compiled portably without host floating-point operations or architecture-specific assembly.
-Its expected results are compared with RTL outputs and never supplied to guest execution.
+The C reference supplies numeric semantics to the architectural oracle and native microcode emulator. It is compiled portably without host floating-point operations or architecture-specific assembly.
+Its expected results are compared with RTL outputs and never supplied to RTL execution.
+The separately selected native emulator uses these semantics to execute NUMERIK instructions in software.

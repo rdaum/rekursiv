@@ -65,19 +65,30 @@ allocation, checked access, writeback, and automatic refill. RAM garbage collect
 microcode with OBJEKT hardware support. It traces objects, copies their bodies between two memory
 regions, restores the interrupted program, and retries the allocation or refill.
 
-The repository includes a text microassembler, a Verilator simulator, and an independent Rust model
-for checking the hardware’s results. The simulation harness supplies external memory and backing
-storage. The allocation and collection examples execute their program control flow and garbage
+The repository includes a text microassembler, a native Rust emulator with display, keyboard, and
+mouse, and a Verilator simulator. A Rust architectural model checks the hardware's results.
+The simulation harness supplies external memory and backing storage. The allocation and collection examples execute their program control flow and garbage
 collection on the RTL processor.
 
-This is a working subset of the machine. A complete Smalltalk runtime, the remaining arithmetic
-operations, persistent storage, and FPGA board integration are still to come. The RTL passes generic
-synthesis checks; it has not yet been validated on an FPGA board.
+The Smalltalk microcode executes bytecodes, runtime primitives, and process scheduling. NUMERIK
+supports integer and binary32 arithmetic. The original Smalltalk image reaches display registration.
+BitBlt, disk transfers, snapshot saving, and FPGA board integration remain unfinished.
+The RTL passes generic synthesis checks. It has not yet been validated on an FPGA board.
 
 ## Build and run
 
-Install Rust with `rustfmt` and `clippy`, Verilator, Yosys, a C++ compiler, and Make. On Debian or
-Ubuntu, install the hardware tools with:
+Run the native emulator's display and input demo:
+
+```sh
+cargo run --release --locked -p rekursiv-emulator
+```
+
+Move the mouse or press a key to exercise the peripheral microcode. Close the window to exit.
+The [emulator guide](docs/emulator.md) covers build dependencies, headless execution, traces, and the Smalltalk image.
+This executable does not require Verilator or Yosys.
+
+For RTL simulation and synthesis, install Rust with `rustfmt` and `clippy`, Verilator, Yosys,
+a C++ compiler, and Make. On Debian or Ubuntu, install the hardware tools with:
 
 ```sh
 sudo apt-get install verilator yosys clang build-essential
@@ -113,7 +124,8 @@ or an example assertion fails.
 ## Development
 
 Hardware lives in [rtl/](rtl/). The Rust workspace contains the [assembler](crates/rekursiv-asm/),
-[reference model](crates/rekursiv-model/), and [simulator](crates/rekursiv-sim/). The
+[architectural model](crates/rekursiv-model/), [native emulator](crates/rekursiv-emulator/),
+[shared peripherals](crates/rekursiv-devices/), and [RTL simulator](crates/rekursiv-sim/). The
 [interface reference](docs/interface.md) documents object commands, encodings, and memory
 handshakes.
 

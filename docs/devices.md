@@ -1,7 +1,9 @@
 # Workstation device interface
 
 LOGIK implements the generic device transport below. Smalltalk microcode registers input/timer semaphores, reads clocks, delivers counted notifications, and wakes idle processes.
-The simulator supplies register, event, clock, timer, pointer, input FIFO, and bitmap upload devices. Interactive presentation and storage peripherals remain unfinished.
+The shared `rekursiv-devices` crate supplies register, event, clock, timer, pointer, input FIFO, and bitmap upload models.
+Both executors use these models. The [native emulator](emulator.md) adds interactive presentation, keyboard, and mouse input.
+Storage peripherals remain unfinished.
 Primitive declarations and current coverage are listed in [the image inventory](smalltalk-primitives.md).
 
 The machine owns language execution, process queues, semaphore state, collection, and bitmap algorithms.
@@ -223,7 +225,8 @@ Successful registration returns the receiver.
 
 Registration publishes an initial snapshot. Later heap writes do not yet refresh the external frame automatically.
 Stage 5 machine drawing and refresh paths must republish updates; a host heap watcher must not replace those paths.
-Interactive presentation, BitBlt, and display timing remain stage 5 work.
+The native emulator presents published frames and supplies physical input.
+BitBlt, automatic display refresh, and interactive RTL integration remain stage 5 work.
 
 ### Block storage contract
 

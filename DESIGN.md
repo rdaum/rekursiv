@@ -240,7 +240,9 @@ pager enumeration, checked copying, and atomic relocation publication. The colle
 context and retries the interrupted command without a host callback.
 
 The simulator loads images and emulates external RAM and the backing-store device. Its independent
-Rust models predict results for tests; they do not execute the machine's instructions. A standalone
+Rust models predict results for RTL tests. The native emulator also uses their instruction semantics
+to execute the same microcode without Verilator. Its collector runs against a separate maintenance
+datapath model, with no call to the graph-walking collector oracle. A standalone
 command-driver port remains available for OBJEKT tests. Normal execution accepts one mutator command
 at a time from one LOGIK/NUMERIK executor. Memory or backing-store delays stall that command until
 completion.
@@ -1039,7 +1041,10 @@ DESIGN.md
 docs/interface.md    # Implemented fields, operations, handshakes, and errors
 crates/
   rekursiv-asm/       # Words, symbolic control fields, encoding, listings
-  rekursiv-model/     # Independent architectural state and memory model
+  rekursiv-model/     # Architectural semantics shared by RTL tests and emulator
+  rekursiv-devices/   # External peripherals shared by both executors
+  rekursiv-emulator/  # Native microcode executor, headless CLI, window/input
+  rekursiv-smalltalk/ # Offline image importer, runtime assembly, image tests
   rekursiv-sim/       # Marlin harness, command driver, CLI, host initialization
     src/programs.rs  # Named executable examples
     src/microprograms.rs # Typed access, dictionary lookup, and context frames
@@ -1317,7 +1322,11 @@ generic device interfaces.
 
 The implementation must execute processor and language behavior in synthesizable RTL or microcode
 running on that RTL. Rust or other host code must not replace any of that execution.
-This rule applies throughout development, including the first interpreter demonstration.
+This rule applies to the hardware target throughout development, including the first interpreter demonstration.
+The separately selected [native emulator](docs/emulator.md) executes the same microinstructions in software for development and validation.
+It emulates processor operations, including the privileged collector controls, without substituting language-level Rust routines for microcode.
+It is not an RTL backend and cannot complete hardware execution milestones by itself.
+RTL execution never obtains its next state or arithmetic results from the emulator.
 
 | Work | Required execution location |
 | --- | --- |
@@ -1496,7 +1505,8 @@ Timed pointer sampling supplies raw packets; microcode converts them into buffer
 Primitive 95 returns those words, including boxed unsigned values, and fails without consuming data when the buffer is empty.
 Tests cover ring wraparound, late registration, preemption, physical overrun, and timer delivery while input is backed up.
 Cursor/display registration now validates Forms, packs bitmap rows, publishes complete frames, and retains Form references across collection.
-Interactive presentation and automatic refresh after drawing remain stage 5 work.
+The native emulator now presents frames and supplies interactive keyboard and mouse input.
+Automatic refresh after drawing and an interactive RTL session remain stage 5 work.
 Snapshot-target registration now copies validated serial bytes and a virtual leader address into a rooted Array.
 Identification and block-storage registers now have complete request/completion contracts.
 Storage page transfer, completion-event integration, and boot capability negotiation remain stage 5 work.

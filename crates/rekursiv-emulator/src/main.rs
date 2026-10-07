@@ -1,0 +1,215 @@
+use eyre::{bail, ensure, Result};
+use rekursiv_emulator::{boot, presentation, Step};
+use std::{io::Write, path::PathBuf};
+#[cfg(feature = "window")]
+mod window;
+
+fn main() -> Result<()> {
+    let mut args = std::env::args().skip(1);
+    let mut program = None;
+    let mut smalltalk = None;
+    let mut headless = false;
+    let mut limit = None;
+    let mut memory = 131072usize;
+    let mut trace = None;
+    let mut frame = None;
+    let mut stop = None;
+    let mut when = None;
+    let mut frames = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--microcode" => {
+                program = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| eyre::eyre!("--microcode requires a path"))?,
+                ))
+            }
+            "--smalltalk" => {
+                smalltalk = Some(PathBuf::from(args.next().ok_or_else(|| {
+                    eyre::eyre!("--smalltalk requires a VirtualImage path")
+                })?))
+            }
+            "--headless" => headless = true,
+            "--steps" => {
+                limit = Some(
+                    args.next()
+                        .ok_or_else(|| eyre::eyre!("--steps requires a count"))?
+                        .parse::<u64>()?,
+                )
+            }
+            "--memory-words" => {
+                memory = args
+                    .next()
+                    .ok_or_else(|| eyre::eyre!("--memory-words requires a count"))?
+                    .parse()?
+            }
+            "--trace" => {
+                trace = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| eyre::eyre!("--trace requires a path"))?,
+                ))
+            }
+            "--frame" => {
+                frame = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| eyre::eyre!("--frame requires a PPM path"))?,
+                ))
+            }
+            "--stop-at" => {
+                stop = Some(
+                    args.next()
+                        .ok_or_else(|| eyre::eyre!("--stop-at requires a label"))?,
+                )
+            }
+            "--when" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| eyre::eyre!("--when requires Rn=VALUE"))?;
+                let (register, value) = value
+                    .split_once('=')
+                    .ok_or_else(|| eyre::eyre!("--when requires Rn=VALUE"))?;
+                let register: usize = register
+                    .strip_prefix('R')
+                    .or_else(|| register.strip_prefix('r'))
+                    .ok_or_else(|| eyre::eyre!("expected R0 through R15"))?
+                    .parse()?;
+                ensure!(register < 16, "expected R0 through R15");
+                let value = if let Some(hex) = value.strip_prefix("0x") {
+                    u32::from_str_radix(hex, 16)?
+                } else {
+                    value.parse()?
+                };
+                when = Some((register, value));
+            }
+            "--frames" => {
+                frames = Some(
+                    args.next()
+                        .ok_or_else(|| eyre::eyre!("--frames requires a count"))?
+                        .parse::<u64>()?,
+                )
+            }
+            "--help" | "-h" => {
+                println!("rekursiv-emulator [--microcode FILE | --smalltalk VirtualImage]\n  No program: run the interactive workstation microcode demo.\n  --headless          Run without a window (deterministic device clock)\n  --steps N           Stop after N steps (headless default 10000000; window unlimited)\n  --memory-words N    External RAM words (default 131072; two semispaces)\n  --trace FILE        Write retired micro-PCs and numeric state\n  --stop-at LABEL     Stop before the named microinstruction\n  --when Rn=VALUE     Stop only when this register also matches\n  --frame FILE        Save the last published display as a PPM\n  --frames N          Close the window after N frames (smoke tests)\nClose the window to exit. Escape is delivered to the guest.");
+                return Ok(());
+            }
+            _ => bail!("unknown option {arg}; use --help"),
+        }
+    }
+    ensure!(
+        program.is_none() || smalltalk.is_none(),
+        "choose microcode or a Smalltalk image"
+    );
+    ensure!(
+        when.is_none() || stop.is_some(),
+        "--when requires --stop-at"
+    );
+    ensure!(!headless || frames.is_none(), "--frames requires a window");
+    let mut loaded = if let Some(path) = smalltalk {
+        boot::smalltalk(&std::fs::read(path)?, memory)?
+    } else {
+        boot::microcode(
+            &if let Some(path) = program {
+                std::fs::read_to_string(path)?
+            } else {
+                include_str!("../../../microcode/workstation.uc").into()
+            },
+            memory,
+        )?
+    };
+    // Headless clocks advance by device ticks for reproducible replay. The
+    // window adapter supplies elapsed wall time and uses an effectively stopped
+    // divider; the same timer/FIFO registers and acknowledgement rules apply.
+    let utc = if headless {
+        0
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs()
+    };
+    loaded.machine.devices = presentation::workstation(utc, if headless { 1000 } else { u64::MAX });
+    let breakpoint = stop
+        .map(|label| {
+            loaded
+                .symbols
+                .get(&label)
+                .copied()
+                .ok_or_else(|| eyre::eyre!("unknown label {label}"))
+        })
+        .transpose()?;
+    let breakpoint = breakpoint
+        .map(|pc| -> Result<u16> {
+            let pc = u16::try_from(pc)?;
+            ensure!(
+                loaded
+                    .machine
+                    .image
+                    .code
+                    .get(pc as usize)
+                    .is_some_and(Option::is_some),
+                "breakpoint does not name populated code"
+            );
+            Ok(pc)
+        })
+        .transpose()?;
+    let mut trace = trace
+        .map(std::fs::File::create)
+        .transpose()?
+        .map(std::io::BufWriter::new);
+    let limit = limit.unwrap_or(if headless { 10_000_000 } else { u64::MAX });
+    let mut steps = 0;
+    let mut run = |machine: &mut rekursiv_emulator::Machine| -> Result<bool> {
+        if steps >= limit
+            || (breakpoint == Some(machine.cpu.pc)
+                && when.is_none_or(|(register, value)| machine.cpu.rf[register] == value))
+        {
+            return Ok(false);
+        }
+        let pc = machine.cpu.pc;
+        let gc = machine.recovering();
+        let step = machine.step()?;
+        steps += 1;
+        if step == Step::Retired {
+            if let Some(trace) = &mut trace {
+                writeln!(
+                    trace,
+                    "{pc:04x} gc={} next={:04x} object={:010x} rf={:08x?}",
+                    u8::from(gc),
+                    machine.cpu.pc,
+                    machine.cpu.object,
+                    machine.cpu.rf
+                )?;
+            }
+        }
+        Ok(!matches!(step, Step::Halted | Step::Service(_)))
+    };
+    let result = if headless {
+        (|| {
+            while run(&mut loaded.machine)? {}
+            Ok(())
+        })()
+    } else {
+        #[cfg(feature = "window")]
+        {
+            window::run(&mut loaded.machine, &mut run, frames)
+        }
+        #[cfg(not(feature = "window"))]
+        {
+            bail!("this build has no window support; use --headless or enable the window feature");
+        }
+    };
+    if let Some(trace) = &mut trace {
+        trace.flush()?;
+    }
+    eprintln!("PC {}: {} mutator instructions, {} collector instructions, {} collections, {} device requests; halted={}, service={}", loaded.machine.cpu.pc, loaded.machine.stats.retired, loaded.machine.stats.collector_retired, loaded.machine.stats.collections, loaded.machine.stats.device_requests, loaded.machine.cpu.halted, loaded.machine.cpu.service);
+    if let Some(path) = frame {
+        let visible = loaded
+            .machine
+            .devices
+            .display_bitmap
+            .as_ref()
+            .and_then(|d| d.visible.as_ref())
+            .ok_or_else(|| eyre::eyre!("no display frame was published"))?;
+        presentation::save_ppm(visible, &path)?;
+    }
+    result
+}

@@ -37,6 +37,14 @@ impl Clocks {
             staged_deadline: 0,
         }
     }
+    /// Supply physical time in an interactive frontend. Existing read latches
+    /// remain coherent; deadlines fire on the next device tick.
+    pub fn set_time(&mut self, utc_seconds: u64, utc_milliseconds: u16, monotonic_ms: u64) {
+        assert!(utc_milliseconds < 1000);
+        self.utc_seconds = utc_seconds;
+        self.utc_fraction = utc_milliseconds;
+        self.monotonic_ms = monotonic_ms;
+    }
     /// Wall-clock milliseconds since UTC midnight, for timestamped peripherals.
     pub fn day_milliseconds(&self) -> u32 {
         (self.utc_seconds % 86400) as u32 * 1000 + u32::from(self.utc_fraction)

@@ -289,3 +289,18 @@ commands. Their context frame is a project convention, separate from the LOGIK s
 NUMERIK were outside the stage 5 checkpoint; the processor checkpoint above now implements a subset
 of both. Concurrent collection, historical instruction compatibility, and FPGA deployment remain
 outside the implemented scope.
+
+## Native microcode emulator
+
+The [native emulator](emulator.md) executes the same assembled programs without Verilator.
+Its differential regression compares CPU and object state with RTL after each mutator retirement across paging and five collections.
+Collector execution uses individual privileged controls. The graph-walking Rust collector remains a separate oracle.
+The shared peripheral models preserve the existing RTL handshake tests.
+
+`cargo test --locked -p rekursiv-emulator` also covers failed device writes, recovery failure, framebuffer clipping, keyboard mapping, and microcode-driven input/display changes.
+The ignored native startup test matches all 499 Xerox trace bytecodes and the RTL checkpoint before BitBlt.
+`scripts/check-smalltalk-image.sh` includes that test.
+
+A native X11 smoke run also exercised keyboard input, mouse-button input, and cursor movement through the window.
+Every screenshot pixel matched the published scanout plus the cursor at the expected coordinates.
+The emulator does not validate FPGA timing, and shared architectural semantics limit independence from the Rust RTL oracle.
