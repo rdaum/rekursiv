@@ -30,6 +30,50 @@ fn object(command: Command) -> Instruction {
 }
 
 #[test]
+fn control_store_validity_requires_every_lane_and_reset_invalidates_all_words() -> Result<()> {
+    let rt = runtime()?;
+    let mut h = Harness::new(&rt, Timing::default(), None)?;
+    let addresses = [0, 255, 256, 4095, 4096, 8191];
+    let lanes = Instruction::halt().encode()?;
+    // Program out of order, including the highest word and bank boundaries.
+    // Repeating a lane must not substitute for a missing lane.
+    for lane in [7, 0, 3, 3, 1, 6, 2, 5] {
+        for address in addresses {
+            h.program_lane(0, address, lane, lanes[lane])?;
+            h.rtl.cpu_dbg_addr_i = address as u16;
+            h.rtl.eval();
+            assert_eq!(h.rtl.cpu_dbg_code_valid_o, 0);
+        }
+    }
+    for address in addresses {
+        h.program_lane(0, address, 4, lanes[4])?;
+        h.rtl.cpu_dbg_addr_i = address as u16;
+        h.rtl.eval();
+        assert_eq!(h.rtl.cpu_dbg_code_valid_o, 1);
+    }
+    h.start_processor(8191)?;
+    for _ in 0..8 {
+        h.tick()?;
+    }
+    assert_ne!(h.rtl.cpu_halted_o, 0);
+    assert_eq!(h.rtl.cpu_fault_o, 0);
+    h.reset()?;
+    for address in addresses {
+        h.rtl.cpu_dbg_addr_i = address as u16;
+        h.rtl.eval();
+        assert_eq!(h.rtl.cpu_dbg_code_valid_o, 0);
+    }
+    h.program_lane(0, 8191, 4, lanes[4])?;
+    h.start_processor(8191)?;
+    for _ in 0..8 {
+        h.tick()?;
+    }
+    assert_ne!(h.rtl.cpu_halted_o, 0);
+    assert_eq!(h.rtl.cpu_fault_o, 2, "partial word must fault after reset");
+    Ok(())
+}
+
+#[test]
 fn arithmetic_stack_cache_and_full_word_equality() -> Result<()> {
     let rt = runtime()?;
     let mut h = Harness::new(&rt, Timing::default(), None)?;

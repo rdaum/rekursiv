@@ -113,6 +113,64 @@ It establishes failure behavior, not a functioning disk implementation.
 
 ## FPGA resource estimate
 
+The full-size synthesis flow keeps 8,192 control words. Generic synthesis retains inferred memories, while `scripts/synth-area.sh` maps the complete wrapper to UltraScale+ primitives.
+The area run includes integer and floating-point NUMERIK, LOGIK, OBJEKT, and collector hardware with 16 pager slots.
+Object RAM, backing storage, DDR controllers, PCIe, and board peripherals are external to this wrapper.
+
+Control-store validity uses eight lane bits per word and a per-word completeness check before read-address selection.
+Completeness bits are grouped into 256-word banks for address selection.
+This avoids whole-vector write masks and eight-bit reads from a 65,536-bit validity vector during synthesis.
+The banks also bound Verilator concatenations and Yosys address decoders.
+RTL regression checks cover partial programming, repeated lanes, reset, and the highest control-store address.
+
+### Full 8,192-word configuration
+
+Yosys 0.33 maps the complete `objekt_tb` wrapper with `synth_xilinx -family xcup -noiopad`.
+The configuration has 16 pager entries, 32 words per stack, 256 NAM words, and 1,024 opcode-map entries.
+The external memory capacity parameter is 16,777,216 object words; the memory itself is outside the synthesized design.
+
+| Block | Logic LUT primitives |
+| --- | ---: |
+| OBJEKT, including collector hardware | 24,418 |
+| Control store, NAM, opcode map, and access logic | 108,645 |
+| NUMERIK, including binary32 floating point | 6,559 |
+| Evaluation and control stacks | 2,357 |
+| Sequencer, device channel, and integration | 1,427 |
+| **Total** | **143,406** |
+
+The mapped design also contains 78,124 flip-flops, 10 DSP48E2 blocks, one RAMB36E2, and one RAMB18E2.
+Dedicated routing logic includes 1,183 CARRY4, 21,190 MUXF7, 10,085 MUXF8, and 661 MUXF9 primitives.
+Logic LUT counts sum LUT1 through LUT6 cells before placement and packing.
+
+The control store adds **53,760 RAM64M8 primitives**, separate from those logic LUTs.
+A complete [RAM64M8 primitive](https://docs.amd.com/r/en-US/ug974-vivado-ultrascale-libraries/RAM64M8) occupies eight LUTs.
+Multiplying the raw macro count gives 430,080 nominal RAM LUTs, or 573,486 LUT equivalents including logic.
+However, this netlist drives only the `DIG` data input of each macro; the other data inputs are undefined and their outputs are unused.
+There are 53,760 active 64-bit memory columns, giving 197,166 LUT equivalents if all unused macro capacity is removed.
+The raw eight-LUT macro total includes that unused capacity.
+Vendor implementation must establish whether it trims and repacks these macros; neither count is a placed resource total or proof of device fit.
+
+The 256-bit control store has asynchronous instruction, debug, and collector reads.
+These reads produce replicated distributed memory and large address-selection networks.
+Changing the read schedule to use block RAM is the main area-saving opportunity; this estimate assumes no such change.
+There is no placement, routing, or timing-closure result yet.
+
+Reproduce the mapping with:
+
+```sh
+scripts/synth-area.sh
+```
+
+The script writes `artifacts/rekursiv-xcup.log` and `artifacts/rekursiv-xcup.json`.
+The measured mapping completed in 9 minutes 35 seconds with a peak resident set of 3.34 GiB.
+Yosys `check -assert` reported zero problems.
+
+The validity implementation passes 229 release-profile workspace tests, with 15 explicitly ignored tests.
+Formatting, Clippy with warnings denied, RTL lint, generic synthesis, floating-point synthesis, and delayed-I/O examples also pass locally.
+The examples include machine collection without host recovery commands.
+
+### Earlier 256-word estimate
+
 The following estimate uses the original 256-word control store. The current wrapper has 8192 words.
 These figures are not a current resource estimate. `scripts/synth.sh` now checks the 8192-word LOGIK configuration.
 
