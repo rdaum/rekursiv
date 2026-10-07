@@ -19,7 +19,8 @@ fn native_saved_image_matches_xerox_trace_and_rtl_startup_checkpoint() -> Result
                 .ok()
         })
         .collect();
-    let mut loaded = boot::smalltalk(&std::fs::read(directory.join("VirtualImage"))?, 131072)?;
+    let mut loaded =
+        boot::smalltalk_saved_display(&std::fs::read(directory.join("VirtualImage"))?, 131072)?;
     let m = &mut loaded.machine;
     m.devices = presentation::workstation(0, 1000);
     let mut bytecodes = Vec::new();
@@ -62,9 +63,62 @@ const TRACE_SHA256: &str = "b6b42ecdc4e52381e85ef30fde9669656ae1e665604819dd3ab0
 
 #[test]
 #[ignore = "requires the pinned Xerox distribution; set REKURSIV_ST80_DIR"]
-fn native_saved_image_reclaims_before_low_space_notification() -> Result<()> {
+fn native_default_display_draws_at_1024_by_768() -> Result<()> {
     let directory = std::path::PathBuf::from(std::env::var("REKURSIV_ST80_DIR")?);
     let mut loaded = boot::smalltalk(&std::fs::read(directory.join("VirtualImage"))?, 1_048_576)?;
+    let m = &mut loaded.machine;
+    m.devices = presentation::workstation(0, 1000);
+    let mut copies = 0;
+    for _ in 0..30_000_000 {
+        ensure!(
+            !m.cpu.halted && !m.cpu.service,
+            "unexpected stop at {}",
+            m.cpu.pc
+        );
+        if m.step()? != Step::Retired || m.recovering() {
+            continue;
+        }
+        ensure!(
+            m.cpu.pc != loaded.symbols["bb_failed"] as u16,
+            "BitBlt failed"
+        );
+        if m.cpu.pc == loaded.symbols["bb_success"] as u16 {
+            copies += 1;
+            if copies == 32 {
+                break;
+            }
+        }
+    }
+    assert_eq!(copies, 32, "guest did not draw the desktop");
+    let frame = m
+        .devices
+        .display_bitmap
+        .as_ref()
+        .unwrap()
+        .visible
+        .as_ref()
+        .unwrap();
+    assert_eq!((frame.width, frame.height), (1024, 768));
+    assert_eq!(frame.stride, 32);
+    assert_eq!(frame.words.len(), 32 * 768);
+    // The expanded area must be drawn by guest BitBlt, not just blank padding
+    // around the former 640x480 display.
+    assert!(frame.words[32 * 480..].iter().any(|word| *word != 0));
+    assert!(frame
+        .words
+        .as_chunks::<32>()
+        .0
+        .iter()
+        .any(|row| row[20..].iter().any(|word| *word != 0)));
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires the pinned Xerox distribution; set REKURSIV_ST80_DIR"]
+fn native_saved_image_reclaims_before_low_space_notification() -> Result<()> {
+    let directory = std::path::PathBuf::from(std::env::var("REKURSIV_ST80_DIR")?);
+    let mut loaded =
+        boot::smalltalk_saved_display(&std::fs::read(directory.join("VirtualImage"))?, 1_048_576)?;
     let m = &mut loaded.machine;
     m.devices = presentation::workstation(0, 1000);
     let mut proactive = 0;
@@ -108,7 +162,8 @@ fn native_saved_image_reclaims_before_low_space_notification() -> Result<()> {
 #[ignore = "requires the pinned Xerox distribution; set REKURSIV_ST80_DIR"]
 fn native_saved_image_draws_through_bitblt() -> Result<()> {
     let directory = std::path::PathBuf::from(std::env::var("REKURSIV_ST80_DIR")?);
-    let mut loaded = boot::smalltalk(&std::fs::read(directory.join("VirtualImage"))?, 131072)?;
+    let mut loaded =
+        boot::smalltalk_saved_display(&std::fs::read(directory.join("VirtualImage"))?, 131072)?;
     let m = &mut loaded.machine;
     m.devices = presentation::workstation(0, 1000);
     let started = std::time::Instant::now();
@@ -194,7 +249,8 @@ fn native_saved_image_draws_through_bitblt() -> Result<()> {
 #[ignore = "requires the pinned Xerox distribution; set REKURSIV_ST80_DIR"]
 fn native_saved_image_cursor_tracks_mouse_without_an_explicit_link_request() -> Result<()> {
     let directory = std::path::PathBuf::from(std::env::var("REKURSIV_ST80_DIR")?);
-    let mut loaded = boot::smalltalk(&std::fs::read(directory.join("VirtualImage"))?, 1_048_576)?;
+    let mut loaded =
+        boot::smalltalk_saved_display(&std::fs::read(directory.join("VirtualImage"))?, 1_048_576)?;
     let m = &mut loaded.machine;
     m.devices = presentation::workstation(0, 1000);
     presentation::pointer(&mut m.devices, 200, 160);

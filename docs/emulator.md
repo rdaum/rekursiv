@@ -65,6 +65,10 @@ Fetch the pinned Xerox V2 distribution:
 python3 scripts/fetch-smalltalk-image.py
 ```
 
+The Smalltalk desktop and initial window use 1024×768 pixels.
+The loader adjusts the saved display configuration before execution. Smalltalk creates the full bitmap and redraws the desktop during startup.
+Resizing the host window scales the guest display.
+
 Run its saved process and watch it draw the desktop:
 
 ```sh

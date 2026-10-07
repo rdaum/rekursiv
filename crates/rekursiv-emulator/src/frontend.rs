@@ -5,7 +5,7 @@
 //! memory bounded when presentation stalls; intermediate frames are replaced.
 use eyre::Result;
 use rekursiv_devices::{Bitmap, BitmapFrame, InputKind, InputPacket};
-use rekursiv_emulator::{presentation, Machine, Statistics};
+use rekursiv_emulator::{boot::DEFAULT_DISPLAY_SIZE, presentation, Machine, Statistics};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -26,9 +26,13 @@ pub struct Screen {
 }
 impl Screen {
     pub fn dimensions(&self) -> (usize, usize) {
-        self.display
-            .as_ref()
-            .map_or((640, 480), |f| (f.width as usize, f.height as usize))
+        self.display.as_ref().map_or(
+            (
+                DEFAULT_DISPLAY_SIZE.0 as usize,
+                DEFAULT_DISPLAY_SIZE.1 as usize,
+            ),
+            |f| (f.width as usize, f.height as usize),
+        )
     }
     pub fn same_pixels(&self, other: &Self) -> bool {
         fn same(a: &Option<Arc<BitmapFrame>>, b: &Option<Arc<BitmapFrame>>) -> bool {

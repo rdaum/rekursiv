@@ -356,7 +356,7 @@ impl<'a> App<'a> {
             input,
             surface: None,
             window: None,
-            size: PhysicalSize::new(640, 480),
+            size: PhysicalSize::<u32>::from(rekursiv_emulator::boot::DEFAULT_DISPLAY_SIZE),
             screen: None,
             pixels: Vec::new(),
             running: true,
@@ -383,9 +383,10 @@ impl<'a> App<'a> {
         event_loop.exit();
     }
     fn dimensions(&self) -> (usize, usize) {
-        self.screen
-            .as_ref()
-            .map_or((640, 480), frontend::Screen::dimensions)
+        self.screen.as_ref().map_or_else(
+            || frontend::Screen::default().dimensions(),
+            frontend::Screen::dimensions,
+        )
     }
     fn map_pointer(&mut self) {
         if !self.focused {
@@ -583,7 +584,9 @@ impl ApplicationHandler for App<'_> {
                 event_loop.create_window(
                     Window::default_attributes()
                         .with_title("Rekursiv")
-                        .with_inner_size(PhysicalSize::new(640, 480)),
+                        .with_inner_size(PhysicalSize::<u32>::from(
+                            rekursiv_emulator::boot::DEFAULT_DISPLAY_SIZE,
+                        )),
                 )?,
             );
             let context = Context::new(window.clone()).map_err(surface_error)?;
