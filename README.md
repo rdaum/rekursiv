@@ -50,15 +50,26 @@ Historical binary compatibility is not a goal. We have no original software imag
 is unclear whether any usable copies survive. Perhaps there is a backup at the bottom of the
 [Forth and Clyde canal](https://en.wikipedia.org/wiki/Rekursiv#History).
 
-Instead of the original machine’s LINGO, the first language target will likely be **Smalltalk-80**.
-Language-specific object layouts, method lookup, and bytecodes will live in runtime code and
-microcode, keeping the lower-level hardware usable by other languages.
+The first language implementation is **Smalltalk-80**, in place of the original machine’s LINGO.
+Language-specific object layouts, method lookup, and bytecode execution live in microcode.
+The lower-level hardware remains independent of Smalltalk.
 
-Ultimate success means converting and booting a Smalltalk-80 image on my Mellanox NV303212A FPGA
+The machine currently runs **Smalltalk-80** from a converted Xerox image, with a graphical desktop,
+keyboard, and mouse. The "Blue Book" was used as a reference to write the microcode which ultimately
+executes on the emulated Rekursiv hardware.
+
+The Smalltalk desktop is tested only in the native software emulator. FPGA board integration remains unfinished.
+
+![Smalltalk-80 desktop and System Browser in the Rekursiv emulator](docs/images/st80.png)
+
+_Smalltalk-80 running on Rekursiv microcode in the native emulator._
+
+
+Ultimate success means running this Smalltalk-80 workstation on my Mellanox NV303212A FPGA
 card. It will have the card’s obscene 8 GB of RAM to play with. Display output will use the PCIe
 host machine’s framebuffer to make pretty pictures.
 
-## What runs today
+## Implementation
 
 The processor executes standalone microcode programs with integer arithmetic, stacks, object
 allocation, checked access, writeback, and automatic refill. RAM garbage collection runs in LOGIK
@@ -78,7 +89,15 @@ The RTL passes generic synthesis checks. It has not yet been validated on an FPG
 
 ## Build and run
 
-Run the native emulator's display and input demo:
+Fetch the Xerox Smalltalk-80 image and run it in the native emulator:
+
+```sh
+python3 scripts/fetch-smalltalk-image.py
+cargo run --release --locked -p rekursiv-emulator -- \
+  --smalltalk artifacts/st80/VirtualImage --memory-words 16777216
+```
+
+For the standalone display and input demo:
 
 ```sh
 cargo run --release --locked -p rekursiv-emulator
