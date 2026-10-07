@@ -33,8 +33,9 @@ field!(Cstk { Hold=0, Read=1, Bus=2, Upcor=3, Apc=4, Ap=5, Sp=6, Increment=7, De
 field!(Apc { Hold=0, Bus=1, Increment=2, Step=3 });
 field!(Fetch { Hold=0, Nam=1, Map=2, Both=3 });
 
-// Privileged OBJEKT controls, usable only inside an allocation recovery handler.
-field!(Recovery { None=0, Begin=1, Root=2, Slot=3, Info=4, Mark=5, ReadBody=6, Stage=7, WriteBody=8, Commit=9, Return=10 });
+// Collect requests collection from the mutator. Other nonzero controls are
+// privileged operations inside the shared collection/recovery handler.
+field!(Recovery { None=0, Begin=1, Root=2, Slot=3, Info=4, Mark=5, ReadBody=6, Stage=7, WriteBody=8, Commit=9, Return=10, Collect=11 });
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Instruction {
@@ -92,6 +93,17 @@ impl Instruction {
     /// Check static control-word constraints without packing the wire format.
     /// Executors also use this on fetched instructions, including modified code.
     pub fn validate(self) -> Result<(), Status> {
+        // A collection request is a standalone instruction. It resumes at the
+        // successor only after successful collection, without other effects.
+        if self.recovery == Recovery::Collect
+            && self
+                != (Self {
+                    recovery: Recovery::Collect,
+                    ..Self::default()
+                })
+        {
+            return Err(Status::BadCommand);
+        }
         if self.ra >= 16 || self.rb >= 16 || self.compact_code > 3 {
             return Err(Status::BadCommand);
         }

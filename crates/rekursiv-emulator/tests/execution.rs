@@ -10,6 +10,21 @@ fn native_retirements_and_heaps_match_rtl_across_collection_and_paging() -> Resu
     for source in [
         include_str!("../../../microcode/collection.uc"),
         include_str!("../../../microcode/allocation.uc"),
+        // A proactive pass on an empty heap, then repeated passes retaining a
+        // 200-word live object. The last transfer's size must not reserve an
+        // extra 200 words at Commit: this collection needs zero extra space.
+        "gc=Collect
+         d=0xa000000064, page=Allocate, size=200, scan=0
+         d=Object, ldvr, vr=0
+         d=1, idx=Load
+         d=73, mem=Write
+         d=1234, r=Bus, rb=7, ldrb, ldq, flags
+         d=73, estk=Bus, ldsym
+         gc=Collect
+         gc=Collect
+         read=FreeWords
+         d=Object, r=Bus, rb=4, ldrb
+         halt",
     ] {
         let mut loaded = boot::microcode(source, 512)?;
         let machine = &mut loaded.machine;
@@ -53,13 +68,90 @@ fn native_retirements_and_heaps_match_rtl_across_collection_and_paging() -> Resu
         )?;
         assert!(machine.cpu.halted);
         assert_eq!(machine.stats.collections, h.stats.collections);
-        if source.contains("size=120") {
+        if source.contains("gc=Collect") {
+            assert_eq!(machine.stats.collections, 3);
+            assert_eq!(machine.cpu.rf[4], 56);
+            assert_eq!(machine.cpu.rf[7], 1234);
+            assert_eq!(machine.cpu.estkr, 73);
+            assert_eq!(machine.objekt.next_identity, 2);
+        } else if source.contains("size=120") {
             assert_eq!(machine.stats.collections, 5);
             assert!(machine.stats.collector_retired > 200_000);
         } else {
             assert_eq!(machine.cpu.estkr, Word::signed(1234).bits());
         }
     }
+    Ok(())
+}
+
+#[test]
+fn collection_requires_a_handler_and_cannot_nest() -> Result<()> {
+    let runtime = rekursiv_sim::runtime()?;
+    for nested in [false, true] {
+        let collect = Instruction {
+            recovery: Recovery::Collect,
+            ..Default::default()
+        };
+        let mut image = Image::program(&[collect, Instruction::halt()]);
+        if nested {
+            image = image.with_ram_collector(128, 16)?;
+            image.code[128] = Some(collect);
+        }
+        let mut m = Machine::new(image.clone(), 0, 16, 512)?;
+        if nested {
+            assert_eq!(m.step()?, Step::RecoveryEntered);
+        }
+        assert!(m.step().is_err());
+        assert_eq!(m.cpu.pc, 0);
+        assert_eq!(m.fault.unwrap().code, 1);
+        assert_eq!(m.stats.collections, 0);
+        assert_eq!(m.stats.retired, 0);
+        let mut h = Harness::new(&runtime, Timing::default(), None)?;
+        h.load_processor(&image)?;
+        h.start_processor(0)?;
+        for _ in 0..20 {
+            h.tick()?;
+            if h.rtl.cpu_halted_o != 0 {
+                break;
+            }
+        }
+        assert_ne!(h.rtl.cpu_halted_o, 0);
+        assert_eq!(h.rtl.cpu_fault_o, 1);
+        assert_eq!(h.rtl.cpu_pc_o, 0);
+        assert_eq!(h.stats.commands, 0);
+        assert_eq!(h.stats.store_transactions, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn malformed_collection_request_cannot_enter_recovery() -> Result<()> {
+    let collect = Instruction {
+        recovery: Recovery::Collect,
+        ..Default::default()
+    };
+    let image = Image::program(&[collect, Instruction::halt()]).with_ram_collector(128, 16)?;
+    let mut m = Machine::new(image.clone(), 0, 16, 512)?;
+    m.image.code[0].as_mut().unwrap().data = Word::raw(1)?;
+    assert!(m.step().is_err());
+    assert_eq!(m.fault.unwrap().code, 1);
+    assert!(!m.recovering());
+    let runtime = rekursiv_sim::runtime()?;
+    let mut h = Harness::new(&runtime, Timing::default(), None)?;
+    h.load_processor(&image)?;
+    // Bypass the assembler's rejection to exercise hardware validation.
+    h.program_lane(0, 0, 0, 1)?;
+    h.start_processor(0)?;
+    for _ in 0..10 {
+        h.tick()?;
+        assert_eq!(h.rtl.cpu_gc_active_o, 0);
+        if h.rtl.cpu_halted_o != 0 {
+            break;
+        }
+    }
+    assert_eq!(h.rtl.cpu_fault_o, 1);
+    assert_eq!(h.rtl.cpu_pc_o, 0);
+    assert_eq!(h.stats.commands, 0);
     Ok(())
 }
 

@@ -156,6 +156,8 @@ struct Execution {
     status: u32,
     allocations: u64,
     collections: u64,
+    proactive_collections: usize,
+    low_space_checks: Vec<(u32, u32)>,
     saves: u64,
     allocation_retries: usize,
     refill_retries: usize,
@@ -309,8 +311,16 @@ fn execute_machine(
     let mut idle_visits = 0;
     let mut capacity_samples = Vec::new();
     let mut debugger_breaks = 0;
+    let mut proactive_collections = 0;
+    let mut low_space_checks = Vec::new();
     loop {
         h.run_processor_observed(&program, &mut cpu, 10_000_000, |h, cpu| {
+            if cpu.pc == assembly.symbols["low_space_words_checked"] as u16 + 1 {
+                low_space_checks.push((cpu.object as u32, cpu.rf[2]));
+            }
+            if cpu.pc == assembly.symbols["low_space_collected"] as u16 {
+                proactive_collections += 1;
+            }
             if h.rtl.cpu_pc_o == assembly.symbols["capacity_value"] as u16 {
                 let expected = if cpu.rf[0] == 112 {
                     u64::from(
@@ -469,6 +479,8 @@ fn execute_machine(
         status: cpu.rf[15],
         allocations: h.rtl.dbg_next_identity_o - converted.next_identity,
         collections: h.stats.collections,
+        proactive_collections,
+        low_space_checks,
         saves: h.stats.saved_objects,
         allocation_retries: h
             .commands
@@ -2309,6 +2321,7 @@ fn low_space_uses_full_width_thresholds_and_signals_only_after_strict_crossing()
         assert_eq!((e.status, e.result), (1, i(2)));
         assert_eq!(e.allocations, 1 + u64::from(allocate_after));
         let signaled = allocate_after || word_limit != 0;
+        assert_eq!(e.proactive_collections, usize::from(word_limit != 0));
         assert_eq!(
             e.records[&r(312).identity()?].body[1..],
             [r(2), r(2), i(i32::from(signaled))]
@@ -2329,6 +2342,34 @@ fn low_space_uses_full_width_thresholds_and_signals_only_after_strict_crossing()
             );
         }
     }
+    Ok(())
+}
+
+#[test]
+fn low_space_reclaims_before_signaling_and_keeps_the_registration_armed() -> Result<()> {
+    let mut code = vec![112, 32, 33, 34, 132, 3, 3, 135];
+    for _ in 0..8 {
+        code.extend([36, 213, 135]);
+    }
+    code.extend([119, 124]);
+    let mut image = scheduler_fixture(&code, &[312, oop(0), oop(128), SELECTOR, CLASS, 132], 1, 3);
+    primitive_method(&mut image, 116, 3, &[16, 124]);
+    method(&mut image, 336, 7, 0, &[oop(70), 216], &[116, 124]);
+    dictionary(&mut image, META, 2, 338, 340, &[(132, 336)]);
+    let e = execute_root(image, ROOT, true)?;
+    assert_eq!((e.status, e.result), (1, i(2)));
+    assert!(
+        e.proactive_collections > 0,
+        "fixture must cross the word threshold: {:?}",
+        e.low_space_checks
+    );
+    assert_eq!(e.records[&r(312).identity()?].body[3], i(0));
+    assert_ne!(
+        e.roots[30],
+        r(2),
+        "successful reclamation must leave notification armed"
+    );
+    assert!(e.device_requests.is_empty());
     Ok(())
 }
 

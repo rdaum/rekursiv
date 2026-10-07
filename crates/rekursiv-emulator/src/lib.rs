@@ -36,6 +36,17 @@ pub struct Statistics {
     pub object_commands: u64,
     pub device_requests: u64,
 }
+impl Statistics {
+    /// Retired mutator plus collector instructions per elapsed second. Hold
+    /// steps and entry/return transitions do not retire a microinstruction.
+    pub fn instructions_per_second(&self, elapsed: std::time::Duration) -> f64 {
+        if elapsed.is_zero() {
+            0.0
+        } else {
+            (self.retired as f64 + self.collector_retired as f64) / elapsed.as_secs_f64()
+        }
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fault {
     pub pc: u16,
@@ -173,11 +184,16 @@ impl Machine {
             self.cpu.prepare(&self.image, irq)
         };
         let (mut next, command) = prepared.map_err(|code| self.fail(code, None))?;
+        if instruction.recovery == Recovery::Collect && self.retry_irq.is_none() {
+            self.enter_recovery(None, irq)?;
+            self.devices.tick(None, false)?;
+            return Ok(Step::RecoveryEntered);
+        }
         if instruction.seq == Seq::Hold {
             self.devices.tick(None, false)?;
             return Ok(Step::Held);
         }
-        if instruction.recovery != Recovery::None {
+        if !matches!(instruction.recovery, Recovery::None | Recovery::Collect) {
             let data = Word::from_bits(self.cpu.bus(instruction))?;
             let result = self
                 .recovery
@@ -195,7 +211,7 @@ impl Machine {
                 && self.retry_irq.is_none()
                 && matches!(command.pager, Pager::Allocate | Pager::Fetch)
             {
-                self.enter_recovery(command, irq)?;
+                self.enter_recovery(Some(command), irq)?;
                 self.devices.tick(None, false)?;
                 return Ok(Step::RecoveryEntered);
             }
@@ -247,17 +263,23 @@ impl Machine {
         }
         Ok(Step::Retired)
     }
-    fn enter_recovery(&mut self, command: Command, irq: bool) -> Result<()> {
-        let (needed, needed_class) = if command.pager == Pager::Fetch {
-            let r = self
-                .objekt
-                .store
-                .records
-                .get(&command.data.identity()?)
-                .ok_or(Status::InvalidReference)?;
-            (r.body.len() as u32, r.class)
+    fn enter_recovery(&mut self, command: Option<Command>, irq: bool) -> Result<()> {
+        // Proactive collection has no pending transfer, required allocation,
+        // or extra class root. It uses the same collector instructions.
+        let (needed, needed_class) = if let Some(command) = command {
+            if command.pager == Pager::Fetch {
+                let r = self
+                    .objekt
+                    .store
+                    .records
+                    .get(&command.data.identity()?)
+                    .ok_or(Status::InvalidReference)?;
+                (r.body.len() as u32, r.class)
+            } else {
+                (command.alloc_size, command.data)
+            }
         } else {
-            (command.alloc_size, command.data)
+            (0, Word::ZERO)
         };
         let mut roots = vec![Word::ZERO; 20 + STACK_WORDS + 2 * CODE_WORDS + 32];
         roots[..8].copy_from_slice(&self.objekt.state.vr);
@@ -268,8 +290,8 @@ impl Machine {
         for n in 0..4 {
             roots[10 + n] = self.objekt.classes[n].unwrap_or(Word::ZERO);
         }
-        roots[14] = command.data;
-        roots[15] = command.expected_type.unwrap_or(Word::ZERO);
+        roots[14] = command.map_or(Word::ZERO, |c| c.data);
+        roots[15] = command.and_then(|c| c.expected_type).unwrap_or(Word::ZERO);
         roots[16] = Word::from_bits(self.cpu.estkr)?;
         roots[17] = Word::from_bits(self.cpu.symbol)?;
         roots[18] = Word::from_bits(self.cpu.object)?;

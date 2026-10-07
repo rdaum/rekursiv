@@ -360,7 +360,9 @@ Primitive 116 accepts a Semaphore with nonnegative identity and word thresholds,
 Identity thresholds support all 37 bits; word thresholds support 32 bits. Invalid arguments preserve the previous registration and enter guest fallback.
 Threshold values are copied into positive SmallInteger chunks in an ordinary rooted Array, so later argument mutation cannot change them.
 At bytecode boundaries, microcode reads each threshold before sampling the corresponding OBJEKT counter, accounting for paging or collection during those reads.
-It signals when either available count is strictly less than its threshold; equality does not signal.
+A word count below its threshold requests one `gc=Collect` pass, then rereads the threshold and available count.
+It signals only if the word count remains below the threshold after collection. Equality does not signal.
+An identity count below its threshold signals directly, because collection does not recycle identities.
 Delivery releases the registration before signalling, preventing repeated signals while space remains low. A new registration rearms notification.
 Zero thresholds disable their respective conditions. This path issues no device requests and requires no host heap callbacks.
 

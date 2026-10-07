@@ -122,6 +122,7 @@ pub fn run(
     machine: &mut Machine,
     step: &mut impl FnMut(&mut Machine) -> Result<bool>,
     frame_limit: Option<u64>,
+    execution_time: &mut Duration,
 ) -> Result<()> {
     let mut window = Window::new(
         "Rekursiv",
@@ -145,6 +146,9 @@ pub fn run(
     let mut running = true;
     let mut failure = None;
     let mut reported_overrun = false;
+    let mut reported_at = Instant::now();
+    let mut reported_execution = *execution_time;
+    let mut reported_instructions = 0.0;
     while window.is_open() && frame_limit.is_none_or(|limit| frames < limit) {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
         if let Some(clock) = &mut machine.devices.clocks {
@@ -176,6 +180,24 @@ pub fn run(
                 if n % 256 == 0 && budget.elapsed() >= Duration::from_secs_f64(1.0 / 60.0) {
                     break;
                 }
+            }
+            *execution_time += budget.elapsed();
+            if running && reported_at.elapsed() >= Duration::from_secs(1) {
+                let instructions =
+                    machine.stats.retired as f64 + machine.stats.collector_retired as f64;
+                let seconds = (*execution_time - reported_execution).as_secs_f64();
+                let rate = if seconds > 0.0 {
+                    (instructions - reported_instructions) / seconds
+                } else {
+                    0.0
+                };
+                window.set_title(&format!(
+                    "Rekursiv — {:.2} M microinstructions/s",
+                    rate / 1_000_000.0
+                ));
+                reported_at = Instant::now();
+                reported_execution = *execution_time;
+                reported_instructions = instructions;
             }
             if !running {
                 // A halted or faulted CPU has no work to fill the frame budget.

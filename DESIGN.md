@@ -1539,11 +1539,11 @@ Longer native runs draw browser, transcript, and workspace windows. This is not 
 acceptance of a usable desktop, storage, or snapshot save/reload.
 Matching geometry refreshes only changed 32-bit pixel groups, with atomic device publication.
 Changed geometry uses a complete replacement. The device remains a pixel-storage endpoint.
-Longer native startup runs reach the guest “Space is Low” notifier, even with a larger RAM configuration.
-Before the rendering improvements, 1,048,576 RAM words allowed 769 successful BitBlts before the first notification.
-It reports 36,104 available words against a 36,135-word threshold. `FreeWords` counts
-unused allocation space, excluding garbage awaiting collection. Coordinate collection
-with low-space notification before claiming desktop readiness.
+Low-space notification now requests the machine collector before signalling on available words.
+Microcode rereads the threshold and capacity after that pass. A still-low result signals once through the guest scheduler.
+The generic `gc=Collect` control works in RTL and the native emulator without host collection callbacks.
+A 200-million-step native run with 1,048,576 RAM words completes 769 BitBlts without the former premature warning.
+Full desktop interaction, storage, and snapshot recovery remain separate acceptance checks.
 
 
 - Resume the selected image from its saved process and context state.

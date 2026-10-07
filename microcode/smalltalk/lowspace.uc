@@ -140,6 +140,8 @@ unsigned40_byte:
 ; ordinary object, so fetching it may page or collect. Sample each hardware
 ; count only AFTER its threshold reads, against the resulting allocator state.
 check_low_space:
+    d=0, r=Bus, rb=6, ldrb ; one collection attempt per boundary check
+low_space_recheck:
     d=30, r=Bus, rb=7, ldrb
     d=NIL, ldsym
     ra=7, d=Root, seq=ConditionalJump, cc=Symbol, brch=check_device_events
@@ -164,9 +166,20 @@ low_space_words_checked:
     read=FreeWords
     d=Object, r=Bus, rb=4, ldrb
     ra=4, rb=2, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=!Carry, brch=low_space_signal
+    seq=ConditionalJump, cc=!Carry, brch=low_space_collect
     d=0, ldvr, vr=5
     seq=Jump, brch=check_device_events
+low_space_collect:
+    ; FreeWords measures the unused tail, not reclaimable garbage. Ask the
+    ; same machine collector to reclaim first, then reread the registration
+    ; and available count. A still-low result signals once, without a GC loop.
+    ; Identity exhaustion goes directly to signal: identities are monotonic.
+    ra=6, flags
+    seq=ConditionalJump, cc=!Zero, brch=low_space_signal
+    d=1, r=Bus, rb=6, ldrb
+    gc=Collect
+low_space_collected:
+    seq=Jump, brch=low_space_recheck
 low_space_signal:
     ; Fetch the recipient before releasing the registration; it then remains
     ; in VR6 across any collection or preemption during the ordinary signal.

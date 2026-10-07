@@ -638,7 +638,9 @@ wrapper prefixes these with `cpu_`. Keep the configuration fixed while the heap 
 [collection contract](recovery.md) defines context preservation, root bounds, semispaces, failure
 behavior, and return.
 
-Recovery controls use an internal request/completion port to OBJEKT. Its valid/ready rules match the
+LOGIK holds `gc_explicit_o` during proactive collection, connected to OBJEKT's `gc_explicit_i`. This suppresses stale transfer size and class inputs.
+
+Recovery controls 1–9 use an internal request/completion port to OBJEKT. Its valid/ready rules match the
 ordinary command channel. The collector datapath never accepts host service requests and never
 issues backing-store transactions.
 
@@ -655,12 +657,13 @@ issues backing-store transactions.
 |     8 | WriteBody | Zero-based destination offset; write the matching buffered word                       |
 |     9 | Commit    | Publish completed relocation and exchange allocation spaces                           |
 |    10 | Return    | Restore processor context and retry; requires successful Commit                       |
+|    11 | Collect   | Standalone mutator request for collection, with no allocation reservation               |
 
 Slot flags are valid (bit 0), marked (1), scanned (2), persistent-state retention root (3), and NEW
 (4). Retention roots include dirty persistent objects and NEW objects protected by committed saves
 or backing-record edges. ReadBody and WriteBody use the external RAM request/completion channel.
 Stage and Commit return `OUT_OF_SPACE` when their capacity conditions fail. Info on an invalid slot
 returns `NOT_RESIDENT`; invalid indices return `BOUNDS`. Mark ignores nonreferences, nonresident
-objects, and collisions without faulting or fetching. Every recovery operation is privileged to an
-active collector invocation. Collector instructions cannot combine an OBJEKT mutator command or
+objects, and collisions without faulting or fetching. Controls 1–10 require an
+active collector invocation. `gc=Collect` requires mutator mode and an enabled collector, and rejects all other control fields. Collector instructions cannot combine an OBJEKT mutator command or
 alter frozen stacks and fetch state.

@@ -2,8 +2,9 @@
 
 The RAM collector executes as LOGIK microcode, using NUMERIK and privileged OBJEKT controls.
 Allocation or refill exhaustion enters the collector automatically, then retries the interrupted
-command. Rust loads the control store, emulates external devices, and checks test results. It does
-not supply roots, mark objects, or choose relocation addresses during machine execution.
+command. A standalone `gc=Collect` instruction enters the same collector before exhaustion.
+The RTL executes this path autonomously. The native emulator executes the same microcode against its Rust maintenance datapath.
+Neither executor calls the graph-walking Rust collector used as a test oracle.
 
 The implementation follows the book's RAM collector on pp. 135–139. It uses the project's 40-bit
 values and control encodings. It is a stopped-mutator collector; persistent-store reclamation and
@@ -45,14 +46,18 @@ body reservation and identity consumption for the failed attempt. Other errors r
 processor faults. A request can trigger one collection before its retry; a second failure halts
 instead of looping indefinitely.
 
+`gc=Collect` requests collection with no pending allocation or refill. It requires an enabled collector and cannot combine other control fields.
+Successful return retires the request once and advances to its successor. Nested requests and requests without a collector are encoding faults.
+The request adds no allocation reservation or transfer-class root. LOGIK holds `gc_explicit_o` throughout collection so OBJEKT ignores stale transfer metadata.
+
 LOGIK saves PC, UPCOR, mark, condition history, all sixteen arithmetic registers, Q, product, flags,
 symbol, and the previous object result/status. It retains the failed request's operands and captured
 branch condition. Stacks, pointers, APC, and the NAM/CSMAP pipeline remain frozen throughout
 collection. Collector instructions cannot issue mutator commands, change those frozen structures,
 halt, or enter a service break.
 
-OBJEKT rejects mutator and host service requests while LOGIK owns collection. The failed transfer
-has completed and both device channels are drained before collector memory access begins. The
+OBJEKT rejects mutator and host service requests while LOGIK owns collection. Any preceding transfer
+has completed and both external channels are drained before collector memory access begins. The
 collector uses a separate internal command port but shares the normal physical RAM channel. Every
 request remains stable until acceptance and has one completion.
 

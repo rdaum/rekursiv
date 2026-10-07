@@ -268,11 +268,14 @@ control aliases are not implemented.
 | `vr`, `class`                       | Value-register selector and expected-class guard                                                                |
 | `size`, `scan`                      | Literal allocation size or `ra` for register A; scan flag 0 or 1                                                |
 | `compact`                           | Compact construction code 0–3                                                                                   |
-| `gc`                                | Privileged recovery operation                                                                                   |
+| `gc`                                | Collector operation or standalone `Collect` request                                                                                   |
 
 Flags without operands are `halt`, `ldsym`, `ldmark`, `ldrb`, `ldq`, `flags`, `ldap`, `ldvr`, and `ldroot`.
 `ldroot` writes D to an explicit root slot indexed by register A (0–31). `d=Root` reads that slot.
 Both controls are mutator operations; the collector observes the frozen slots through its root interface.
+
+`gc=Collect` requests the loaded collector from mutator microcode. It cannot combine other control fields.
+It preserves the interrupted state, collects once, and then advances to the successor. Failure restores the request address and stops execution.
 
 `read=FreeWords` and `read=FreeIdentities` return OBJEKT allocation capacity through the Object bus.
 They do not require an object selection or issue external transfers. Counts include reservations retained after a failed allocation.

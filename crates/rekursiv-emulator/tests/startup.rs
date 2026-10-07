@@ -60,6 +60,48 @@ fn native_saved_image_matches_xerox_trace_and_rtl_startup_checkpoint() -> Result
 
 const TRACE_SHA256: &str = "b6b42ecdc4e52381e85ef30fde9669656ae1e665604819dd3ab04a4f06c8cd72";
 
+#[test]
+#[ignore = "requires the pinned Xerox distribution; set REKURSIV_ST80_DIR"]
+fn native_saved_image_reclaims_before_low_space_notification() -> Result<()> {
+    let directory = std::path::PathBuf::from(std::env::var("REKURSIV_ST80_DIR")?);
+    let mut loaded = boot::smalltalk(&std::fs::read(directory.join("VirtualImage"))?, 1_048_576)?;
+    let m = &mut loaded.machine;
+    m.devices = presentation::workstation(0, 1000);
+    let mut proactive = 0;
+    let mut copies = 0;
+    for _ in 0..100_000_000 {
+        ensure!(
+            !m.cpu.halted && !m.cpu.service,
+            "unexpected stop at {}",
+            m.cpu.pc
+        );
+        let pc = m.cpu.pc;
+        let collecting = m.recovering();
+        if m.step()? != Step::Retired || collecting {
+            continue;
+        }
+        ensure!(
+            pc != loaded.symbols["low_space_signal"] as u16,
+            "premature low-space notification"
+        );
+        proactive += usize::from(pc == loaded.symbols["low_space_collected"] as u16);
+        copies += usize::from(pc == loaded.symbols["bb_success"] as u16);
+        if m.stats.retired >= 60_000_000 {
+            break;
+        }
+    }
+    // The former notifier was reached at about 35 million mutator instructions.
+    assert!(m.stats.retired >= 60_000_000);
+    assert!(proactive > 0);
+    assert!(copies > 700);
+    assert_ne!(
+        m.cpu.roots.unwrap()[30],
+        rekursiv_smalltalk::layout::reference(2)?
+    );
+    eprintln!("post-reclamation: {} mutator instructions, {proactive} proactive collections, {copies} copies", m.stats.retired);
+    Ok(())
+}
+
 /// This is deliberately bounded: successful drawing is not a claim that image
 /// startup, storage, snapshotting, or every interactive operation is complete.
 #[test]

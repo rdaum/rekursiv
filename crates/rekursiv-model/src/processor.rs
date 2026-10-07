@@ -215,7 +215,8 @@ impl Processor {
         // Keep validation on every fetch: callers can replace control words.
         // Reconstructing all 256 wire bits adds no execution semantics.
         i.validate().map_err(|_| 1u8)?;
-        if (!recovering && i.recovery != Recovery::None)
+        if (i.recovery == Recovery::Collect && (recovering || image.collector_entry.is_none()))
+            || (!recovering && !matches!(i.recovery, Recovery::None | Recovery::Collect))
             || (recovering
                 && (i.object.is_some()
                     || i.halt

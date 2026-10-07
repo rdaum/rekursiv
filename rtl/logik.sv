@@ -24,7 +24,7 @@ module logik #(
     input logic [1:0] boot_space_i, input logic [15:0] boot_addr_i,
     input logic [2:0] boot_lane_i, input logic [31:0] boot_data_i,
     input logic gc_enable_i, input logic [15:0] gc_entry_i,
-    output logic gc_active_o, output logic gc_valid_o, input logic gc_ready_i,
+    output logic gc_active_o, gc_explicit_o, output logic gc_valid_o, input logic gc_ready_i,
     output logic [3:0] gc_operation_o, output logic [39:0] gc_data_o, gc_root_o,
     input logic gc_response_i, output logic gc_response_ready_o,
     input logic [3:0] gc_status_i, input logic [39:0] gc_result_i,
@@ -72,12 +72,13 @@ module logik #(
     logic [3:0] object_status, service_code;
     logic [31:0] alu_result, register_a;
     // Recovery reuses this execution pipeline and NUMERIK, not a second CPU.
-    // Entry is possible only after a completed, unreserved space failure. The
+    // Entry follows a completed space failure or a standalone Collect request.
+    // Both occur with the external channels drained. The
     // sequencer and arithmetic modules save their own context on gc_enter;
     // stacks and the fetch pipeline are held by their retirement gates. ROOT
     // reads frozen/saved values, so collector temporaries never become roots.
     // Return retries with the original condition, even if IRQ changed meanwhile.
-    logic gc_enter, gc_exit, gc_failed, retried, response_valid;
+    logic gc_enter, gc_request, gc_exit, gc_failed, retried, response_valid;
     logic [3:0] response_status;
     logic [39:0] response_data, saved_symbol, saved_object, saved_bus, saved_type;
     logic [3:0] saved_status;
@@ -89,9 +90,11 @@ module logik #(
     assign response_valid=gc_active_o ? gc_response_i : rsp_valid_i;
     assign response_status=gc_active_o ? gc_status_i : rsp_status_i;
     assign response_data=gc_active_o ? gc_result_i : rsp_data_i;
-    assign gc_enter=state==WAIT_RESPONSE && !gc_active_o && rsp_valid_i &&
+    assign gc_request=state==EXECUTE && !gc_active_o && !retried &&
+        instruction.recovery==11 && local_fault==FAULT_NONE;
+    assign gc_enter=gc_request || (state==WAIT_RESPONSE && !gc_active_o && rsp_valid_i &&
         rsp_status_i==11 && gc_enable_i && !retried &&
-        (instruction.object_pager==6 || instruction.object_pager==5);
+        (instruction.object_pager==6 || instruction.object_pager==5));
     assign gc_failed=gc_active_o && ((state==EXECUTE && local_fault!=FAULT_NONE) ||
         (state==WAIT_RESPONSE && gc_response_i && gc_status_i!=0));
     assign gc_exit=gc_failed || (gc_active_o && state==EXECUTE &&
@@ -244,8 +247,12 @@ module logik #(
             (instruction.alu!=ALU_FLOAT && (instruction.fp_operation!=0 || instruction.fp_rounding!=0)) ||
             (instruction.alu==ALU_FLOAT && (instruction.object_enable || instruction.recovery!=0 || gc_active_o ||
                 instruction.shift!=SHIFT_NONE || instruction.carry!=CARRY_ZERO || instruction.estk==ESTK_COMPACT))) local_fault=FAULT_ENCODING;
-        else if(instruction.recovery>10 ||
-            (instruction.recovery!=0 && !gc_active_o) ||
+        // Collect is an effect-free mutator request, never a maintenance op.
+        // On return, retried permits this word to retire once without reentry.
+        else if(instruction.recovery>11 ||
+            (instruction.recovery==11 && (gc_active_o || !gc_enable_i ||
+                instruction != (256'd11 << 212))) ||
+            (instruction.recovery!=0 && instruction.recovery!=11 && !gc_active_o) ||
             (instruction.allocation_dynamic && register_a[31:24]!=0) ||
             (gc_active_o && (instruction.object_enable || instruction.halt || instruction.sequence_op==SEQ_SERVICE ||
                 instruction.sp!=0 || instruction.esp!=0 || instruction.csp!=0 || instruction.estk!=0 ||
@@ -264,12 +271,13 @@ module logik #(
             HALTED: if (start) next_state = EXECUTE;
             EXECUTE: begin
                 if (local_fault != FAULT_NONE) next_state = HALTED;
+                else if (gc_request) next_state = EXECUTE;
                 // HOLD freezes the whole instruction, unconditionally. Relative
                 // zero is different: it retires effects and then revisits itself.
                 else if (instruction.sequence_op != SEQ_HOLD) begin
                     if (instruction.device != 0) next_state = DEVICE_WAIT;
                     else if (instruction.alu==ALU_FLOAT) next_state=NUMERIC_WAIT;
-                    else if (instruction.object_enable || (instruction.recovery!=0 && instruction.recovery!=10)) next_state = ISSUE;
+                    else if (instruction.object_enable || (instruction.recovery!=0 && instruction.recovery<10)) next_state = ISSUE;
                     else retire = 1'b1;
                 end
             end
@@ -308,7 +316,7 @@ module logik #(
     always_ff @(posedge clk_i) begin
         if (rst_i) begin
             state <= HALTED;
-            gc_active_o<=0; retried<=0; saved_symbol<=0; saved_object<=0; saved_bus<=0; saved_type<=0;
+            gc_active_o<=0; gc_explicit_o<=0; retried<=0; saved_symbol<=0; saved_object<=0; saved_bus<=0; saved_type<=0;
             saved_status<=0; saved_issued_condition<=0; last_status_o<=0;
             retire_o <= 1'b0;
             fault_o <= FAULT_NONE;
@@ -332,13 +340,13 @@ module logik #(
                 if(response_status!=0 && !gc_enter) fault_o<=FAULT_OBJECT;
             end
             if(gc_enter) begin
-                gc_active_o<=1; retried<=1;
+                gc_active_o<=1; gc_explicit_o<=gc_request; retried<=1;
                 saved_symbol<=symbol; saved_object<=object_result; saved_status<=object_status;
                 saved_bus<=bus_value; saved_type<=instruction.check_type ? instruction.expected_type : 40'b0;
-                saved_issued_condition<=issued_condition;
+                saved_issued_condition<=gc_request ? condition_value : issued_condition;
             end
             if(gc_exit) begin
-                gc_active_o<=0; symbol<=saved_symbol; object_result<=saved_object; object_status<=saved_status;
+                gc_active_o<=0; gc_explicit_o<=0; symbol<=saved_symbol; object_result<=saved_object; object_status<=saved_status;
             end
             if (retire) begin
                 if(!gc_active_o) retried<=0;

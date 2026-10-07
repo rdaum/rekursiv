@@ -1,6 +1,10 @@
 use eyre::{bail, ensure, Result};
 use rekursiv_emulator::{boot, presentation, Step};
-use std::{io::Write, path::PathBuf};
+use std::{
+    io::Write,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 #[cfg(feature = "window")]
 mod window;
 
@@ -182,25 +186,38 @@ fn main() -> Result<()> {
         }
         Ok(!matches!(step, Step::Halted | Step::Service(_)))
     };
+    // Loading/conversion is complete. Time the execution loop separately
+    // from presentation and time spent inspecting a stopped window.
+    let started = Instant::now();
+    let mut execution_time = Duration::ZERO;
     let result = if headless {
-        (|| {
+        let result = (|| {
             while run(&mut loaded.machine)? {}
             Ok(())
-        })()
+        })();
+        execution_time += started.elapsed();
+        result
     } else {
         #[cfg(feature = "window")]
         {
-            window::run(&mut loaded.machine, &mut run, frames)
+            window::run(&mut loaded.machine, &mut run, frames, &mut execution_time)
         }
         #[cfg(not(feature = "window"))]
         {
             bail!("this build has no window support; use --headless or enable the window feature");
         }
     };
+    let elapsed = started.elapsed();
     if let Some(trace) = &mut trace {
         trace.flush()?;
     }
     eprintln!("PC {}: {} mutator instructions, {} collector instructions, {} collections, {} device requests; halted={}, service={}", loaded.machine.cpu.pc, loaded.machine.stats.retired, loaded.machine.stats.collector_retired, loaded.machine.stats.collections, loaded.machine.stats.device_requests, loaded.machine.cpu.halted, loaded.machine.cpu.service);
+    eprintln!(
+        "Execution: {:.3} s active, {:.3} s elapsed; {:.0} microinstructions/s active ({:.0}/s elapsed)",
+        execution_time.as_secs_f64(), elapsed.as_secs_f64(),
+        loaded.machine.stats.instructions_per_second(execution_time),
+        loaded.machine.stats.instructions_per_second(elapsed),
+    );
     if let Some(path) = frame {
         let visible = loaded
             .machine

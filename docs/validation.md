@@ -348,3 +348,30 @@ These runs used the original image, 1,048,576 RAM words, and headless presentati
 They produced identical framebuffers, final micro-PCs, instruction counts, collection counts, and device-request counts.
 The window loop also removes the sleep after its former 8 ms execution budget.
 It now executes for approximately 16.7 ms before presentation. Interactive performance for this change remains unmeasured.
+
+### Proactive collection and longer execution
+
+Native and RTL regressions exercise the standalone `gc=Collect` request through the existing collector microcode.
+They cover empty heaps, repeated requests, saved CPU state, and live objects that leave no room for a stale allocation reservation.
+Requests without a collector, nested requests, and malformed control words fault without issuing mutator commands.
+Smalltalk tests cover reclaimable pressure, genuine low-space notification, strict thresholds, rearming, and scheduler preemption.
+The reclaimable-pressure test verifies that the notification remains armed after collection restores sufficient space.
+Workspace tests, original-image tests, RTL lint, and Clippy pass.
+Generic synthesis passes for OBJEKT and a reduced LOGIK profile with 32 control words, four stack words, and 16 NAM words.
+The full 8,192-word profile remains covered by RTL simulation and lint, without a completed synthesis result.
+
+The original-image regression executes 60 million mutator instructions with 1,048,576 RAM words.
+It completes 769 BitBlts and 27 proactive collections without reaching `low_space_signal`.
+A separate 200-million-step run executes 177,560,709 mutator instructions and 22,438,887 collector instructions.
+It completes 202 collections, including 152 proactive requests, with no low-space notification.
+Its desktop framebuffer matches the earlier frame at the premature warning boundary.
+
+Profiling that longer run attributes 31% of sampled native CPU cycles to instruction preparation.
+Memory copying accounts for another 10%, with 3% attributed separately to CPU-state cloning.
+Within microcode, rebuilding threshold chunks consumes 18,135,870 instructions, about 10% of mutator execution, before other low-space checks.
+Context handling and method lookup are also prominent. Guest bytecode counts include point/rectangle operations and controller searches.
+These observations identify optimization candidates, not measured gains from changes to those paths.
+
+The emulator now reports retired microinstructions per second against active execution time and total elapsed time.
+A local 20-million-step headless run reported approximately 9.52 million microinstructions/s, including collector execution.
+Zero-step and Hold-only CLI checks report zero retired instructions/s. Window-title throughput remains unverified on a live display in this session.

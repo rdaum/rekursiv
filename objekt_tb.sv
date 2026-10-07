@@ -117,7 +117,7 @@ module objekt_tb(
     output wire cpu_dbg_code_valid_o, output wire [39:0] cpu_dbg_code_data_o, output wire [39:0] cpu_dbg_code_type_o
 );
 
-wire gc_valid, gc_ready, gc_response, gc_response_ready, gc_committed;
+wire gc_valid, gc_ready, gc_response, gc_response_ready, gc_committed, gc_explicit;
 wire [3:0] gc_operation, gc_status;
 wire [39:0] gc_data, gc_root, gc_result;
 logik #(.CODE_WORDS(8192)) processor(
@@ -125,7 +125,7 @@ logik #(.CODE_WORDS(8192)) processor(
     .io_address_o(io_address_o), .io_data_o(io_data_o), .io_response_i(io_response_i),
     .io_response_ready_o(io_response_ready_o), .io_error_i(io_error_i), .io_result_i(io_result_i),
     .device_result_o(cpu_device_result_o), .dbg_root_o(cpu_dbg_root_o),
-    .gc_enable_i(cpu_gc_enable_i),.gc_entry_i(cpu_gc_entry_i),.gc_active_o(cpu_gc_active_o),
+    .gc_enable_i(cpu_gc_enable_i),.gc_entry_i(cpu_gc_entry_i),.gc_active_o(cpu_gc_active_o),.gc_explicit_o(gc_explicit),
     .gc_valid_o(gc_valid),.gc_ready_i(gc_ready),.gc_operation_o(gc_operation),.gc_data_o(gc_data),.gc_root_o(gc_root),
     .gc_response_i(gc_response),.gc_response_ready_o(gc_response_ready),.gc_status_i(gc_status),
     .gc_result_i(gc_result),.gc_committed_i(gc_committed),.last_status_o(cpu_last_status_o),
@@ -191,7 +191,7 @@ logik #(.CODE_WORDS(8192)) processor(
 );
 assign dbg_memory_words_o = 25'(`REKURSIV_SIM_MEMORY_WORDS);
 objekt #(.PAGER_BITS(4), .MEMORY_WORDS(`REKURSIV_SIM_MEMORY_WORDS)) core(
-    .gc_enable_i(cpu_gc_enable_i),.gc_active_i(cpu_gc_active_o),
+    .gc_enable_i(cpu_gc_enable_i),.gc_active_i(cpu_gc_active_o),.gc_explicit_i(gc_explicit),
     .gc_valid_i(gc_valid),.gc_ready_o(gc_ready),.gc_operation_i(gc_operation),.gc_data_i(gc_data),.gc_root_i(gc_root),
     .gc_response_o(gc_response),.gc_response_ready_i(gc_response_ready),.gc_status_o(gc_status),
     .gc_result_o(gc_result),.gc_committed_o(gc_committed),

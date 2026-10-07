@@ -19,7 +19,7 @@ module objekt #(
     parameter integer MEMORY_WORDS = 512
 )(
     input logic clk_i, input logic rst_i, input logic run_i,
-    input logic gc_enable_i, gc_active_i,
+    input logic gc_enable_i, gc_active_i, gc_explicit_i,
     input logic gc_valid_i, output logic gc_ready_o, input logic [3:0] gc_operation_i,
     input logic [39:0] gc_data_i, gc_root_i,
     output logic gc_response_o, input logic gc_response_ready_i,
@@ -230,7 +230,9 @@ module objekt #(
     logic [23:0] gc_mem_address;
     logic [39:0] gc_mem_data;
     always_comb begin
-        gc_root=gc_data_i==19 ? gc_needed_class : gc_root_i;
+        // Explicit collection has no failed transfer. Ignore its stale size
+        // and class registers throughout this collection.
+        gc_root=gc_data_i==19 ? (gc_explicit_i ? 40'b0 : gc_needed_class) : gc_root_i;
         if(gc_data_i<8) gc_root=vr[gc_data_i[2:0]];
         else if(gc_data_i==8) gc_root=selected ? snapshot[39:0] : 40'b0;
         else if(gc_data_i==9) gc_root=selected ? snapshot[103:64] : 40'b0;
@@ -245,7 +247,7 @@ module objekt #(
     objekt_gc #(.PAGER_BITS(PAGER_BITS),.MEMORY_WORDS(MEMORY_WORDS)) collector_datapath (
         .clk_i(clk_i),.rst_i(rst_i),.active_i(gc_active_i),
         .valid_i(gc_valid_i && phase==IDLE && !maintenance),.ready_o(gc_ready),
-        .operation_i(gc_operation_i),.data_i(gc_data_i),.root_i(gc_root),.needed_i(gc_needed),
+        .operation_i(gc_operation_i),.data_i(gc_data_i),.root_i(gc_root),.needed_i(gc_explicit_i ? 24'b0 : gc_needed),
         .response_o(gc_response_o),.response_ready_i(gc_response_ready_i),
         .status_o(gc_status_o),.result_o(gc_result_o),.committed_o(gc_committed_o),
         .slot_o(gc_slot),.entry_valid_i(valid[gc_slot]),.entry_i(entries[gc_slot]),

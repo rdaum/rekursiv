@@ -63,14 +63,14 @@ Run its saved process and watch it draw the desktop:
 
 ```sh
 cargo run --release --locked -p rekursiv-emulator -- \
-  --smalltalk artifacts/st80/VirtualImage
+  --smalltalk artifacts/st80/VirtualImage --memory-words 1048576
 ```
 
 For a reproducible run without a window, use:
 
 ```sh
 cargo run --release --locked -p rekursiv-emulator --no-default-features -- \
-  --headless --smalltalk artifacts/st80/VirtualImage \
+  --headless --smalltalk artifacts/st80/VirtualImage --memory-words 1048576 \
   --steps 300000000 --frame artifacts/startup.ppm
 ```
 
@@ -81,9 +81,10 @@ The emulator does not supply missing Smalltalk operations through Rust callbacks
 Primitive 96 now draws and refreshes the display through microcode. Native startup draws the browser, transcript, and workspace.
 BitBlt validates accessed words and uploads changed pixel groups. Disjoint copies need no temporary object.
 Disk transfers and snapshot saving remain unfinished.
-Longer runs currently reach the guest's “Space is Low” notifier, including with `--memory-words 1048576`.
-Before the rendering improvements, a diagnostic run completed 769 BitBlts before the first notification: 36,104 free words against a 36,135-word threshold.
-The counter excludes garbage awaiting collection. Low-space notification and allocation recovery need further integration before claiming a usable desktop.
+Low-space checks now collect before notification and recheck available space afterward.
+The original image passes its former premature warning point with 1,048,576 RAM words.
+A 200-million-step headless run completes 769 BitBlts and continues guest controller activity without a low-space signal.
+This remains bounded execution evidence, not proof of complete desktop interaction.
 The [rendering measurements](validation.md#bitblt-rendering-measurements) compare the same image checkpoint before and after the optimization.
 The bounded startup regression establishes drawing progress, not complete interaction.
 To stop at the earlier checkpoint before any drawing, add `--stop-at primitive_dispatch --when R0=96`.
@@ -108,6 +109,14 @@ Headless execution stops after ten million steps unless `--steps` supplies anoth
 Processor faults report the micro-PC, fault code, and object status where applicable.
 A library caller can resume an explicit service break with `Machine::resume()`.
 The CLI leaves service breaks stopped.
+
+The exit summary reports active execution seconds, total elapsed seconds, and retired microinstructions per second for both intervals.
+The rates include mutator and collector instructions. Hold steps and collector entry/return transitions do not count as retired instructions.
+Active time includes instruction execution, emulated devices, recovery setup, and optional trace output. It excludes window presentation and stopped-window time.
+Elapsed time includes those frontend costs. Both intervals exclude image loading/conversion and final trace flush/frame export.
+The window title updates approximately once per second with the recent active execution rate.
+Headless runs with fixed memory and step counts provide repeatable workloads. Trace output affects throughput.
+
 
 The initial keyboard profile uses unshifted US ASCII and separate modifier transitions.
 The frontend maps left/right Shift to 136/137, Control to 138, and Caps Lock to 139.
