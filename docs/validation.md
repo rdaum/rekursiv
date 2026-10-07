@@ -452,6 +452,42 @@ profile passes RTL lint and the RTL regressions. OBJEKT generic synthesis passes
 LOGIK synthesis run was stopped after nine minutes during process lowering; its result remains
 unverified. These checks do not establish board timing or a mapped LUT count.
 
+#### BitBlt phase profile
+
+The deterministic [phase profiler](../crates/rekursiv-smalltalk/tests/sends/bitblt/profile.rs) executes the primitive against the existing pixel-oracle fixtures.
+It covers fills, aligned and unaligned copies, a text-sized copy, halftones, and scrolling.
+Each case runs with and without a registered display. Destination words and published pixels must match the oracle.
+Each fixture also runs through the JIT, with matching processor state, object memory, instruction counts, and published pixels.
+
+```sh
+mkdir -p artifacts
+BITBLT_PROFILE_OUTPUT=artifacts/bitblt-profile.json \
+  cargo test --release --locked -p rekursiv-smalltalk --test sends \
+  profile_bitblt_microcode -- --ignored --nocapture
+```
+
+The report separates setup, validation, snapshot allocation/copying, merging, and presentation.
+Each phase records retired mutator microinstructions, OBJEKT commands, and device requests.
+Counts begin at `primitive_bitblt` and end at `bb_success`, before caller restoration.
+Caller bytecodes and initial display registration are excluded. Fixtures use 65,536 pager entries and RAM words, with no collections.
+These are guest work counts, not JIT timings or FPGA cycle counts.
+
+Against baseline `91e1ab5`, caching horizontal coordinates and rule addresses removes repeated calculations from the word loop.
+Interior destination words also bypass the edge-preserving merge. Validation still precedes all destination writes, and aliased storage still uses a snapshot.
+
+| Registered-display case | Baseline microinstructions | Optimized | Reduction |
+| --- | ---: | ---: | ---: |
+| Fill, 256×128 | 216,472 | 206,254 | 4.7% |
+| Aligned copy, 256×128 | 468,454 | 400,892 | 14.4% |
+| Unaligned copy, 250×128 | 467,942 | 400,380 | 14.4% |
+| Text-sized OR copy, 9×13 | 4,962 | 4,555 | 8.2% |
+| Halftone XOR fill, 256×128 | 218,324 | 208,106 | 4.7% |
+| Overlapping scroll, 256×120 | 461,093 | 401,592 | 12.9% |
+
+For the optimized aligned copy, validation takes 166,022 instructions, merging takes 205,960, and presentation takes 28,328.
+Presentation traffic is unchanged. The remaining cost is primarily in the validation and drawing loops for these fixtures.
+Native and RTL tests cover all 16 Boolean rules, direct and snapshot paths, single-word edge masks, and raw-word validity.
+
 Native profiling also found redundant control-word encoding on every instruction fetch. Execution
 now checks the same constraints without constructing the wire representation. Three paired release
 runs of 20 million steps took 2.405–2.484 seconds before and 2.051–2.138 seconds after this change.

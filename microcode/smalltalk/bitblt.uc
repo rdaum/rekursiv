@@ -36,6 +36,8 @@
 ; 31 staged word count. VR0..2 retain caller state, VR6 receiver, VR7 method.
 ; VR3/4/5 hold destination/source/halftone bitmaps. No reference lives solely
 ; in a numeric register. Every refill can page or enter the same collector.
+; After clipping, slot0 caches source alignment, slot4 the rule address, and
+; slot9 the signed first source column. Refresh may reuse these dead caches.
 ;
 ; Header and accessed-word validation precede destination writes. Disjoint
 ; bitmaps copy directly without allocating. A source or halftone alias uses
@@ -210,6 +212,34 @@ bb_mask_ready:
     alu=ProductLow, rb=2, ldrb
     d=31, esp=Bus
     ra=2, estk=Alu
+    ; Clipping is finished. Cache the rule target and horizontal source
+    ; mapping once for all rows/passes. Slot 0 is no longer validation scratch;
+    ; slot 9 no longer needs the original source x. Both survive paging/GC.
+    d=4, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, s=Branch, brch=3, alu=MultiplyUnsigned
+    alu=ProductLow, rb=13, ldrb
+    ra=13, s=Bus, d=bb_rule0, alu=Add, ldq
+    r=Q, estk=Alu
+    d=23, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, s=Branch, brch=4, alu=Rotate, rb=2, ldrb
+    d=5, esp=Bus
+    estk=Read
+    ra=2, s=Bus, d=Estk, alu=Sub, cin=One, rb=2, ldrb
+    d=9, esp=Bus
+    estk=Read
+    ra=2, s=Bus, d=Estk, alu=Add, rb=2, ldrb
+    ; source pixel at first destination word = 16*floor(dx/16)-dx+sx.
+    ; Arithmetic shifts preserve negative edge columns; the source helper
+    ; supplies zero for out-of-row words exactly as in the general path.
+    ra=2, s=Branch, brch=15, alu=And, rb=3, ldrb
+    ra=2, shift=ArithmeticRight, rb=2, ldrb
+    ra=2, shift=ArithmeticRight, rb=2, ldrb
+    ra=2, shift=ArithmeticRight, rb=2, ldrb
+    ra=2, shift=ArithmeticRight, estk=Alu
+    d=0, esp=Bus
+    ra=3, estk=Alu
     ; Pass 0 checks only words read by this rectangle, before any writes.
     ; Pass 1 draws directly. Pass 2 snapshots sources only when bits alias.
     d=24, esp=Bus
@@ -268,26 +298,12 @@ bb_stage_word:
     read=Vr, vr=4
     d=Object, seq=ConditionalJump, cc=Symbol, brch=bb_stage_mask
     d=Object, page=Fetch
-    d=23, esp=Bus
-    estk=Read
-    d=Estk, r=Bus, rb=2, ldrb
-    ra=2, rb=9, alu=Add, ldq
-    r=Q, s=Branch, brch=4, alu=Rotate, rb=2, ldrb
-    d=5, esp=Bus
-    estk=Read
-    d=Estk, r=Bus, rb=3, ldrb
-    ra=2, rb=3, alu=Sub, cin=One, ldq
-    r=Q, rb=2, ldrb
     d=9, esp=Bus
     estk=Read
-    d=Estk, r=Bus, rb=3, ldrb
-    ra=2, rb=3, alu=Add, ldq
-    r=Q, rb=2, ldrb
-    ra=2, s=Branch, brch=15, alu=And, rb=13, ldrb
-    ra=2, shift=ArithmeticRight, rb=2, ldrb
-    ra=2, shift=ArithmeticRight, rb=2, ldrb
-    ra=2, shift=ArithmeticRight, rb=2, ldrb
-    ra=2, shift=ArithmeticRight, rb=11, ldrb
+    ra=9, s=Bus, d=Estk, alu=Add, rb=11, ldrb
+    d=0, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=13, ldrb
     d=16, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=3, ldrb
@@ -328,14 +344,12 @@ bb_stage_mask:
     ra=3, s=Bus, d=0xffff0000, alu=And, flags
     seq=ConditionalJump, cc=!Zero, brch=bb_invalid
     seq=Jump, brch=bb_stage_next
-; Read rule from rooted frame and branch into fixed-width rule table. Keep
+; Read the cached rule target and branch into the fixed-width rule table. Keep
 ; prepared destination address across all local Boolean and edge-mask work.
 bb_direct_merge:
     d=4, esp=Bus
     estk=Read
-    d=Estk, r=Bus, s=Branch, brch=3, alu=MultiplyUnsigned
-    alu=ProductLow, rb=13, ldrb
-    ra=13, s=Bus, d=bb_rule0, alu=Add, rb=13, ldrb
+    d=Estk, r=Bus, rb=13, ldrb
     ra=12, rb=2, ldrb
     d=Register, ra=13, seq=Bus
 bb_stage_store:
@@ -411,10 +425,7 @@ bb_staged:
     d=Estk, ldvr, vr=4
     d=4, esp=Bus
     estk=Read
-    d=Estk, r=Bus, rb=2, ldrb
-    ra=2, s=Branch, brch=3, alu=MultiplyUnsigned
-    alu=ProductLow, rb=13, ldrb
-    ra=13, s=Bus, d=bb_rule0, alu=Add, rb=13, ldrb
+    d=Estk, r=Bus, rb=13, ldrb
     d=0, r=Bus, rb=8, ldrb
     d=2, r=Bus, rb=10, ldrb
 ; R8/R9 row/column, R10 scratch component, R11 destination component.
@@ -516,19 +527,31 @@ bb_rule15:
     seq=Jump, brch=bb_merged
 bb_merged:
     r=Q, rb=4, ldrb
-    d=65535, r=Bus, rb=5, ldrb
     ra=9, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_not_first
-    d=25, esp=Bus
-    estk=Read
-    d=Estk, r=Bus, rb=5, ldrb
-bb_not_first:
+    seq=ConditionalJump, cc=Zero, brch=bb_first_mask
     d=22, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=6, ldrb
     ra=9, s=Branch, brch=1, alu=Add, rb=2, ldrb
     ra=2, rb=6, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=bb_last_mask
+    ; Interior words replace all sixteen pixels. Q still holds the Boolean
+    ; result: the boundary tests above never write it. Clear its upper half
+    ; (complement rules can set those bits), without the edge-preserving merge.
+    r=Q, s=Bus, d=65535, alu=And, ldq, seq=Jump, brch=bb_write
+bb_last_mask:
+    d=26, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=5, ldrb, seq=Jump, brch=bb_masked
+bb_first_mask:
+    d=25, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=5, ldrb
+    d=22, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, s=Branch, brch=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=bb_masked
+    ; A one-word rectangle must honor both edge masks.
     d=26, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=6, ldrb
@@ -542,6 +565,7 @@ bb_masked:
     ; The prepared destination survives Boolean/mask arithmetic. Complete its
     ; write while the stack/NUMERIK units advance the rectangle traversal.
     ; The next object access (or primitive exit) drains the pending write.
+bb_write:
     d=Q, mem=Write, prepared, launch
     d=24, esp=Bus
     estk=Read

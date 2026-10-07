@@ -275,11 +275,11 @@ destination coordinates. Form offsets are handled by guest drawing methods.
 
 | Hardware ESTK slots | Contents                                                                                |
 | ------------------- | --------------------------------------------------------------------------------------- |
-| 0                   | Validation/compact scratch.                                                             |
+| 0                   | Validation/compact scratch, then source alignment after clipping.                                                             |
 | 1–3                 | Destination, source, halftone Forms.                                                    |
-| 4                   | Boolean rule 0–15.                                                                      |
+| 4                   | Boolean rule 0–15, then the cached rule-table address.                                                                      |
 | 5–8                 | Destination x/y and extent width/height, rewritten by clipping.                         |
-| 9–10                | Source x/y, advanced with the destination during clipping.                              |
+| 9–10                | Source x/y during clipping. Slot 9 then holds the signed first source-word column.                              |
 | 11–14               | Clip x/y/width/height.                                                                  |
 | 15–16               | Destination/source stride in 16-bit words.                                              |
 | 17–20               | Destination width/height, source width/height.                                          |
@@ -305,9 +305,15 @@ source words into an opaque scratch object; a later merge consumes it. Otherwise
 directly without allocation. Comparing bitmap identities catches distinct Forms sharing storage. No
 guest process switch occurs between validation and drawing.
 
-Boolean dispatch jumps to `bb_rule0 + 3*rule`. Each rule occupies exactly three control words,
-including deliberate no-ops. Preserve that spacing when editing the implementation. The final merge
-is `old XOR ((rule_result XOR old) AND mask)`, preserving pixels outside the rectangle. The prepared
+After clipping, the primitive caches `floor((16*floor(destX/16) - destX + sourceX)/16)` in slot 9.
+Slot 0 holds the corresponding alignment modulo 16. Each word adds its column to the cached source column.
+These values remain valid across rows, passes, paging, and collection.
+
+Boolean dispatch uses the cached address `bb_rule0 + 3*rule` in slot 4. Each rule occupies exactly three control words,
+including deliberate no-ops. Preserve that spacing when editing the implementation. The edge merge
+is `old XOR ((rule_result XOR old) AND mask)`, preserving pixels outside the rectangle.
+Interior words use `rule_result AND 65535` directly. The upper-half mask keeps complement results in the raw 16-bit bitmap format.
+A one-word rectangle combines both edge masks. The prepared
 write address survives arithmetic; launched writes are joined by the next barrier.
 
 After drawing, matching registered bitmap identities trigger presentation. Matching geometry uses a

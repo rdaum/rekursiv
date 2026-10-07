@@ -7,13 +7,28 @@ use rekursiv_sim::{Harness, Timing};
 #[test]
 fn native_retirements_and_heaps_match_rtl_across_collection_and_paging() -> Result<()> {
     let runtime = rekursiv_sim::runtime()?;
-    for source in [
-        include_str!("../../../microcode/collection.uc"),
-        include_str!("../../../microcode/allocation.uc"),
+    // Expected behavior belongs to the fixture, not to substrings that can
+    // also appear in microcode comments.
+    enum Scenario {
+        Pressure,
+        Paging,
+        Explicit,
+    }
+    for (scenario, source) in [
+        (
+            Scenario::Pressure,
+            include_str!("../../../microcode/collection.uc"),
+        ),
+        (
+            Scenario::Paging,
+            include_str!("../../../microcode/allocation.uc"),
+        ),
         // A proactive pass on an empty heap, then repeated passes retaining a
         // 200-word live object. The last transfer's size must not reserve an
         // extra 200 words at Commit: this collection needs zero extra space.
-        "gc=Collect
+        (
+            Scenario::Explicit,
+            "gc=Collect
          d=0xa000000064, page=Allocate, size=200, scan=0
          d=Object, ldvr, vr=0
          d=1, idx=Load
@@ -25,6 +40,7 @@ fn native_retirements_and_heaps_match_rtl_across_collection_and_paging() -> Resu
          read=FreeWords
          d=Object, r=Bus, rb=4, ldrb
          halt",
+        ),
     ] {
         let mut loaded = boot::microcode_with_pager(source, 512, 16)?;
         let machine = &mut loaded.machine;
@@ -68,13 +84,13 @@ fn native_retirements_and_heaps_match_rtl_across_collection_and_paging() -> Resu
         )?;
         assert!(machine.cpu.halted);
         assert_eq!(machine.stats.collections, h.stats.collections);
-        if source.contains("gc=Collect") {
+        if matches!(scenario, Scenario::Explicit) {
             assert_eq!(machine.stats.collections, 3);
             assert_eq!(machine.cpu.rf[4], 56);
             assert_eq!(machine.cpu.rf[7], 1234);
             assert_eq!(machine.cpu.estkr, 73);
             assert_eq!(machine.objekt.next_identity, 2);
-        } else if source.contains("size=120") {
+        } else if matches!(scenario, Scenario::Pressure) {
             assert_eq!(machine.stats.collections, 5);
             assert!(machine.stats.collector_retired > 200_000);
         } else {

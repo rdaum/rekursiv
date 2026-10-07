@@ -2,6 +2,8 @@
 //! expectations; both executors run the same primitive and refresh program.
 use super::*;
 use rekursiv_emulator::Machine;
+#[path = "bitblt/profile.rs"]
+mod profile;
 const DEST: u16 = 220;
 const SOURCE: u16 = 222;
 const HALF: u16 = 224;
@@ -185,12 +187,39 @@ fn native_prepared(
     device: rekursiv_sim::device::Device,
     prepare: impl FnOnce(&mut target::Image),
 ) -> Result<Machine> {
+    let mut m = native_machine(source, device, prepare, 512, 16, true)?;
+    for _ in 0..3_000_000 {
+        if m.cpu.halted {
+            return Ok(m);
+        }
+        m.step()
+            .wrap_err_with(|| format!("micro-PC {} rf {:?}", m.cpu.pc, m.cpu.rf))?;
+    }
+    eyre::bail!("native timeout pc {}", m.cpu.pc)
+}
+
+/// Build the same guest fixture for correctness tests and phase measurements.
+/// Tiny correctness fixtures exhaust RAM deliberately; profiles use ample RAM
+/// so collection does not obscure the cost of the drawing algorithm.
+fn native_machine(
+    source: &source::Image,
+    device: rekursiv_sim::device::Device,
+    prepare: impl FnOnce(&mut target::Image),
+    memory_words: usize,
+    pager_entries: usize,
+    exhaust: bool,
+) -> Result<Machine> {
     let mut converted = target::Image::convert(source, &[ROOT])?;
     prepare(&mut converted);
     let assembly = interpreter::assemble(r(ROOT))?;
-    let program =
-        Program::from_assembly(&assembly)?.with_ram_collector(interpreter::COLLECTOR_ENTRY, 16)?;
-    let mut m = Machine::new(program, assembly.entry.unwrap(), 16, 512)?;
+    let program = Program::from_assembly(&assembly)?
+        .with_ram_collector(interpreter::COLLECTOR_ENTRY, pager_entries)?;
+    let mut m = Machine::new(
+        program,
+        assembly.entry.unwrap(),
+        pager_entries,
+        memory_words,
+    )?;
     for record in &converted.records {
         m.objekt.store.records.insert(
             record.reference.identity()?,
@@ -221,21 +250,23 @@ fn native_prepared(
         }),
         false,
     );
-    // Exhaust the first semispace. Validation/refill and scratch allocation
-    // must retain every Form and full-width reference in the ESTK frame.
-    m.objekt.service(
-        Service::Install(rekursiv_asm::Entry {
-            reference: Word::reference(32000, false)?,
-            class: r(16),
-            size: 16,
-            base: 240,
-            representation: Word::ZERO,
-            new: false,
-            modified: false,
-            cond: false,
-        }),
-        false,
-    );
+    if exhaust {
+        // Exhaust the first semispace. Validation/refill and scratch allocation
+        // must retain every Form and full-width reference in the ESTK frame.
+        m.objekt.service(
+            Service::Install(rekursiv_asm::Entry {
+                reference: Word::reference(32000, false)?,
+                class: r(16),
+                size: 16,
+                base: 240,
+                representation: Word::ZERO,
+                new: false,
+                modified: false,
+                cond: false,
+            }),
+            false,
+        );
+    }
     m.objekt
         .service(Service::ReserveIdentities(converted.next_identity), false);
     m.objekt.service(
@@ -246,14 +277,7 @@ fn native_prepared(
         false,
     );
     m.devices = device;
-    for _ in 0..3_000_000 {
-        if m.cpu.halted {
-            return Ok(m);
-        }
-        m.step()
-            .wrap_err_with(|| format!("micro-PC {} rf {:?}", m.cpu.pc, m.cpu.rf))?;
-    }
-    eyre::bail!("native timeout pc {}", m.cpu.pc)
+    Ok(m)
 }
 fn body(m: &Machine, object: u16) -> Vec<Word> {
     let reference = r(object);
@@ -268,9 +292,21 @@ fn body(m: &Machine, object: u16) -> Vec<Word> {
 #[test]
 fn native_bitblt_all_rules_clipping_alignment_and_shared_bitmap_overlap() -> Result<()> {
     let mut cases: Vec<_> = (0..16)
-        .map(|rule| Case {
-            rule,
-            ..Default::default()
+        .flat_map(|rule| {
+            [
+                Case {
+                    rule,
+                    ..Default::default()
+                },
+                // Both edge masks contribute when the rectangle fits in one word.
+                Case {
+                    rule,
+                    dest: (5, 1),
+                    source: (2, 0),
+                    extent: (6, 3),
+                    ..Default::default()
+                },
+            ]
         })
         .collect();
     for offset in 0..16 {
@@ -337,6 +373,12 @@ fn native_bitblt_all_rules_clipping_alignment_and_shared_bitmap_overlap() -> Res
         let m = native(&image, Default::default()).wrap_err_with(|| format!("{case:?}"))?;
         assert_eq!(m.cpu.rf[15], 1, "{case:?}");
         assert_eq!(m.objekt.state.vr[5], r(RECEIVER), "{case:?}");
+        // Complement rules may produce 32-bit intermediates. Stored bitmap
+        // words must still be raw sixteen-bit values, including interior words.
+        assert!(
+            body(&m, DEST_BITS)[1..].iter().all(|w| w.bits() <= 0xffff),
+            "{case:?}"
+        );
         assert_eq!(
             body(&m, DEST_BITS)[1..]
                 .iter()
@@ -351,17 +393,39 @@ fn native_bitblt_all_rules_clipping_alignment_and_shared_bitmap_overlap() -> Res
 }
 #[test]
 fn rtl_bitblt_rules_and_overlap_match_pixel_oracle() -> Result<()> {
-    for rule in 0..16 {
-        let case = Case {
-            rule,
-            overlap: true,
-            alias: true,
-            ..Default::default()
-        };
+    for case in (0..16).flat_map(|rule| {
+        [
+            Case {
+                rule,
+                overlap: true,
+                alias: true,
+                ..Default::default()
+            },
+            Case {
+                rule,
+                halftone: false,
+                ..Default::default()
+            },
+            Case {
+                rule,
+                dest: (5, 1),
+                source: (2, 0),
+                extent: (6, 3),
+                ..Default::default()
+            },
+        ]
+    }) {
+        let rule = case.rule;
         let image = make(&case);
         let expected = expected(&image, &case);
         let e = execute_root(image, ROOT, true)?;
-        assert_eq!((e.status, e.result), (1, r(RECEIVER)), "rule {rule}");
+        assert_eq!((e.status, e.result), (1, r(RECEIVER)), "{case:?}");
+        assert!(
+            e.records[&r(DEST_BITS).identity()?].body[1..]
+                .iter()
+                .all(|w| w.bits() <= 0xffff),
+            "{case:?}"
+        );
         assert_eq!(
             e.records[&r(DEST_BITS).identity()?].body[1..]
                 .iter()
