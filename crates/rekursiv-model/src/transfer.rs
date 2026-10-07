@@ -137,6 +137,19 @@ impl Model {
                     self.persistent_roots[slot] = true;
                 }
             }
+            // Refill does not mutate backing storage after victim publication.
+            // Borrow its body once instead of searching the record tree for
+            // every word. Preserve the individual requests, fault positions,
+            // and memory writes of the streaming hardware interface below.
+            let body = if c.pager == Pager::Fetch {
+                self.store
+                    .records
+                    .get(&incoming.reference.identity()?)
+                    .filter(|r| r.reference == incoming.reference)
+                    .map(|r| r.body.as_slice())
+            } else {
+                None
+            };
             for offset in 0..incoming.size {
                 let value = if c.pager == Pager::Allocate {
                     if c.alloc_scan {
@@ -145,19 +158,22 @@ impl Model {
                         Word::ZERO
                     }
                 } else {
-                    self.store_effect(
-                        StoreRequest {
-                            op: StoreOp::ReadWord,
-                            reference: incoming.reference,
-                            offset,
-                            ..Default::default()
-                        },
-                        faults,
-                        &mut out,
-                    )?
-                    .data
+                    let request_index = out.store.len();
+                    out.store.push(StoreRequest {
+                        op: StoreOp::ReadWord,
+                        reference: incoming.reference,
+                        offset,
+                        ..Default::default()
+                    });
+                    if faults.store_at == Some(request_index) {
+                        return Err(Status::ServiceError);
+                    }
+                    *body
+                        .and_then(|b| b.get(offset as usize))
+                        .ok_or(Status::ServiceError)?
                 };
-                self.memory_effect(
+                Self::apply_memory_effect(
+                    &mut self.memory,
                     MemoryEffect {
                         address: incoming.base + offset,
                         write: true,
@@ -187,15 +203,23 @@ impl Model {
         faults: Faults,
         out: &mut Outcome,
     ) -> Result<Word, Status> {
+        Self::apply_memory_effect(&mut self.memory, effect, faults, out)
+    }
+    fn apply_memory_effect(
+        memory: &mut [Word],
+        effect: MemoryEffect,
+        faults: Faults,
+        out: &mut Outcome,
+    ) -> Result<Word, Status> {
         let n = out.memory.len();
         out.memory.push(effect);
         if faults.memory_at == Some(n) {
             return Err(Status::MemoryError);
         }
         if effect.write {
-            self.memory[effect.address as usize] = effect.value;
+            memory[effect.address as usize] = effect.value;
         }
-        Ok(self.memory[effect.address as usize])
+        Ok(memory[effect.address as usize])
     }
     pub(super) fn store_effect(
         &mut self,

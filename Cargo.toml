@@ -12,3 +12,9 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+
+# The native execution loop crosses the processor, object-memory, and device
+# crates on each instruction. Optimize those calls together in release builds.
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -475,3 +475,45 @@ This improves on 10.26 and 10.49 million respectively: about 8.0% and 9.4% from 
 Both versions preserve final PCs, retired counts, collections, object commands, device requests, and framebuffer hashes at each fixed-step checkpoint.
 A final post-startup cycle profile attributes 0.25% to memory copying, with no sampled processor clone or wire encode/decode calls.
 Instruction preparation remains the largest sampled cost; device ticking and backing-record lookup remain measurable costs.
+
+### Decoded scalar execution and refill lookup
+
+The native executor uses a smaller write set when stack and fetch controls are idle.
+It caches static validation, checks the complete source word before each use, and skips arithmetic whose results have no destination.
+Multiplication still updates the product latch. Dynamic faults retain their priority, and local writes wait for successful external operations.
+Edited control words, collector execution, floating point, and other complex words use the general processor path.
+These choices depend on control-word fields and do not recognize guest language operations.
+
+Object refill borrows the backing record once after victim publication, avoiding a tree lookup for each body word.
+The model retains each streaming request, memory write, and fault-injection position.
+Release builds also enable thin LTO and one code-generation unit.
+
+Measurements on 2026-10-07 compare commit `af1328f` with these changes on a Cortex-X925, pinned to CPU 5.
+Both builds use Rust 1.98.1 and the same Xerox V2 image and microcode.
+Each run executes 100 million headless steps with deterministic device clocks and no external input; loading is outside the measured interval.
+The table gives medians from three alternating before/after pairs for each heap size.
+
+| External memory words | Before, million instructions/s | After, million instructions/s | Throughput increase |
+| ---: | ---: | ---: | ---: |
+| 16,777,216 | 10.81 | 17.57 | 62.6% |
+| 1,048,576 | 11.21 | 16.41 | 46.4% |
+
+The small-heap row precedes the final inlining of native matching and retirement; the large-heap row includes it.
+At each heap size, all runs match the final PC, mutator and collector instruction counts, collection count, device requests, and framebuffer hash.
+The large heap performs seven collections and retires 628,087 collector instructions; the small heap performs 109 collections and retires 14,274,765.
+These are native execution measurements; they do not establish FPGA timing or interactive frame rates.
+
+Reproduce one run with:
+
+```sh
+cargo build --release --locked -p rekursiv-emulator
+taskset -c 5 target/release/rekursiv-emulator --headless \
+  --smalltalk artifacts/st80/VirtualImage --memory-words 16777216 \
+  --steps 100000000 --frame artifacts/native-performance.ppm
+```
+
+Choose an available CPU for affinity, and repeat with `--memory-words 1048576` for the collection-heavy case.
+The workspace suite passes 232 tests, including native/RTL comparisons and refill fault injection.
+A generated test compares 30,000 scalar preparations against the general processor, including simultaneous writes and dynamic faults.
+Directed tests cover changed or removed control words and failed object operations without local retirement.
+The native unit/integration tests and all four original-image regressions also pass with the final release profile; formatting and Clippy pass.

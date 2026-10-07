@@ -7,6 +7,12 @@ The window presents device pixels and supplies keyboard and mouse input.
 The emulator operates at instruction boundaries. It does not predict FPGA cycle counts or throughput.
 Verilator remains necessary for handshake, pipeline, stall, reset, and synthesis validation.
 
+The native executor caches decoded control words whose stack and fetch units are idle.
+It prepares only their scalar writes and skips arithmetic with no observable result.
+Each use checks the current control word; edited words use the general interpreter.
+Local writes commit only after object and device operations succeed. Collector instructions use the general processor path.
+Release builds use thin link-time optimization across the execution, memory, and device crates.
+
 ## Run the workstation demo
 
 Install Rust and a C compiler. The default window build also needs the platform window libraries.

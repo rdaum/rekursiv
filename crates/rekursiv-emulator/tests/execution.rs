@@ -184,6 +184,74 @@ fn device_failure_does_not_retire_local_writes() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn edited_control_words_cannot_use_stale_native_decoding() -> Result<()> {
+    let original = Instruction {
+        data: Word::raw(11)?,
+        r: Source::Bus,
+        write_register: true,
+        rb: 3,
+        ..Instruction::default()
+    };
+    for replacement in [
+        Some(Instruction {
+            data: Word::raw(29)?,
+            ..original
+        }),
+        Some(Instruction {
+            estk: Estk::Bus,
+            ..original
+        }),
+        Some(Instruction { ra: 16, ..original }),
+        None,
+    ] {
+        let mut m = Machine::new(Image::program(&[original]), 0, 16, 512)?;
+        m.image.code[0] = replacement;
+        let before = m.cpu.clone();
+        match before.prepare(&m.image, false) {
+            Ok((expected, _)) => {
+                assert_eq!(m.step()?, Step::Retired);
+                assert_eq!(m.cpu, expected);
+            }
+            Err(code) => {
+                assert!(m.step().is_err());
+                assert_eq!(m.fault.unwrap().code, code);
+                let mut expected = before;
+                expected.halted = true;
+                assert_eq!(m.cpu, expected);
+                assert_eq!(m.stats.retired, 0);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn scalar_object_failure_discards_all_local_writes() -> Result<()> {
+    let i = Instruction {
+        data: Word::raw(42)?,
+        r: Source::Bus,
+        write_register: true,
+        rb: 3,
+        load_q: true,
+        flags: true,
+        symbol: true,
+        mark: true,
+        seq: Seq::Jump,
+        branch: 7,
+        object: Some(Command::read_field()),
+        ..Instruction::default()
+    };
+    let mut m = Machine::new(Image::program(&[i]), 0, 16, 512)?;
+    let mut expected = m.cpu.clone();
+    expected.halted = true;
+    assert!(m.step().is_err());
+    assert_eq!(m.fault.unwrap().code, 4);
+    assert_eq!(m.cpu, expected);
+    assert_eq!(m.stats.retired, 0);
+    Ok(())
+}
+
 // Exercise every indexed destination together: pending writes must neither
 // become visible on a failed request nor use a newly written pointer/register.
 fn simultaneous_writes() -> Instruction {

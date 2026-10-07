@@ -17,7 +17,35 @@ use rekursiv_model::{
 pub mod boot;
 pub mod presentation;
 mod recovery;
+mod scalar;
 use recovery::RecoveryState;
+use scalar::{ScalarInstruction, ScalarWrites};
+
+enum Writes {
+    Scalar(ScalarWrites),
+    General(rekursiv_model::processor::PendingWrites),
+}
+impl Writes {
+    fn object(&mut self, value: u64) {
+        match self {
+            Self::Scalar(w) => w.object = value,
+            Self::General(w) => w.object = value,
+        }
+    }
+    fn device(&mut self, value: u32) {
+        let Self::General(w) = self else {
+            unreachable!("device words use general preparation")
+        };
+        w.device = value;
+    }
+    #[inline(always)]
+    fn commit(self, cpu: &mut Processor, image: &Image, i: rekursiv_asm::processor::Instruction) {
+        match self {
+            Self::Scalar(w) => w.commit(cpu, image, i),
+            Self::General(w) => w.commit(cpu, image),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -73,6 +101,10 @@ pub struct Machine {
     pub fault: Option<Fault>,
     recovery: Option<RecoveryState>,
     retry_irq: Option<bool>,
+    // Snapshot of eligible words, not an alternate program. The image remains
+    // writable: each use checks the complete source word, and edits fall back
+    // to general preparation. Collector privilege checks always use that path.
+    scalar_code: Vec<Option<ScalarInstruction>>,
 }
 impl Machine {
     pub fn new(
@@ -102,6 +134,11 @@ impl Machine {
             roots: Some(image.roots),
             ..Default::default()
         };
+        let scalar_code = image
+            .code
+            .iter()
+            .map(|i| i.and_then(ScalarInstruction::decode))
+            .collect();
         Ok(Self {
             image,
             cpu,
@@ -111,6 +148,7 @@ impl Machine {
             fault: None,
             recovery: None,
             retry_irq: None,
+            scalar_code,
         })
     }
     pub fn recovering(&self) -> bool {
@@ -179,9 +217,22 @@ impl Machine {
                 .is_some_and(|e| e.status() != 0)
         });
         let prepared = if self.recovering() {
-            self.cpu.prepare_recovery_writes(&self.image, irq)
+            self.cpu
+                .prepare_recovery_writes(&self.image, irq)
+                .map(|(w, c)| (Writes::General(w), c))
+        } else if let Some(decoded) = self
+            .scalar_code
+            .get(self.cpu.pc as usize)
+            .and_then(Option::as_ref)
+            .filter(|d| d.matches(&instruction))
+        {
+            decoded
+                .prepare(&self.cpu, irq)
+                .map(|(w, c)| (Writes::Scalar(w), c))
         } else {
-            self.cpu.prepare_writes(&self.image, irq)
+            self.cpu
+                .prepare_writes(&self.image, irq)
+                .map(|(w, c)| (Writes::General(w), c))
         };
         let (mut next, command) = prepared.map_err(|code| self.fail(code, None))?;
         if instruction.recovery == Recovery::Collect && self.retry_irq.is_none() {
@@ -201,7 +252,7 @@ impl Machine {
                 .unwrap()
                 .execute(instruction.recovery, data, &mut self.objekt)
                 .map_err(|status| self.fail(4, Some(status)))?;
-            next.object = result.bits();
+            next.object(result.bits());
         }
         if let Some(command) = command {
             self.stats.object_commands += 1;
@@ -218,7 +269,7 @@ impl Machine {
             if response.status != Status::Ok {
                 return Err(self.fail(4, Some(response.status)).into());
             }
-            next.object = response.data.bits();
+            next.object(response.data.bits());
         }
         if instruction.device != Io::None {
             let request = Request {
@@ -246,7 +297,7 @@ impl Machine {
                     if reply.error {
                         return Err(self.fail(6, None).into());
                     }
-                    next.device = reply.data;
+                    next.device(reply.data);
                     break;
                 }
             }
@@ -254,7 +305,7 @@ impl Machine {
         } else {
             self.devices.tick(None, false)?;
         }
-        next.commit(&mut self.cpu, &self.image);
+        next.commit(&mut self.cpu, &self.image, instruction);
         if self.recovering() {
             self.stats.collector_retired += 1;
         } else {
