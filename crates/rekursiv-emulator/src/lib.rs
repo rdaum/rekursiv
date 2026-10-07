@@ -15,9 +15,11 @@ use rekursiv_model::{
     Model,
 };
 pub mod boot;
+mod jit;
 pub mod metrics;
 pub mod presentation;
 mod recovery;
+pub use jit::JitStatistics;
 mod scalar;
 use recovery::RecoveryState;
 use scalar::{ScalarInstruction, ScalarWrites};
@@ -57,7 +59,7 @@ pub enum Step {
     Halted,
     Service(u8),
 }
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Statistics {
     pub retired: u64,
     pub collector_retired: u64,
@@ -113,6 +115,7 @@ pub struct Machine {
     // writable: each use checks the complete source word, and edits fall back
     // to general preparation. Collector privilege checks always use that path.
     scalar_code: Vec<Option<ScalarInstruction>>,
+    jit: Option<jit::Jit>,
 }
 impl Machine {
     pub fn new(
@@ -159,7 +162,22 @@ impl Machine {
             recovery: None,
             retry_irq: None,
             scalar_code,
+            jit: None,
         })
+    }
+    /// Compile the current control store. Modified or unsupported words keep
+    /// using the interpreter. Repeating this call rebuilds the translation.
+    pub fn enable_jit(&mut self) -> Result<usize> {
+        let compiled = jit::Jit::compile(&self.image)?;
+        let functions = compiled.statistics().functions;
+        self.jit = Some(compiled);
+        Ok(functions)
+    }
+    pub fn jit_statistics(&self) -> Option<JitStatistics> {
+        self.jit.as_ref().map(jit::Jit::statistics)
+    }
+    pub fn disable_jit(&mut self) {
+        self.jit = None;
     }
     pub fn recovering(&self) -> bool {
         self.recovery.is_some()
@@ -186,6 +204,46 @@ impl Machine {
         self.cpu.halted = true;
         self.fault = Some(fault);
         fault
+    }
+    /// Execute at most `budget` calls to the microinstruction executor. Native
+    /// blocks retain each instruction's device tick and precise fault boundary.
+    /// Use `step` for tracing or breakpoints that inspect every retirement.
+    pub fn run_steps(&mut self, budget: u64) -> Result<u64> {
+        let mut steps = 0;
+        while steps < budget {
+            if self.fault.is_none()
+                && !self.cpu.halted
+                && !self.cpu.service
+                && self.recovery.is_none()
+                && self.retry_irq.is_none()
+            {
+                if let Some(result) = self.jit.as_ref().and_then(|jit| {
+                    jit.run_block(
+                        &mut self.cpu,
+                        &mut self.devices,
+                        &self.image,
+                        budget - steps,
+                    )
+                }) {
+                    self.stats.retired += result.retired;
+                    steps += result.retired;
+                    if let Some(error) = result.error {
+                        return Err(error);
+                    }
+                    if result.fault != 0 {
+                        self.join_object()?;
+                        return Err(self.fail(result.fault, None).into());
+                    }
+                    continue;
+                }
+            }
+            let step = self.step()?;
+            steps += 1;
+            if matches!(step, Step::Halted | Step::Service(_)) {
+                break;
+            }
+        }
+        Ok(steps)
     }
     pub fn step(&mut self) -> Result<Step> {
         if let Some(fault) = self.fault {
@@ -228,6 +286,12 @@ impl Machine {
             self.cpu
                 .prepare_recovery_writes(&self.image, irq)
                 .map(|(w, c)| (Writes::General(w), c))
+        } else if let Some(compiled) = self
+            .jit
+            .as_ref()
+            .and_then(|jit| jit.prepare(&self.cpu, instruction, irq))
+        {
+            compiled.map(|(w, c)| (Writes::Scalar(w), c))
         } else if let Some(decoded) = self
             .scalar_code
             .get(self.cpu.pc as usize)

@@ -8,6 +8,10 @@ default = ["window"]
 window = ["dep:winit", "dep:softbuffer"]
 
 [dependencies]
+cranelift-codegen = "0.136.2"
+cranelift-frontend = "0.136.2"
+cranelift-jit = "0.136.2"
+cranelift-module = "0.136.2"
 eyre = "0.6"
 rekursiv-asm = { path = "../rekursiv-asm" }
 rekursiv-devices = { path = "../rekursiv-devices" }

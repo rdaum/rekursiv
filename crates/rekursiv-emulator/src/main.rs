@@ -15,6 +15,7 @@ fn main() -> Result<()> {
     let mut program = None;
     let mut smalltalk = None;
     let mut headless = false;
+    let mut jit = true;
     let mut limit = None;
     let mut memory = None;
     let mut pager_entries = boot::DEFAULT_PAGER_ENTRIES;
@@ -38,6 +39,13 @@ fn main() -> Result<()> {
                 })?))
             }
             "--headless" => headless = true,
+            "--engine" => {
+                jit = match args.next().as_deref() {
+                    Some("jit") => true,
+                    Some("interpreter") => false,
+                    _ => bail!("--engine requires jit or interpreter"),
+                };
+            }
             "--objekt-metrics" => objekt_metrics = true,
             "--pager-entries" => {
                 pager_entries = args
@@ -106,7 +114,7 @@ fn main() -> Result<()> {
                 )
             }
             "--help" | "-h" => {
-                println!("rekursiv-emulator [--microcode FILE | --smalltalk VirtualImage]\n  No program: run the interactive workstation microcode demo.\n  --headless          Run without a window (deterministic device clock)\n  --steps N           Stop after N steps (headless default 10000000; window unlimited)\n  --memory-words N    External RAM words (Smalltalk default 16777216; otherwise 131072)\n  --pager-entries N   Pager slots, power of two from 2 to 65536 (default 65536)\n  --objekt-metrics   Report pager, transfer, allocation, and collector counters\n  --trace FILE        Write retired micro-PCs and numeric state\n  --stop-at LABEL     Stop before the named microinstruction\n  --when Rn=VALUE     Stop only when this register also matches\n  --frame FILE        Save the last published display as a PPM\n  --frames N          Close after N presentation checks (smoke tests)\nClose the window to exit. Escape is delivered to the guest.");
+                println!("rekursiv-emulator [--microcode FILE | --smalltalk VirtualImage]\n  No program: run the interactive workstation microcode demo.\n  --headless          Run without a window (deterministic device clock)\n  --engine MODE       jit (default) or interpreter\n  --steps N           Stop after N steps (headless default 10000000; window unlimited)\n  --memory-words N    External RAM words (Smalltalk default 16777216; otherwise 131072)\n  --pager-entries N   Pager slots, power of two from 2 to 65536 (default 65536)\n  --objekt-metrics   Report pager, transfer, allocation, and collector counters\n  --trace FILE        Write retired micro-PCs and numeric state\n  --stop-at LABEL     Stop before the named microinstruction\n  --when Rn=VALUE     Stop only when this register also matches\n  --frame FILE        Save the last published display as a PPM\n  --frames N          Close after N presentation checks (smoke tests)\nClose the window to exit. Escape is delivered to the guest.");
                 return Ok(());
             }
             _ => bail!("unknown option {arg}; use --help"),
@@ -142,6 +150,14 @@ fn main() -> Result<()> {
         )?
     };
     loaded.machine.objekt_metrics_enabled = objekt_metrics;
+    if jit {
+        let started = Instant::now();
+        let functions = loaded.machine.enable_jit()?;
+        eprintln!(
+            "JIT: {functions} native functions compiled in {:.3} s",
+            started.elapsed().as_secs_f64()
+        );
+    }
     // Headless clocks advance by device ticks for reproducible replay. The
     // window adapter supplies elapsed wall time and uses an effectively stopped
     // divider; the same timer/FIFO registers and acknowledgement rules apply.
@@ -189,6 +205,12 @@ fn main() -> Result<()> {
                 && when.is_none_or(|(register, value)| machine.cpu.rf[register] == value))
         {
             return Ok(false);
+        }
+        if trace.is_none() && breakpoint.is_none() {
+            // Bound each batch so the window worker can service input and stop
+            // requests promptly. Debugging keeps exact single-step observation.
+            steps += machine.run_steps((limit - steps).min(256))?;
+            return Ok(!machine.cpu.halted && !machine.cpu.service);
         }
         let pc = machine.cpu.pc;
         let gc = machine.recovering();
@@ -240,6 +262,12 @@ fn main() -> Result<()> {
         loaded.machine.stats.instructions_per_second(execution_time),
         loaded.machine.stats.instructions_per_second(elapsed),
     );
+    if let Some(stats) = loaded.machine.jit_statistics() {
+        eprintln!(
+            "JIT execution: {} instructions in {} native blocks, {} single-word preparations",
+            stats.block_instructions, stats.block_calls, stats.preparations
+        );
+    }
     if objekt_metrics {
         eprintln!(
             "{}",

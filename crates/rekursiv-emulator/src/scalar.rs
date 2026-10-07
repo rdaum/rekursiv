@@ -8,9 +8,9 @@ use rekursiv_asm::{processor::*, Command, Word};
 use rekursiv_model::processor::{Image, Processor, CODE_WORDS, STACK_WORDS};
 
 pub(crate) struct ScalarInstruction {
-    instruction: Instruction,
-    arithmetic: bool,
-    bus: bool,
+    pub(super) instruction: Instruction,
+    pub(super) arithmetic: bool,
+    pub(super) bus: bool,
 }
 
 impl ScalarInstruction {
@@ -237,14 +237,15 @@ impl ScalarInstruction {
     }
 }
 
+#[repr(C)]
 pub(crate) struct ScalarWrites {
-    pc: u16,
-    upcor: u16,
-    d: u64,
-    y: u32,
-    flags: u8,
-    product: u64,
-    cc: bool,
+    pub(super) pc: u16,
+    pub(super) upcor: u16,
+    pub(super) d: u64,
+    pub(super) y: u32,
+    pub(super) flags: u8,
+    pub(super) product: u64,
+    pub(super) cc: bool,
     pub(crate) object: u64,
 }
 impl ScalarWrites {

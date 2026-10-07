@@ -201,7 +201,8 @@ pub fn execute(
                         break;
                     }
                 }
-                if n % 256 == 0 && budget.elapsed() >= CPU_SLICE {
+                // The callback can execute a batch. Bound wall time even then.
+                if n % 16 == 0 && budget.elapsed() >= CPU_SLICE {
                     break;
                 }
             }
@@ -389,6 +390,7 @@ mod tests {
         let mut direct = boot::microcode_with_pager(source, 512, 16)?.machine;
         while !matches!(direct.step()?, Step::Halted | Step::Service(_)) {}
         let mut threaded = boot::microcode_with_pager(source, 512, 16)?.machine;
+        threaded.enable_jit()?;
         let exchange = Exchange::default();
         let (_input, receive) = mpsc::sync_channel(1);
         let (done, finished) = mpsc::channel();
@@ -400,7 +402,10 @@ mod tests {
             let worker = scope.spawn(|| {
                 let result = execute(
                     &mut threaded,
-                    &mut |m| Ok(!matches!(m.step()?, Step::Halted | Step::Service(_))),
+                    &mut |m| {
+                        m.run_steps(256)?;
+                        Ok(!m.cpu.halted && !m.cpu.service)
+                    },
                     &exchange,
                     receive,
                 );

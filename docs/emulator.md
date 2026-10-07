@@ -8,15 +8,26 @@ The emulator operates at instruction boundaries. It does not predict FPGA cycle 
 throughput. Verilator remains necessary for handshake, pipeline, stall, reset, and synthesis
 validation.
 
-The native executor caches decoded control words whose stack and fetch units are idle. It prepares
-only their scalar writes and skips arithmetic with no observable result. Each use checks the current
-control word; edited words use the general interpreter. Blocking object and device instructions
-commit local writes only after successful completion. A `launch` instruction commits at command
-acceptance and defers its reply until an
-[object barrier](interface.md#retirement-conditions-and-errors). The emulator preserves the same
-result and fault ordering without simulating memory latency. Collector instructions use the general
-processor path. Release builds use thin link-time optimization across the execution, memory, and
-device crates.
+The CLI uses a [Cranelift](https://docs.wasmtime.dev/api/cranelift_jit/index.html) JIT by default.
+It translates scalar microinstructions into native arithmetic, flag calculations, branches, and validation checks.
+Native blocks execute up to 32 local instructions per call.
+Each instruction retains its device tick, retirement boundary, and fault checks.
+
+Object instructions use native preparation followed by the existing OBJEKT command path.
+Blocking commands publish local writes only after success.
+A `launch` instruction publishes local writes at command acceptance and defers its reply until an
+[object barrier](interface.md#retirement-conditions-and-errors).
+A fault inside a native block retains earlier retirements and drains any older object reply first.
+
+Stack, fetch, floating-point, root-access, and collector instructions use the checked interpreter.
+Interrupt-sensitive instructions execute individually so each condition uses the correct device state.
+Microcode still implements Smalltalk operations and collection.
+The JIT changes host execution speed without changing the hardware control words or replacing guest operations.
+
+The control store remains writable.
+Before each native call, the executor compares its source words with the current image.
+Changed words use the interpreter until a library caller recompiles the image.
+JIT code belongs to the machine and is freed when the machine drops or disables the JIT.
 
 ## Run the workstation demo
 
@@ -116,6 +127,7 @@ does not read a live Form from the heap.
 | `--microcode FILE`  | Assemble and execute a standalone program                                         |
 | `--smalltalk FILE`  | Convert and start the pinned Xerox V2 `VirtualImage`                              |
 | `--headless`        | Disable the window and use deterministic device time                              |
+| `--engine MODE`     | Select `jit` (default) or `interpreter`                                             |
 | `--steps N`         | Stop after N instruction steps, including collection and Hold steps               |
 | `--pager-entries N` | Set pager capacity; default 65536, power of two from 2 through 65536              |
 | `--memory-words N`  | Set external RAM capacity; default 16777216 for Smalltalk, otherwise 131072 words |
@@ -137,9 +149,39 @@ instructions. Active time includes instruction execution, emulated devices, reco
 optional trace output. It excludes worker input/clock updates and snapshot publication. Elapsed time
 also includes window startup, frontend work, and time spent displaying a stopped processor. Window
 work runs concurrently with CPU execution, so their measured durations overlap. Both intervals
-exclude image loading/conversion and final trace flush/frame export. The window title updates
+exclude image loading/conversion, JIT compilation, and final trace flush/frame export. The window title updates
 approximately once per second with the recent active execution rate. Headless runs with fixed memory
 and step counts provide repeatable workloads. Trace output affects throughput.
+
+JIT startup reports its function count and compilation time separately.
+The exit report counts instructions retired in native blocks and individual native preparations.
+Preparations include attempts that later fault or enter collection, so they are not retirement counts.
+
+### Compare execution engines
+
+Run the same image and step budget under each engine:
+
+```sh
+python3 scripts/bench-emulator.py
+```
+
+The benchmark builds the release binary and alternates engine order across five pairs of runs.
+Each run executes 50 million steps with deterministic device time.
+The script compares final processor counters and framebuffer hashes, then reports median execution rates.
+Logs, frames, and a JSON summary go to `artifacts/jit-benchmark`.
+Compilation time is separate from execution time.
+On an ARM Cortex-X925 host, five pairs measured median rates of 19.9 million interpreted and 22.2 million JIT microinstructions per second.
+That workload gained 11.4% throughput, with about 0.4 seconds of compilation before execution.
+Each engine produced the same final counters and framebuffer hash.
+These measurements describe native emulation, not FPGA throughput.
+
+A library caller starts with the interpreter and enables translation through `Machine::enable_jit()`.
+`Machine::run_steps(budget)` uses native blocks when possible and never exceeds its step budget.
+`Machine::step()` preserves single-instruction observation, including recovery transitions and held instructions.
+CLI traces and breakpoints use that single-step path, which can be slower than the interpreter.
+`Machine::disable_jit()` releases generated code and restores interpreter execution.
+
+### OBJEKT metrics
 
 With `--objekt-metrics`, the exit report includes OBJEKT counters. `--pager-entries` changes pager
 capacity; `--memory-words` changes RAM capacity only.
@@ -180,6 +222,8 @@ cargo run --release --locked -p rekursiv-emulator -- \
 Add `--pager-entries 16` to reproduce the former capacity. Equal step budgets can include different
 amounts of collection and guest work. The drawing regression compares identical pixels after 32
 completed BitBlt operations at both capacities.
+
+### Input and presentation
 
 The initial keyboard profile uses unshifted US ASCII and separate modifier transitions. The frontend
 maps left/right Shift to 136/137, Control to 138, and Caps Lock to 139. Left, middle, and right
@@ -228,9 +272,9 @@ bandwidth costs.
 ## Architecture and validation
 
 `rekursiv-model` supplies instruction and object-command semantics, including SoftFloat arithmetic.
-The RTL oracle and native emulator share those semantics. They are not independent implementations
-of every arithmetic operation. The emulator adds an execution loop and a separate model of the
-OBJEKT maintenance datapath. It never calls the graph-walking `collect_ram` oracle. Collector
+The interpreter and RTL oracle share those semantics. The JIT independently emits scalar arithmetic
+and checks it against the processor oracle in differential tests.
+The emulator adds an execution loop and a separate model of the OBJEKT maintenance datapath. It never calls the graph-walking `collect_ram` oracle. Collector
 microcode chooses every root, mark, pager pass, body read, body write, and commit.
 
 `rekursiv-devices` supplies the same external peripheral models to both executors. The Verilator
@@ -263,8 +307,13 @@ Run the original-image regression:
 ```sh
 REKURSIV_ST80_DIR="$PWD/artifacts/st80" \
   cargo test --release --locked -p rekursiv-emulator --no-default-features \
-  --test startup -- --ignored --nocapture
+  --test startup --test jit -- --ignored --nocapture
 ```
+
+JIT tests compare 49,152 instruction/state combinations with the processor oracle.
+Other cases cover simultaneous destinations, block budgets, source edits, deferred object errors, and device errors before retirement.
+The pipeline tests compare JIT execution with RTL through stalls and collection.
+An original-image regression compares JIT blocks with the interpreter through 5.12 million steps, including GC, BitBlt, and mouse input.
 
 The allocation and paging tests compare registers and object state with RTL after each mutator
 retirement. Other tests cover recovery failure, failed device writes, pixel clipping, keyboard

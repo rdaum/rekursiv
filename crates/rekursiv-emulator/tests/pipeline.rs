@@ -8,6 +8,7 @@ fn compare_program(source: &str, timing: Timing) -> Result<(u64, rekursiv_emulat
     let runtime = rekursiv_sim::runtime()?;
     let mut loaded = boot::microcode_with_pager(source, 512, 16)?;
     let m = &mut loaded.machine;
+    m.enable_jit()?;
     let mut h = Harness::new(&runtime, timing, None)?;
     // One external scratch register for the device-barrier case.
     m.devices.registers.insert(0, 0);
@@ -105,6 +106,7 @@ fn launch_defers_bounds_fault_until_barrier_and_keeps_intervening_work() -> Resu
         halt";
     let runtime = rekursiv_sim::runtime()?;
     let mut m = boot::microcode_with_pager(source, 512, 16)?.machine;
+    m.enable_jit()?;
     let mut h = Harness::new(
         &runtime,
         Timing {
@@ -197,6 +199,7 @@ fn local_fault_drains_the_launched_access_and_preserves_error_priority() -> Resu
             halt"
         );
         let mut m = boot::microcode_with_pager(&source, 512, 16)?.machine;
+        m.enable_jit()?;
         let mut h = Harness::new(
             &rt,
             Timing {
