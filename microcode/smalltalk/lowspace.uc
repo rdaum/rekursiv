@@ -162,8 +162,8 @@ unsigned40_byte:
 check_low_space:
     d=0, r=Bus, rb=6, ldrb ; one collection attempt per boundary check
 low_space_recheck:
-    d=30, r=Bus, rb=7, ldrb
-    d=NIL, ldsym
+    ; Prepare the root address independently of the NIL comparison operand.
+    d=NIL, ldsym, r=Branch, brch=30, rb=7, ldrb
     ra=7, d=Root, seq=ConditionalJump, cc=Symbol, brch=check_device_events
     ra=7, d=Root, ldvr, vr=5
     read=Vr, vr=5

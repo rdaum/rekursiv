@@ -190,12 +190,12 @@ input_buffer_zero:
 ; Decrement before signalling: a higher-priority waiter may preempt this path.
 ; The saved count and the word ring survive any process switch or collection.
 input_notifications:
-    d=27, r=Bus, rb=7, ldrb
-    ra=7, d=Root, ldsym, ldvr, vr=6
-    d=NIL, seq=ConditionalJump, cc=Symbol, brch=input_notifications_done
-    d=29, r=Bus, rb=7, ldrb
-    ra=7, d=Root, ldsym
-    d=NIL, seq=ConditionalJump, cc=Symbol, brch=input_notifications_done
+    ; Compare the root bus against old SYMBOL=NIL while loading its new value.
+    ; Buffered notifications are checked at every boundary, even without IRQ.
+    d=NIL, ldsym, r=Branch, brch=27, rb=7, ldrb
+    ra=7, d=Root, ldsym, ldvr, vr=6, seq=ConditionalJump, cc=Symbol, brch=input_notifications_done
+    d=NIL, ldsym, r=Branch, brch=29, rb=7, ldrb
+    ra=7, d=Root, ldsym, seq=ConditionalJump, cc=Symbol, brch=input_notifications_done
     d=Symbol, page=Fetch
     d=5, idx=Load
     mem=Read

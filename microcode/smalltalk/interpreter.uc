@@ -101,13 +101,8 @@ context_home_ready:
     d=Object, ldsym, r=Bus, rb=0, ldrb, estk=Compact, compact=2
     d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bad_state
     ra=0, s=Bus, d=63, alu=And, rb=10, ldrb
-    ra=0, shift=Right, rb=12, ldrb
-    ra=12, shift=Right, rb=12, ldrb
-    ra=12, shift=Right, rb=12, ldrb
-    ra=12, shift=Right, rb=12, ldrb
-    ra=12, shift=Right, rb=12, ldrb
-    ra=12, shift=Right, rb=12, ldrb
-    ra=12, shift=Right, rb=12, ldrb
+    ; Rotate right by seven, then mask away wrapped header bits.
+    ra=0, s=Branch, brch=25, alu=Rotate, rb=12, ldrb
     ra=12, s=Bus, d=31, alu=And, rb=12, ldrb
     ; A block has its own evaluation stack, starting at zero. Its temporaries
     ; still belong to the home method and are accessed through context_home.
@@ -133,26 +128,24 @@ boundary:
     d=0, ldvr, vr=4
     d=0, ldvr, vr=5
     d=0, ldvr, vr=6
-    d=0, ldvr, vr=7
-    d=0, r=Bus, rb=15, ldrb
+    d=0, ldvr, vr=7, r=Bus, rb=15, ldrb
 save_context:
     read=Vr, vr=0
     d=Object, page=Fetch
-    d=3, idx=Load
-    ra=8, estk=Compact, compact=2
-    d=Estk, mem=Write
-    idx=Increment
-    ra=9, estk=Compact, compact=2
-    d=Estk, mem=Write
-    ra=15, flags
+    ; IDX and bus consumers use old operands. Write the old compact IP at
+    ; component 3 while advancing IDX and constructing the compact SP.
+    ; The final write computes the stop condition only after successful I/O.
+    d=3, idx=Load, ra=8, estk=Compact, compact=2
+    d=Estk, mem=Write, idx=Increment, ra=9, estk=Compact, compact=2
+    d=Estk, mem=Write, ra=15, flags
     seq=ConditionalJump, cc=!Zero, brch=stopped
     seq=Jump, brch=check_process_switch
 ; Tests observe this boundary without changing machine state or supplying work.
 cycle:
     d=decoded, r=Bus, rb=7, ldrb, seq=Jump, brch=fetch_byte
 decoded:
-    ra=0, rb=13, ldrb
-    d=Register, ra=13, apc=Bus
+    ; Register write and APC both consume the fetched byte in old R0.
+    d=Register, ra=0, rb=13, ldrb, apc=Bus
     fetch=Nam
     fetch=Map
     seq=Dispatch
@@ -167,13 +160,14 @@ fetch_byte:
     ra=11, rb=8, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=bad_state
     read=Vr, vr=1
-    d=Object, page=Fetch
-    ra=8, rb=10, alu=Sub, cin=One, ldq
+    ; A stalled/refilled fetch retains the old CPU operands until completion.
+    d=Object, page=Fetch, ra=8, rb=10, alu=Sub, cin=One, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, r=Bus, rb=0, ldrb
-    ra=8, s=Branch, brch=1, alu=Add, rb=8, ldrb
-    d=Register, ra=7, seq=Bus
+    ; RA supplies the continuation bus while S reads R8. The unused branch
+    ; literal supplies zero: 0 + R8 + carry increments IP during the return.
+    d=Register, ra=7, r=Branch, brch=0, s=Register, rb=8, alu=Add, cin=One, ldrb, seq=Bus
 
 ; These four push families share generic field access. Kind 3 dereferences
 ; the literal Association's value (guest field 1).
@@ -323,8 +317,7 @@ peek:
     seq=ConditionalJump, cc=Zero, brch=bad_state
     seq=ConditionalJump, cc=Sign, brch=bad_state
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym
@@ -333,18 +326,14 @@ push:
     ra=14, rb=9, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=bad_state
     seq=ConditionalJump, cc=Sign, brch=bad_state
-    ra=9, s=Branch, brch=1, alu=Add, rb=9, ldrb
-    read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    ra=9, s=Branch, brch=1, alu=Add, rb=9, ldrb, read=Vr, vr=0
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
-    d=Symbol, mem=Write
-    seq=Jump, brch=boundary
+    d=Symbol, mem=Write, seq=Jump, brch=boundary
 pop:
     d=pop_value, r=Bus, rb=6, ldrb, seq=Jump, brch=peek
 pop_value:
-    d=NIL, mem=Write
-    ra=9, s=Branch, brch=1, alu=Sub, cin=One, rb=9, ldrb
+    d=NIL, mem=Write, ra=9, s=Branch, brch=1, alu=Sub, cin=One, rb=9, ldrb
     seq=Jump, brch=boundary
 
 ; Keep the result rooted in VR5 before reading or refilling the sender.

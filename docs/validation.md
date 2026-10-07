@@ -497,6 +497,48 @@ counts. The window loop also removes the sleep after its former 8 ms execution b
 executes for approximately 16.7 ms before presentation. Interactive performance for this change
 remains unmeasured.
 
+### Bytecode-loop work profile
+
+The [bytecode-loop profiler](../crates/rekursiv-smalltalk/tests/sends/dispatch_profile.rs) measures complete, finite guest programs.
+Each program repeats a bytecode sequence 128 times, then returns its receiver.
+Each case runs with input and low-space registrations absent, then with both registrations active.
+The active registrations have an empty notification queue and zero thresholds. They execute their checks without signals or collections.
+Fixtures use 65,536 pager entries and RAM words.
+
+```sh
+mkdir -p artifacts
+DISPATCH_PROFILE_OUTPUT=artifacts/dispatch-profile.json \
+  cargo test --release --locked -p rekursiv-smalltalk --test sends \
+  profile_bytecode_loop -- --ignored --nocapture
+```
+
+The JSON separates context writes, scheduler checks, low-space checks, event checks, bytecode fetch/dispatch, and handler/activation work.
+Each phase records retired microinstructions, OBJEKT commands, and device requests.
+The report also includes an opcode histogram and a hash of context identity, IP, SP, and opcode at each decode.
+The profiler checks the context object's IP/SP before every bytecode.
+Each case also runs through the JIT and must produce identical processor state, object memory, and retired instruction counts.
+
+`DISPATCH_PROFILE_SOURCE` accepts a complete concatenated microcode source file for comparisons with an earlier version.
+Both versions use the same fixtures. The baseline for these measurements is `852c98a`.
+All 14 baseline/optimized pairs have identical bytecode counts, opcode histograms, and trace hashes.
+
+| Sequence | Quiet baseline | Quiet optimized | Registered baseline | Registered optimized |
+| --- | ---: | ---: | ---: | ---: |
+| Push/pop | 63.9 | 51.3 | 100.9 | 87.3 |
+| Integer addition | 70.7 | 58.4 | 107.7 | 94.4 |
+| Receiver field | 72.3 | 59.8 | 109.3 | 95.8 |
+| Literal | 74.3 | 61.8 | 111.3 | 97.8 |
+| Extended literal | 83.3 | 69.8 | 120.3 | 105.8 |
+| Conditional branch | 68.3 | 56.3 | 105.3 | 92.3 |
+| Method send | 151.6 | 134.0 | 188.6 | 170.0 |
+
+Values are retired microinstructions per guest bytecode, including initial activation and final return.
+They measure work, not native elapsed time or FPGA cycles.
+The changes combine independent bus, ALU, memory, and sequencer operations within one control word.
+Header extraction uses a rotate and mask instead of repeated single-bit shifts.
+Combined operations consume the previous register values, and CPU state changes wait for successful OBJEKT completion.
+Context IP/SP writes and scheduler, input, and low-space checks still execute at every bytecode boundary.
+
 ### Proactive collection and longer execution
 
 Native and RTL regressions exercise the standalone `gc=Collect` request through the existing

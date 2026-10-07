@@ -4487,3 +4487,8 @@ fn three_argument_equality_primitive_shell_preserves_all_arguments_for_fallback(
 
 #[path = "sends/bitblt.rs"]
 mod bitblt;
+
+#[path = "sends/dispatch_profile.rs"]
+mod dispatch_profile;
+#[path = "sends/native.rs"]
+mod native;

@@ -111,11 +111,10 @@ send_prepare:
     seq=ConditionalJump, cc=Sign, brch=bad_state
     read=Vr, vr=0
     d=Object, page=Fetch
-    d=3, idx=Load
-    ra=8, estk=Compact, compact=2
-    d=Estk, mem=Write
-    idx=Increment
-    ra=9, estk=Compact, compact=2
+    ; Materialize both caller fields before lookup or primitive execution.
+    ; The first write consumes old IDX/ESTKR while preparing the next field.
+    d=3, idx=Load, ra=8, estk=Compact, compact=2
+    d=Estk, mem=Write, idx=Increment, ra=9, estk=Compact, compact=2
     d=Estk, mem=Write
     ra=9, rb=1, alu=Sub, cin=One, ldq
     d=Q, r=Bus, s=Branch, brch=7, alu=Add, ldq
@@ -233,18 +232,8 @@ method_found:
     mem=Read
     d=Object, r=Bus, rb=5, ldrb
     ; Converted header payload is source_header >> 1. Flag is bits 12..14.
-    ra=5, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
+    ; Rotate right by twelve; the following mask keeps header bits 12..14.
+    ra=5, s=Branch, brch=20, alu=Rotate, rb=2, ldrb
     ra=2, s=Bus, d=7, alu=And, rb=2, ldrb
     ra=2, s=Branch, brch=5, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=normal_header
@@ -255,13 +244,7 @@ method_found:
     ra=2, s=Branch, brch=5, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=quick_self
     ; Quick instance loads use the header's temporary-count bits as index.
-    ra=5, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
+    ra=5, s=Branch, brch=25, alu=Rotate, rb=4, ldrb
     ra=4, s=Bus, d=31, alu=And, rb=4, ldrb
     read=Vr, vr=6
     d=Object, page=Fetch
