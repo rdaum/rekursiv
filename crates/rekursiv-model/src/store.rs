@@ -1,15 +1,28 @@
 //! Atomic object records behind the streaming backing-store interface.
+#![deny(missing_docs)]
+
 use rekursiv_asm::*;
 use std::collections::BTreeMap;
+/// One complete object saved under its stable identity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Record {
+    /// Full tagged reference, including the scan bit.
     pub reference: Word,
+    /// Class reference saved with the body.
     pub class: Word,
+    /// Opaque condition bit preserved by transfers and identity exchange.
     pub cond: bool,
+    /// Object body in field order; the first word supplies cached representation metadata.
     pub body: Vec<Word>,
 }
+/// In-memory implementation of the streaming object backing-store protocol.
+///
+/// A save stages body words until `CommitSave`. Within a batch, completed saves
+/// stay private until `CommitBatch` publishes them together. Preview never
+/// publishes effects, so an executor can hold a response under backpressure.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BackingStore {
+    /// Committed records indexed by identity. Incomplete saves and batches are separate.
     pub records: BTreeMap<u64, Record>,
     staging: Option<(Record, usize)>,
     batch: Option<BTreeMap<u64, Record>>,
@@ -19,6 +32,7 @@ impl BackingStore {
     pub fn staged_record_count(&self) -> Option<usize> {
         self.batch.as_ref().map(BTreeMap::len)
     }
+    /// Abandon incomplete saves and unpublished batches, preserving committed records.
     pub fn discard_staging(&mut self) {
         self.staging = None;
         self.batch = None;
@@ -121,8 +135,12 @@ impl BackingStore {
         reply
     }
 
-    /// Publish exactly once after a successful completion. preview performs
-    /// every fallible check; the mutations below cannot fail halfway through.
+    /// Validate a request and publish its effects once if the reply succeeds.
+    ///
+    /// `fail` injects a service error without mutation. Otherwise this applies
+    /// the same checks as [`Self::preview`]. Errors preserve both staging and
+    /// published records. A caller that retries a held transaction must use
+    /// `preview` until the completion boundary, then call this method once.
     pub fn request(&mut self, req: StoreRequest, fail: bool) -> StoreReply {
         let reply = self.preview(req, fail);
         if reply.status != Status::Ok {

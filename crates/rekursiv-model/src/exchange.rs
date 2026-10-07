@@ -1,6 +1,7 @@
 //! Transaction oracle for the generic two-binding exchange engine. The RTL
 //! supplies all traffic; this model predicts its effects and failure boundary.
-use super::*;
+use crate::{MemoryEffect, Model, Outcome};
+use rekursiv_asm::{Command, Entry, Faults, Response, Status, StoreOp, StoreRequest, Word};
 impl Model {
     pub(super) fn execute_exchange(&mut self, c: Command, faults: Faults) -> Outcome {
         let mut out = Outcome {

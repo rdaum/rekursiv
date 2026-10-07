@@ -1,5 +1,26 @@
-use super::*;
+//! Object allocation, resident fetches, eviction, and streaming refill.
+//!
+//! Transfers share the backing-store protocol with RTL tests. Request logs and
+//! injected fault positions preserve publication order across partial failures.
+#![deny(missing_docs)]
+
+use crate::{MemoryEffect, Model, Outcome};
+use rekursiv_asm::{
+    Command, Entry, Faults, Pager, Response, Status, StoreOp, StoreReply, StoreRequest, Word,
+    ADDRESS_LIMIT, ID_MASK,
+};
 impl Model {
+    /// Validate and execute a standalone fetch or allocation transaction.
+    ///
+    /// A resident fetch returns without RAM traffic. A miss or allocation can
+    /// reserve RAM, evict a dirty victim, and initialize or refill a body before
+    /// publishing its mapping. Failures can consume identities or RAM and leave
+    /// earlier RAM writes or completed victim saves visible. Request observations
+    /// include the failing access, indexed independently by each fault channel.
+    ///
+    /// This low-level test entry point validates the command but does not check
+    /// the maintenance lock. Normal executors use [`Self::execute`] or
+    /// [`Self::execute_response`], which enforce that boundary.
     pub fn execute_transfer(&mut self, command: Command, faults: Faults) -> Outcome {
         match command.validate() {
             Ok(command) => self.transfer_validated(command, faults),

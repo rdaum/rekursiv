@@ -1,5 +1,8 @@
 //! Read-only key-index oracle. Class filtering remains a microcode operation.
-use super::*;
+use crate::{Model, Outcome};
+use rekursiv_asm::{
+    Command, Faults, Pager, Response, Status, StoreOp, StoreRequest, Word, ID_MASK,
+};
 impl Model {
     pub(super) fn execute_directory(&mut self, c: Command, faults: Faults) -> Outcome {
         let mut out = Outcome {

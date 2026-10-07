@@ -1,8 +1,25 @@
-//! Atomic recovery specification, independent of the service command sequence.
-use super::*;
+//! Atomic whole-store recovery specification for tests and service-driver comparisons.
+//!
+//! This graph walker is not the native emulator's collector. Runtime collection
+//! executes microcode against the emulator's maintenance datapath.
+#![deny(missing_docs)]
+use crate::store::Record;
+use crate::Model;
+use rekursiv_asm::{RecoveryMode, RecoveryReport, Roots, Status, Word, ADDRESS_LIMIT};
 use std::collections::{BTreeMap, BTreeSet};
-use store::Record;
 impl Model {
+    /// Compute and atomically publish the expected result of service recovery.
+    ///
+    /// `Compact` retains every object; `Collect` traces caller roots, registers,
+    /// selection, compact classes, and a valid prepared reference. Resident bodies
+    /// move to the start of RAM, and unreachable backing records are removed.
+    /// The prepared address is invalidated after publication.
+    ///
+    /// # Errors
+    ///
+    /// Invalid metadata, inconsistent bodies, overlapping resident ranges, or
+    /// dangling traced references return a status without changing this model.
+    /// This method is a test specification, not a runtime collection shortcut.
     pub fn recover(&mut self, mode: RecoveryMode, roots: &Roots) -> Result<RecoveryReport, Status> {
         let mut candidate = self.clone();
         let report = candidate.recover_inner(mode, roots)?;
@@ -145,6 +162,7 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rekursiv_asm::{Entry, Service};
     #[test]
     fn invalid_graph_is_atomic_but_compaction_needs_no_reachability() {
         let mut model = Model::new(4, 32);

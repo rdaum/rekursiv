@@ -1,10 +1,25 @@
 //! Test specification for RAM retention, independent of the microcode's pager
 //! passes and copy requests. It follows edges with a work list, then publishes
 //! a complete candidate heap. It never fetches or deletes a backing record.
+#![deny(missing_docs)]
+
 use crate::Model;
 use rekursiv_asm::{Status, Word};
 use std::collections::BTreeSet;
 impl Model {
+    /// Compute the expected live RAM set and copy it to the opposite semispace.
+    ///
+    /// `from_upper` selects the occupied half. `roots` supplies caller roots;
+    /// registers, compact classes, selection, prepared access, and persistent
+    /// obligations contribute additional roots. `needed` reserves destination
+    /// words after the retained bodies. Backing records remain unchanged.
+    /// Successful publication also relocates a valid prepared address.
+    ///
+    /// # Errors
+    ///
+    /// Invalid resident ranges or identities return a status. Insufficient
+    /// destination capacity returns `OutOfSpace`. Errors leave the model unchanged.
+    /// This oracle is for comparisons; the emulator executes collector microcode.
     pub fn collect_ram(
         &mut self,
         roots: &[Word],
