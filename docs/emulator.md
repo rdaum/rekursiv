@@ -250,6 +250,83 @@ Add `--pager-entries 16` to reproduce the former capacity. Equal step budgets ca
 amounts of collection and guest work. The drawing regression compares identical pixels after 32
 completed BitBlt operations at both capacities.
 
+### Profile OBJEKT commands
+
+The [standalone OBJEKT benchmarks](../crates/rekursiv-model/benches/objekt/main.rs)
+use the published `micromeasure` crate. Run all cases, or filter by name:
+
+```sh
+cargo bench --locked -p rekursiv-model --bench objekt
+cargo bench --locked -p rekursiv-model --bench objekt -- resident/read_field
+```
+
+On Linux, pin execution to one core and save the measurements as JSON:
+
+```sh
+mkdir -p artifacts
+MICROMEASURE_OUTPUT=artifacts/objekt-bench.json \
+  taskset -c 7 cargo bench --locked -p rekursiv-model --bench objekt
+```
+
+Choose an available core on your host. Hardware counters require access to Linux perf events.
+The report includes counter scheduling coverage; check it before comparing instruction or cycle counts.
+
+The 22 cases separate direct lookup, validation, resident commands, observed commands, allocation, and refill.
+The ordinary command cases call `Model::execute_response`, as the emulator does with metrics disabled.
+The observed field-read case includes access-log allocation and destruction, but excludes emulator counter updates.
+Fixture setup is outside measurement. Every case checks for command or lookup failures.
+
+All fixtures use 65,536 pager entries. Direct lookups permute either 256 or 65,536 resident identities.
+Resident commands repeatedly access one selected object and its hot RAM.
+Transfer samples each use a fresh model and 32,768 operations, with RAM pages touched before measurement.
+Allocations use unique identities and sufficient space to avoid eviction or collection.
+Refills alternate two colliding identities, so every fetch evicts and reloads an object.
+Their backing store contains only two records; this measures a hot in-memory store, not disk latency.
+The dirty-refill case measures a **write-and-fetch pair**. Other command cases measure one command per operation.
+Transfer measurements include the request records that the current response-only transfer path still creates.
+None of these cases includes CPU dispatch, JIT execution, collector microcode, or display work.
+
+Measurements on an ARM Cortex-X925, pinned to CPU 7, with Rust 1.98.1 and `micromeasure` 0.16.0:
+
+| Case | Median ns/operation | Host instructions/operation |
+| --- | ---: | ---: |
+| Direct resident lookup, 256 objects | 2.8 | 40 |
+| Direct resident lookup, 65,536 objects | 5.7 | 40 |
+| Field-read command validation | 6.8 | 45 |
+| No-op command | 14.1 | 204 |
+| Resident fetch hit | 12.6 | 189 |
+| Resident field read | 18.1 | 296 |
+| Prepared field read | 18.0 | 295 |
+| Resident field write | 22.0 | 333 |
+| Field read with access log | 26.3 | 514 |
+| Allocate 16 words | 75.3 | 1,968 |
+| Clean refill, 16 words | 178.5 | 4,803 |
+| Write and dirty refill, 16 words | 410.8 | 10,238 |
+| Allocate 256 words | 431.9 | 9,379 |
+| Clean refill, 256 words | 1,042.5 | 21,483 |
+
+These are one run's medians against implementation `fd5d437`, with the benchmark additions.
+All hardware counters had 100% scheduling coverage. Each case collected approximately one second of measured work.
+Transfer timings varied more between processes than resident timings; repeat runs when assessing changes.
+Microbenchmark costs are not additive, and these host timings do not predict FPGA performance.
+
+A separate Linux perf profile ran 500 million Smalltalk steps with the JIT and 16,777,216 RAM words.
+It used the same core, no window, no detailed OBJEKT counters, and a release build with debug information.
+Cycle sampling began after a 1.5-second delay to exclude startup on this host.
+The run retired approximately 25.6 million microinstructions per second and performed no collections.
+`Model::execute_response` accounted for about **17.2% of sampled CPU time**, including its callees.
+Resident `transition` accounted for 8.3% of total time, and command validation accounted for 4.4%.
+These are overlapping profile shares, not separate costs to add together.
+A separate metrics-enabled run had 25,287,341 stored-reference fetch hits and 3,268 misses: a 99.99% hit rate.
+
+The strongest candidates for improvement are repeated static command validation and resident state publication.
+The profile attributes substantial time to copying the next register state back into the model.
+This is the small architectural `State`, not a copy of the object heap.
+Any change must preserve old-operand behavior and leave state unchanged on resident command failure.
+The relevant code is in [command.rs](../crates/rekursiv-model/src/command.rs),
+[datapath.rs](../crates/rekursiv-model/src/datapath.rs), and
+[pager.rs](../crates/rekursiv-model/src/pager.rs).
+
 ### Input and presentation
 
 The initial keyboard profile uses unshifted US ASCII and separate modifier transitions. The frontend
