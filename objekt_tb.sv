@@ -8,7 +8,7 @@
 // The command/response enable inputs inject backpressure in protocol tests.
 // Tie both high in a system that does not need this test facility. Memory and
 // backing-store channels remain independent and can stall in either mode.
-// Capacities: 16 pager slots, 512 object-memory words, 4096 microinstructions,
+// Capacities: 16 pager slots, 512 object-memory words, 8192 microinstructions,
 // 256 NAM words, 1024 opcode-map entries, and 32 words in each resident stack.
 `ifndef REKURSIV_SIM_MEMORY_WORDS
 `define REKURSIV_SIM_MEMORY_WORDS 512
@@ -120,7 +120,7 @@ module objekt_tb(
 wire gc_valid, gc_ready, gc_response, gc_response_ready, gc_committed;
 wire [3:0] gc_operation, gc_status;
 wire [39:0] gc_data, gc_root, gc_result;
-logik #(.CODE_WORDS(4096)) processor(
+logik #(.CODE_WORDS(8192)) processor(
     .io_valid_o(io_valid_o), .io_ready_i(io_ready_i), .io_write_o(io_write_o),
     .io_address_o(io_address_o), .io_data_o(io_data_o), .io_response_i(io_response_i),
     .io_response_ready_o(io_response_ready_o), .io_error_i(io_error_i), .io_result_i(io_result_i),

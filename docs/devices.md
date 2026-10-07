@@ -63,7 +63,7 @@ Current primitive tests configure their devices directly and do not exercise dis
 | Address | Access | Value |
 | --- | --- | --- |
 | `0x000` | Read | Interface signature `0x524b494f` (`RKIO`) |
-| `0x004` | Read | ABI version: major in bits 31:16, minor in bits 15:0; this contract is `0x00010000` |
+| `0x004` | Read | ABI version: major in bits 31:16, minor in bits 15:0; this contract is `0x00010001` |
 | `0x008` | Read | Capability mask from the table below |
 
 | Bit | Capability | Required regions |
@@ -199,16 +199,21 @@ The cursor bank starts at `0x410`; the display bank starts at `0x510`.
 | --- | --- | --- |
 | `+0x00` | Read | Maximum width; zero means the device is absent |
 | `+0x04` | Read | Maximum height; zero means the device is absent |
-| `+0x08` | Write | Stage width |
-| `+0x0c` | Write | Stage height |
-| `+0x10` | Write | Stage stride in 32-bit words |
-| `+0x14` | Write | 0 begins a new upload at offset zero; 1 publishes the complete upload |
+| `+0x08` | Read / Write | Read visible width (zero if absent) / stage width |
+| `+0x0c` | Read / Write | Read visible height (zero if absent) / stage height |
+| `+0x10` | Read / Write | Read visible stride (zero if absent) / stage stride in 32-bit words |
+| `+0x14` | Write | 0 begins a full replacement; 2 begins a sparse patch; 1 publishes |
 | `+0x18` | Write | Set upload offset in words |
 | `+0x1c` | Write | Store one pixel word and increment the upload offset |
 
-Begin captures valid geometry and creates an unpublished frame. It replaces any previous incomplete upload.
-Geometry changes after Begin affect the next upload, not the current one.
-Publish requires every word, including row padding. Failed or incomplete publication preserves the visible frame.
+Begin captures valid geometry and replaces any previous pending upload. Geometry changes after Begin affect the next upload.
+A full replacement requires every word, including row padding, before Publish.
+A sparse patch requires an existing visible frame with identical width, height, and stride.
+It stages replacement words at explicit offsets. Unwritten words retain their visible values, and repeated offsets use the last write.
+A patch can contain zero writes. Successful Publish applies all staged writes atomically.
+Rejected requests preserve the pending upload. Failed publication preserves the visible frame and permits a later retry.
+The peripheral stores only patch words during staging. It does not copy the complete visible frame for every patch.
+Visible geometry reads and sparse patches are additions in device ABI version 1.1.
 The device supplies storage and presentation for pixels. It does not inspect a guest Form or perform BitBlt.
 
 Primitives 101 and 102 accept a pointer Form with bits, width, height, and offset fields.
@@ -223,11 +228,12 @@ After publication, root 29's private Array retains the Form in component 38 for 
 These references survive eviction and collection. A movable physical body address never becomes a display address.
 Successful registration returns the receiver.
 
-Registration publishes an initial snapshot. BitBlt republishes the complete frame after a nonempty draw
-when the destination bitmap matches either registered Form's bits object. Different Forms can share that bitmap.
-The same microcode upload routine packs registration and refresh frames. It retains no physical heap address.
-Arbitrary heap writes become visible on a subsequent BitBlt or registration; the host does not watch the heap.
-Full-frame validation and upload are current performance costs. Dirty-region transfer remains a follow-up.
+Registration publishes an initial snapshot. BitBlt checks whether the destination storage matches either registered Form's bits object.
+For matching geometry, it patches only the 32-bit groups intersecting the clipped rectangle.
+The packing loop preserves neighboring pixels and clears device row padding.
+If the alias or visible geometry differs, microcode validates and uploads a complete replacement.
+The shared upload routine retains no physical heap address.
+Direct heap writes need an upload covering those words, or explicit registration, before presentation. The host does not watch the heap.
 The native emulator presents published frames and supplies physical input.
 Directed RTL tests cover drawing and cursor/display refresh. A complete interactive RTL session remains stage 5 work.
 

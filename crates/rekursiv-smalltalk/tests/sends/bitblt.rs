@@ -381,7 +381,7 @@ fn registered(case: &Case, primitive: i32) -> source::Image {
     let mut image = make(case);
     pointers(
         &mut image,
-        SOURCE,
+        246,
         232,
         vec![DEST_BITS, oop(case.dimensions.0), oop(case.dimensions.1), 2],
     );
@@ -393,7 +393,7 @@ fn registered(case: &Case, primitive: i32) -> source::Image {
         CALLER,
         0,
         0,
-        &[SOURCE, 116, SELECTOR],
+        &[246, 116, SELECTOR],
         &[32, 209, 135, 112, 210, 124],
     );
     if let source::Body::Pointers(fields) = &mut image.objects.get_mut(&ROOT).unwrap().body {
@@ -524,41 +524,188 @@ fn bitblt_invalid_operands_preserve_destination_and_fallback_receiver() -> Resul
 
 #[test]
 fn bitblt_rejects_late_nonword_data_before_any_write() -> Result<()> {
-    for corrupt in [Word::raw(0x10000)?, r(SOURCE)] {
-        let image = make(&Case::default());
-        let before = bits(&image, DEST_BITS);
-        // Converted word bodies may be modified by guest code. Put invalid data
-        // at the last used component, outside this copy's rectangle, to verify
-        // that validation finishes before drawing the first destination word.
-        let prepare = |converted: &mut target::Image| {
-            *converted
-                .records
-                .iter_mut()
-                .find(|r| r.source_oop == SOURCE_BITS)
-                .unwrap()
-                .body
-                .last_mut()
-                .unwrap() = corrupt;
-        };
-        let m = native_prepared(&image, bitmap_device(), prepare)?;
-        assert_eq!((m.cpu.rf[15], m.objekt.state.vr[5]), (1, i(-1)));
-        assert_eq!(
-            body(&m, DEST_BITS)[1..]
-                .iter()
-                .map(|w| w.bits() as u16)
-                .collect::<Vec<_>>(),
-            before
-        );
-        let e = execute_with_device(image, ROOT, true, 512, prepare, bitmap_device())?;
-        assert_eq!((e.status, e.result), (1, i(-1)));
-        assert_eq!(
-            e.records[&r(DEST_BITS).identity()?].body[1..]
-                .iter()
-                .map(|w| w.bits() as u16)
-                .collect::<Vec<_>>(),
-            before
-        );
-        assert_eq!(e.bitmap_publications, [0, 0]);
+    for (object, component) in [(SOURCE_BITS, 15), (DEST_BITS, 18), (HALF_BITS, 6)] {
+        for corrupt in [Word::raw(0x10000)?, r(SOURCE)] {
+            let image = make(&Case::default());
+            let mut before: Vec<Word> = bits(&image, DEST_BITS)
+                .into_iter()
+                .map(|w| Word::raw(w as u64).unwrap())
+                .collect();
+            if object == DEST_BITS {
+                before[component - 1] = corrupt;
+            }
+            // Converted word bodies may be modified by guest code. Put invalid data
+            // at a late word read by the rectangle, to verify
+            // that validation finishes before drawing the first destination word.
+            let prepare = |converted: &mut target::Image| {
+                *converted
+                    .records
+                    .iter_mut()
+                    .find(|r| r.source_oop == object)
+                    .unwrap()
+                    .body
+                    .get_mut(component)
+                    .unwrap() = corrupt;
+            };
+            let m = native_prepared(&image, bitmap_device(), prepare)?;
+            assert_eq!((m.cpu.rf[15], m.objekt.state.vr[5]), (1, i(-1)));
+            assert_eq!(body(&m, DEST_BITS)[1..], before);
+            let e = execute_with_device(image, ROOT, true, 512, prepare, bitmap_device())?;
+            assert_eq!((e.status, e.result), (1, i(-1)));
+            assert_eq!(e.records[&r(DEST_BITS).identity()?].body[1..], before);
+            assert_eq!(e.bitmap_publications, [0, 0]);
+        }
     }
+    Ok(())
+}
+
+#[test]
+fn bitblt_patch_edges_match_full_pixels_without_full_frame_uploads() -> Result<()> {
+    for width in [1, 15, 16, 17, 31, 32, 33, 63, 64, 65] {
+        for right_edge in [false, true] {
+            let case = Case {
+                dimensions: (width, 7),
+                dest: (if right_edge { width - 1 } else { 0 }, 2),
+                source: (0, 0),
+                extent: (1, 2),
+                clip: (0, 0, width, 7),
+                rule: 6,
+                ..Default::default()
+            };
+            let image = registered(&case, 102);
+            let wanted = packed(&expected(&image, &case), case.dimensions);
+            let full_words = ((width + 31) / 32 * 7) as u64;
+            let m = native(&image, bitmap_device())?;
+            assert_eq!((m.cpu.rf[15], m.objekt.state.vr[5]), (1, r(RECEIVER)));
+            let b = m.devices.display_bitmap.as_ref().unwrap();
+            assert_eq!(b.visible.as_ref().unwrap().words, wanted, "{case:?}");
+            assert_eq!(
+                b.pixel_writes,
+                full_words + 2,
+                "one changed word in each of two rows"
+            );
+            let e = execute_with_device(image, ROOT, true, 512, |_| {}, bitmap_device())?;
+            assert_eq!((e.status, e.result), (1, r(RECEIVER)));
+            assert_eq!(e.display_frame.unwrap().words, wanted, "{case:?}");
+            assert_eq!(
+                e.device_requests
+                    .iter()
+                    .filter(|r| r.write && r.address == 0x52c)
+                    .count() as u64,
+                full_words + 2
+            );
+            // Only registration's private runtime Array is allocated. The
+            // nonaliasing source is read directly, with no scratch object.
+            assert_eq!(e.allocations, 1);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn bitblt_different_registered_geometry_uses_complete_replacement() -> Result<()> {
+    let case = Case {
+        dimensions: (32, 7),
+        dest: (3, 2),
+        source: (0, 0),
+        extent: (4, 2),
+        clip: (0, 0, 32, 7),
+        ..Default::default()
+    };
+    let mut image = registered(&case, 102);
+    // The same fourteen words are a 16x14 bitmap through this registered Form.
+    field(&mut image, 246, 1, oop(16));
+    field(&mut image, 246, 2, oop(14));
+    let wanted = packed(&expected(&image, &case), (16, 14));
+    let m = native(&image, bitmap_device())?;
+    assert_eq!(m.objekt.state.vr[5], r(RECEIVER));
+    let b = m.devices.display_bitmap.as_ref().unwrap();
+    assert_eq!(b.visible.as_ref().unwrap().words, wanted);
+    assert_eq!(b.pixel_writes, 28);
+    let e = execute_with_device(image, ROOT, true, 512, |_| {}, bitmap_device())?;
+    assert_eq!((e.status, e.result), (1, r(RECEIVER)));
+    assert_eq!(e.display_frame.unwrap().words, wanted);
+    assert_eq!(
+        e.device_requests
+            .iter()
+            .filter(|r| r.write && r.address == 0x524 && r.data == 0)
+            .count(),
+        2
+    );
+    Ok(())
+}
+
+#[test]
+fn bitblt_does_not_scan_pixels_outside_the_accessed_rectangle() -> Result<()> {
+    let case = Case::default();
+    let image = make(&case);
+    let wanted = expected(&image, &case);
+    let prepare = |converted: &mut target::Image| {
+        *converted
+            .records
+            .iter_mut()
+            .find(|r| r.source_oop == SOURCE_BITS)
+            .unwrap()
+            .body
+            .last_mut()
+            .unwrap() = Word::raw(0x10000).unwrap();
+    };
+    let m = native_prepared(&image, bitmap_device(), prepare)?;
+    assert_eq!((m.cpu.rf[15], m.objekt.state.vr[5]), (1, r(RECEIVER)));
+    assert_eq!(
+        body(&m, DEST_BITS)[1..]
+            .iter()
+            .map(|w| w.bits() as u16)
+            .collect::<Vec<_>>(),
+        wanted
+    );
+    let e = execute_with_device(image, ROOT, true, 512, prepare, bitmap_device())?;
+    assert_eq!((e.status, e.result), (1, r(RECEIVER)));
+    assert_eq!(
+        e.records[&r(DEST_BITS).identity()?].body[1..]
+            .iter()
+            .map(|w| w.bits() as u16)
+            .collect::<Vec<_>>(),
+        wanted
+    );
+    assert_eq!(e.allocations, 0);
+    Ok(())
+}
+
+#[test]
+fn bitblt_changed_registered_geometry_replaces_the_visible_frame() -> Result<()> {
+    let case = Case::default();
+    let mut image = registered(&case, 102);
+    field(&mut image, 246, 1, oop(31));
+    dictionary(&mut image, 232, 2, 234, 236, &[(116, 238), (124, 250)]);
+    // Register at width 31, then execute a guest method that changes the
+    // registered Form to width 37 before drawing through the other alias.
+    method(&mut image, 250, 0, 0, &[oop(37)], &[32, 97, 120]);
+    method(
+        &mut image,
+        CALLER,
+        0,
+        0,
+        &[246, 116, 124, SELECTOR],
+        &[32, 209, 135, 32, 210, 135, 112, 211, 124],
+    );
+    field(&mut image, ROOT, 1, oop(11));
+    let wanted = packed(&expected(&image, &case), case.dimensions);
+    let m = native(&image, bitmap_device())?;
+    assert_eq!((m.cpu.rf[15], m.objekt.state.vr[5]), (1, r(RECEIVER)));
+    let b = m.devices.display_bitmap.as_ref().unwrap();
+    assert_eq!(b.visible.as_ref().unwrap().words, wanted);
+    assert_eq!(b.visible.as_ref().unwrap().width, 37);
+    assert_eq!(b.pixel_writes, 7 + 14);
+    let e = execute_with_device(image, ROOT, true, 512, |_| {}, bitmap_device())?;
+    assert_eq!((e.status, e.result), (1, r(RECEIVER)));
+    assert_eq!(e.display_frame.unwrap().words, wanted);
+    assert_eq!(
+        e.device_requests
+            .iter()
+            .filter(|r| r.write && r.address == 0x524 && r.data == 0)
+            .count(),
+        2
+    );
     Ok(())
 }

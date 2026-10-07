@@ -48,7 +48,7 @@ The `--memory-words` value includes both semispaces. Each word carries 40 bits i
 The pager has 16 entries, matching the standard RTL test configuration.
 
 A microcode file can supply its own `.collector` directive.
-Otherwise, the loader installs the standard collector at microaddress 3968 and rejects overlap.
+Otherwise, the loader installs the standard collector at microaddress 8064 and rejects overlap.
 The loader supports the assembler's code, NAM, opcode-map, root, and entry directives.
 
 ## Run the Smalltalk image
@@ -79,10 +79,12 @@ Runtime bytecode dispatch, method lookup, primitives, process scheduling, and co
 The emulator does not supply missing Smalltalk operations through Rust callbacks.
 
 Primitive 96 now draws and refreshes the display through microcode. Native startup draws the browser, transcript, and workspace.
-Whole-bitmap validation and full-frame uploads make drawing slow. Disk transfers and snapshot saving remain unfinished.
+BitBlt validates accessed words and uploads changed pixel groups. Disjoint copies need no temporary object.
+Disk transfers and snapshot saving remain unfinished.
 Longer runs currently reach the guest's “Space is Low” notifier, including with `--memory-words 1048576`.
-A diagnostic run completed 769 BitBlts before the first notification: 36,104 free words against a 36,135-word threshold.
+Before the rendering improvements, a diagnostic run completed 769 BitBlts before the first notification: 36,104 free words against a 36,135-word threshold.
 The counter excludes garbage awaiting collection. Low-space notification and allocation recovery need further integration before claiming a usable desktop.
+The [rendering measurements](validation.md#bitblt-rendering-measurements) compare the same image checkpoint before and after the optimization.
 The bounded startup regression establishes drawing progress, not complete interaction.
 To stop at the earlier checkpoint before any drawing, add `--stop-at primitive_dispatch --when R0=96`.
 The window presents complete published frames. It does not read a live Form from the heap.
@@ -118,6 +120,8 @@ The frontend preserves keyboard press/release pairs between frames and releases 
 Caps Lock toggles a virtual lock state. Both physical Control keys share one guest state.
 Mouse coordinates follow the scaled display rectangle, with clipping at its edges.
 Published cursor pixels invert the display pixels at the device cursor position.
+The CPU runs for approximately 16.7 ms between presentation and input updates.
+Active execution has no additional frame-limit sleep. A stopped CPU uses a 60 Hz limit.
 
 ## Architecture and validation
 
@@ -157,6 +161,6 @@ The allocation and paging tests compare registers and object state with RTL afte
 Other tests cover recovery failure, failed device writes, pixel clipping, keyboard mapping, and microcode-driven input/display changes.
 The original-image regression matches all 499 bytecodes in Xerox's `trace2`.
 It also checks the RTL checkpoint: 2176 bytecode boundaries, three collections, and two display publications before BitBlt.
-A second native test completes 32 BitBlts: 9870 bytecode boundaries, 29 collections, and 33 display publications.
+A second native test completes 32 BitBlts: 9870 bytecode boundaries, 24 collections, and 33 display publications.
 Directed native and RTL tests independently compare all Boolean rules, clipping, alignment, overlap, and refresh with expected pixels.
 Passing these checks does not replace cycle-level RTL validation.

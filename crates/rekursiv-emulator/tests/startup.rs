@@ -69,6 +69,7 @@ fn native_saved_image_draws_through_bitblt() -> Result<()> {
     let mut loaded = boot::smalltalk(&std::fs::read(directory.join("VirtualImage"))?, 131072)?;
     let m = &mut loaded.machine;
     m.devices = presentation::workstation(0, 1000);
+    let started = std::time::Instant::now();
     let mut completed = 0;
     let mut initial_display = None;
     let mut calls = std::collections::BTreeMap::<u32, u64>::new();
@@ -117,11 +118,32 @@ fn native_saved_image_draws_through_bitblt() -> Result<()> {
     assert_eq!(completed, 32, "BitBlt progress: {calls:?}");
     assert_eq!(failures, 0);
     assert_eq!(boundaries, 9870);
-    assert_eq!(m.stats.collections, 29);
+    assert_eq!(m.stats.collections, 24);
+    // Bound executed work, not wall time: these thresholds leave headroom
+    // while rejecting the old full-bitmap/full-frame path (22M / 308K).
+    assert!(m.stats.retired < 8_000_000);
+    assert!(m.stats.device_requests < 40_000);
     // One of these copies clips to an empty rectangle and publishes nothing.
     assert_eq!(display.publications, 33);
     assert_eq!((frame.width, frame.height), (640, 480));
     assert_ne!(frame.words, initial_display.unwrap());
+    let checksum = rekursiv_smalltalk::checksum(
+        &frame
+            .words
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        checksum,
+        "5c88b1fc4cd078c333f200091c7dab230cbbb9a0ba8a3b35e222a26b43fa9115"
+    );
+    eprintln!(
+        "drawing stats {:?}, elapsed {:?}, frame {}",
+        m.stats,
+        started.elapsed(),
+        checksum
+    );
     eprintln!("post-BitBlt: {boundaries} bytecodes, {completed} successful copies, {} display publications, {} collections; primitives {calls:?}",display.publications,m.stats.collections);
     Ok(())
 }

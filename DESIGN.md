@@ -1527,18 +1527,20 @@ Primitive numbers and class layouts remain runtime definitions, outside the gene
 
 Partially implemented. Primitive 96 now executes all 16 Boolean rules, clipping,
 16-bit word alignment, halftone tiling, and overlapping copies in microcode.
-A rooted temporary object captures source pixels before destination writes.
+An accessed-word validation pass precedes destination writes. Disjoint copies allocate no temporary object.
+Aliased source or halftone storage uses a rooted snapshot to preserve overlapping pixels.
 Drawing refreshes registered cursor/display Forms, including shared bitmap aliases,
 through the generic device channel. No host drawing callback implements the primitive.
-The interpreter still fits below the collector in the 4096-word control store.
+The added patch path uses an 8192-word control-store profile, with the collector at address 8064.
 
 Directed native and RTL tests compare pixels, force collection, and exercise delayed transfers.
 An original-image native regression completes 32 BitBlts and checks 33 display publications.
 Longer native runs draw browser, transcript, and workspace windows. This is not yet
 acceptance of a usable desktop, storage, or snapshot save/reload.
-Full-frame validation and publication after each draw remain performance costs.
+Matching geometry refreshes only changed 32-bit pixel groups, with atomic device publication.
+Changed geometry uses a complete replacement. The device remains a pixel-storage endpoint.
 Longer native startup runs reach the guest “Space is Low” notifier, even with a larger RAM configuration.
-With 1,048,576 RAM words, the first notification follows 769 successful BitBlts.
+Before the rendering improvements, 1,048,576 RAM words allowed 769 successful BitBlts before the first notification.
 It reports 36,104 available words against a 36,135-word threshold. `FreeWords` counts
 unused allocation space, excluding garbage awaiting collection. Coordinate collection
 with low-space notification before claiming desktop readiness.
@@ -1561,7 +1563,7 @@ Bytecode execution, drawing algorithms, scheduling, and GC must remain on the ma
 
 This work can start alongside interpreter development. It must finish before the workstation stage.
 
-- Expand the current 4096-word control-store configuration as the interpreter requires.
+- Expand the current 8192-word control-store configuration as the interpreter requires.
 - Map the enlarged control store and suitable resident arrays to FPGA block RAM.
 - Preserve fetch timing, programming behavior, root inspection, and recovery across memory implementation changes.
 - Expand the current 24-bit physical address path to cover the card's RAM with a documented word-packing scheme.

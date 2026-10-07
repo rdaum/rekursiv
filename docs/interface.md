@@ -440,7 +440,7 @@ distinguish book evidence from project choices and explain timing at each state 
 
 ### Configuration and loading
 
-The simulation wrapper supplies 4096 microinstructions, 256 NAM words, 1024 CSMAP entries, and 32
+The simulation wrapper supplies 8192 microinstructions, 256 NAM words, 1024 CSMAP entries, and 32
 words per stack. LOGIK parameters permit other capacities; control-store capacity ranges from 2
 through 65535 words. NAM capacity ranges from 2 through 65536 words. Stack capacity ranges from 2
 through 65536 words for the supplied debug interface. Addresses remain 16 bits for microcode and 24

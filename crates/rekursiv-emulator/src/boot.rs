@@ -9,7 +9,7 @@ use rekursiv_model::{
 use rekursiv_smalltalk::{interpreter, layout, source, target};
 use std::collections::BTreeMap;
 pub const PAGER_ENTRIES: usize = 16;
-pub const COLLECTOR_ENTRY: u16 = 3968;
+pub const COLLECTOR_ENTRY: u16 = 8064;
 pub struct Loaded {
     pub machine: Machine,
     pub symbols: BTreeMap<String, i64>,

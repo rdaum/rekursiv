@@ -4,17 +4,18 @@
 ; ESTK is a private rooted frame during this primitive (SP=31). Slot 0 is
 ; validation scratch. 1..3 Forms; 4 rule; 5..14 the ten rectangle fields;
 ; 15/16 destination/source strides; 17..20 Form dimensions; 21 staged source;
-; 22 words/row; 23 first destination word; 24 reserved; 25/26 edge masks;
+; 22 words/row; 23 first destination word; 24 pass (0 validate, 1 direct, 2 snapshot); 25/26 edge masks;
 ; 27/28 saved IP/SP; 29 failure continuation; 30 Form validation continuation;
 ; 31 staged word count. VR0..2 retain caller state, VR6 receiver, VR7 method.
 ; VR3/4/5 hold destination/source/halftone bitmaps. No reference lives solely
 ; in a numeric register. Every refill can page or enter the same collector.
 ;
-; Complete operand validation precedes destination writes. Source and halftone
-; are sampled into a temporary opaque object, so shared backing bitmaps and
-; horizontal/vertical overlap never observe a previously overwritten source.
-; The temporary is a machine object, not a host buffer. Empty rectangles need
-; neither allocation nor publication. Input fields and Forms stay unchanged.
+; Header and accessed-word validation precede destination writes. Disjoint
+; bitmaps copy directly without allocating. A source or halftone alias uses
+; a temporary opaque object, so overlap never reads an overwritten source.
+; Empty rectangles need neither allocation nor publication. Input fields and
+; Forms stay unchanged. Execution is single-mutator: paging and collection
+; can occur between passes, but no guest process can mutate the checked words.
 ; Entry: VR6 BitBlt receiver, VR7 primitive method, R1 arity, R8/R9 caller
 ; IP/SP, R15 fallback continuation. Success returns VR6 unchanged; failure
 ; restores caller state before executing the original method fallback.
@@ -54,10 +55,13 @@ primitive_bitblt:
     mem=Read
     d=3, esp=Bus
     d=Object, estk=Bus
-    ; Numeric fields use tagged SmallIntegers, bounded to the image
-    ; representation (-16384..16383). Keep their original tagged values in
-    ; the frame; clipping reads their sign-extended low 32-bit payloads.
-    d=5, idx=Load
+    ; Decode the eleven numeric fields with one loop. R0 names their frame
+    ; slot; the corresponding receiver component is R0+1. Numeric registers
+    ; retain sign-extended payloads, and the frame retains the original tags.
+    d=4, r=Bus, rb=0, ldrb
+bb_fields:
+    ra=0, s=Branch, brch=1, alu=Add, ldq
+    d=Q, idx=Load
     mem=Read
     d=0, esp=Bus
     d=Object, ldsym, r=Bus, rb=2, ldrb, estk=Compact, compact=2
@@ -65,108 +69,11 @@ primitive_bitblt:
     ra=2, s=Bus, d=16384, alu=Add, rb=3, ldrb
     ra=3, s=Bus, d=0xffff8000, alu=And, flags
     seq=ConditionalJump, cc=!Zero, brch=bb_invalid
-    d=4, esp=Bus
+    d=Register, ra=0, esp=Bus
     d=Object, estk=Bus
-    d=6, idx=Load
-    mem=Read
-    d=0, esp=Bus
-    d=Object, ldsym, r=Bus, rb=2, ldrb, estk=Compact, compact=2
-    d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
-    ra=2, s=Bus, d=16384, alu=Add, rb=3, ldrb
-    ra=3, s=Bus, d=0xffff8000, alu=And, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
-    d=5, esp=Bus
-    d=Object, estk=Bus
-    d=7, idx=Load
-    mem=Read
-    d=0, esp=Bus
-    d=Object, ldsym, r=Bus, rb=2, ldrb, estk=Compact, compact=2
-    d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
-    ra=2, s=Bus, d=16384, alu=Add, rb=3, ldrb
-    ra=3, s=Bus, d=0xffff8000, alu=And, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
-    d=6, esp=Bus
-    d=Object, estk=Bus
-    d=8, idx=Load
-    mem=Read
-    d=0, esp=Bus
-    d=Object, ldsym, r=Bus, rb=2, ldrb, estk=Compact, compact=2
-    d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
-    ra=2, s=Bus, d=16384, alu=Add, rb=3, ldrb
-    ra=3, s=Bus, d=0xffff8000, alu=And, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
-    d=7, esp=Bus
-    d=Object, estk=Bus
-    d=9, idx=Load
-    mem=Read
-    d=0, esp=Bus
-    d=Object, ldsym, r=Bus, rb=2, ldrb, estk=Compact, compact=2
-    d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
-    ra=2, s=Bus, d=16384, alu=Add, rb=3, ldrb
-    ra=3, s=Bus, d=0xffff8000, alu=And, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
-    d=8, esp=Bus
-    d=Object, estk=Bus
-    d=10, idx=Load
-    mem=Read
-    d=0, esp=Bus
-    d=Object, ldsym, r=Bus, rb=2, ldrb, estk=Compact, compact=2
-    d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
-    ra=2, s=Bus, d=16384, alu=Add, rb=3, ldrb
-    ra=3, s=Bus, d=0xffff8000, alu=And, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
-    d=9, esp=Bus
-    d=Object, estk=Bus
-    d=11, idx=Load
-    mem=Read
-    d=0, esp=Bus
-    d=Object, ldsym, r=Bus, rb=2, ldrb, estk=Compact, compact=2
-    d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
-    ra=2, s=Bus, d=16384, alu=Add, rb=3, ldrb
-    ra=3, s=Bus, d=0xffff8000, alu=And, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
-    d=10, esp=Bus
-    d=Object, estk=Bus
-    d=12, idx=Load
-    mem=Read
-    d=0, esp=Bus
-    d=Object, ldsym, r=Bus, rb=2, ldrb, estk=Compact, compact=2
-    d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
-    ra=2, s=Bus, d=16384, alu=Add, rb=3, ldrb
-    ra=3, s=Bus, d=0xffff8000, alu=And, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
-    d=11, esp=Bus
-    d=Object, estk=Bus
-    d=13, idx=Load
-    mem=Read
-    d=0, esp=Bus
-    d=Object, ldsym, r=Bus, rb=2, ldrb, estk=Compact, compact=2
-    d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
-    ra=2, s=Bus, d=16384, alu=Add, rb=3, ldrb
-    ra=3, s=Bus, d=0xffff8000, alu=And, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
-    d=12, esp=Bus
-    d=Object, estk=Bus
-    d=14, idx=Load
-    mem=Read
-    d=0, esp=Bus
-    d=Object, ldsym, r=Bus, rb=2, ldrb, estk=Compact, compact=2
-    d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
-    ra=2, s=Bus, d=16384, alu=Add, rb=3, ldrb
-    ra=3, s=Bus, d=0xffff8000, alu=And, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
-    d=13, esp=Bus
-    d=Object, estk=Bus
-    d=15, idx=Load
-    mem=Read
-    d=0, esp=Bus
-    d=Object, ldsym, r=Bus, rb=2, ldrb, estk=Compact, compact=2
-    d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
-    ra=2, s=Bus, d=16384, alu=Add, rb=3, ldrb
-    ra=3, s=Bus, d=0xffff8000, alu=And, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
-    d=14, esp=Bus
-    d=Object, estk=Bus
+    ra=0, s=Branch, brch=1, alu=Add, rb=0, ldrb
+    ra=0, s=Branch, brch=15, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_fields
     d=4, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=2, ldrb
@@ -276,23 +183,40 @@ bb_mask_ready:
     alu=ProductLow, rb=2, ldrb
     d=31, esp=Bus
     ra=2, estk=Alu
-    ; Allocate a word-format scratch object sized to the clipped word grid.
-    ; Its class follows the destination bitmap; its body contains no pointers.
-    ; The allocation can collect: Forms and source bitmaps remain rooted.
-    read=Vr, vr=3
-    d=Object, page=Fetch
-    read=Type
-    ra=2, s=Branch, brch=1, alu=Add, rb=2, ldrb
-    d=Object, ra=2, page=Allocate, size=ra, scan=0
-    d=21, esp=Bus
-    d=Object, estk=Bus
-    d=1, idx=Load
-    d=1, mem=Write
+    ; Pass 0 checks only words read by this rectangle, before any writes.
+    ; Pass 1 draws directly. Pass 2 snapshots sources only when bits alias.
+    d=24, esp=Bus
+    d=0, estk=Bus
+bb_pass_start:
     d=0, r=Bus, rb=8, ldrb
     d=2, r=Bus, rb=10, ldrb
-; R8/R9 row/column, R10 scratch component, R14 tiled halftone word.
-; Stage before merging even when two different Forms share their bits object.
 bb_stage_row:
+    ; Cache numeric row bases once, instead of rereading frame slots and
+    ; multiplying for every word. R0=destination component, R1=source word.
+    d=6, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=2, ldrb
+    ra=2, rb=8, alu=Add, ldq
+    r=Q, rb=2, ldrb
+    d=15, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=3, ldrb
+    ra=2, rb=3, alu=MultiplyUnsigned
+    alu=ProductLow, rb=0, ldrb
+    d=23, esp=Bus
+    estk=Read
+    ra=0, s=Bus, d=Estk, alu=Add, rb=0, ldrb
+    ra=0, s=Branch, brch=2, alu=Add, rb=0, ldrb
+    d=10, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=2, ldrb
+    ra=2, rb=8, alu=Add, ldq
+    r=Q, rb=2, ldrb
+    d=16, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=3, ldrb
+    ra=2, rb=3, alu=MultiplyUnsigned
+    alu=ProductLow, rb=1, ldrb
     d=0, r=Bus, rb=9, ldrb
     d=6, esp=Bus
     estk=Read
@@ -307,7 +231,10 @@ bb_stage_row:
     d=Object, page=Fetch
     d=Register, ra=2, idx=Load
     mem=Read
-    d=Object, r=Bus, rb=14, ldrb
+    d=Object, ldsym, r=Bus, rb=14, ldrb
+    d=Register, ra=14, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
+    ra=14, s=Bus, d=0xffff0000, alu=And, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
 bb_stage_word:
     d=65535, r=Bus, rb=12, ldrb
     d=NIL, ldsym
@@ -334,16 +261,10 @@ bb_stage_word:
     ra=2, shift=ArithmeticRight, rb=2, ldrb
     ra=2, shift=ArithmeticRight, rb=2, ldrb
     ra=2, shift=ArithmeticRight, rb=11, ldrb
-    d=10, esp=Bus
-    estk=Read
-    d=Estk, r=Bus, rb=2, ldrb
-    ra=2, rb=8, alu=Add, ldq
-    r=Q, rb=2, ldrb
     d=16, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=3, ldrb
-    ra=2, rb=3, alu=MultiplyUnsigned
-    alu=ProductLow, rb=6, ldrb
+    ra=1, rb=6, ldrb
     d=bb_source_first, r=Bus, rb=7, ldrb, seq=Jump, brch=bb_source_word
 ; Assemble two adjacent source words into a 32-bit window. Rotate by
 ; sourceX mod 16, then select its high half. Out-of-row words are zero;
@@ -361,6 +282,34 @@ bb_source_second:
 bb_stage_mask:
     ra=12, rb=14, alu=And, ldq
     r=Q, rb=12, ldrb
+    d=24, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=2, ldrb
+    ra=2, s=Branch, brch=2, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=bb_stage_store
+    ; Resolve the destination word for either preflight or the direct path.
+    ra=0, rb=9, alu=Add, ldq
+    r=Q, rb=11, ldrb
+    read=Vr, vr=3
+    d=Object, page=Fetch
+    d=Register, ra=11, idx=Load
+    mem=Read
+    d=Object, ldsym, r=Bus, rb=3, ldrb
+    ra=2, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_direct_merge
+    d=Register, ra=3, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
+    ra=3, s=Bus, d=0xffff0000, alu=And, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
+    seq=Jump, brch=bb_stage_next
+bb_direct_merge:
+    d=4, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, s=Branch, brch=3, alu=MultiplyUnsigned
+    alu=ProductLow, rb=13, ldrb
+    ra=13, s=Bus, d=bb_rule0, alu=Add, rb=13, ldrb
+    ra=12, rb=2, ldrb
+    d=Register, ra=13, seq=Bus
+bb_stage_store:
     d=21, esp=Bus
     estk=Read
     d=Estk, ldvr, vr=3
@@ -368,6 +317,7 @@ bb_stage_mask:
     d=Object, page=Fetch
     d=Register, ra=10, idx=Load
     d=Register, ra=12, mem=Write
+bb_stage_next:
     ra=10, s=Branch, brch=1, alu=Add, rb=10, ldrb
     ra=9, s=Branch, brch=1, alu=Add, rb=9, ldrb
     d=22, esp=Bus
@@ -381,6 +331,44 @@ bb_stage_mask:
     d=Estk, r=Bus, rb=2, ldrb
     ra=8, rb=2, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=bb_stage_row
+    d=24, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, flags
+    seq=ConditionalJump, cc=Zero, brch=bb_preflight_done
+    d=Estk, r=Bus, s=Branch, brch=1, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=bb_refresh
+    seq=Jump, brch=bb_staged
+bb_preflight_done:
+    ; Compare storage identities, not Form identities. This also covers a
+    ; halftone sharing destination storage. Nonaliasing copies need no object.
+    read=Vr, vr=3
+    d=Object, ldsym
+    read=Vr, vr=4
+    d=Object, seq=ConditionalJump, cc=Symbol, brch=bb_stage_allocate
+    read=Vr, vr=5
+    d=Object, seq=ConditionalJump, cc=Symbol, brch=bb_stage_allocate
+    d=24, esp=Bus
+    d=1, estk=Bus, seq=Jump, brch=bb_pass_start
+bb_stage_allocate:
+    d=24, esp=Bus
+    d=2, estk=Bus
+    d=31, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=2, ldrb
+    ; Allocate a word-format scratch object sized to the clipped word grid.
+    ; Its class follows the destination bitmap; its body contains no pointers.
+    ; The allocation can collect: Forms and source bitmaps remain rooted.
+    read=Vr, vr=3
+    d=Object, page=Fetch
+    read=Type
+    ra=2, s=Branch, brch=1, alu=Add, rb=2, ldrb
+    d=Object, ra=2, page=Allocate, size=ra, scan=0
+    d=21, esp=Bus
+    d=Object, estk=Bus
+    d=1, idx=Load
+    d=1, mem=Write
+    seq=Jump, brch=bb_pass_start
+bb_staged:
     d=1, esp=Bus
     estk=Read
     d=Estk, ldvr, vr=3
@@ -521,6 +509,10 @@ bb_masked:
     r=Q, s=Register, rb=5, alu=And, ldq
     r=Q, s=Register, rb=3, alu=Xor, ldq
     d=Q, mem=Write
+    d=24, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, s=Branch, brch=1, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=bb_stage_next
     ra=10, s=Branch, brch=1, alu=Add, rb=10, ldrb
     ra=11, s=Branch, brch=1, alu=Add, rb=11, ldrb
     ra=9, s=Branch, brch=1, alu=Add, rb=9, ldrb
@@ -539,7 +531,8 @@ bb_masked:
 ; Shared Form validator: input VR3, return address R7, failure address R15.
 ; Returns Object/VR3=bits, R2/R3=width/height, R4=16-bit stride. R5..7 and
 ; slot 0 are scratch; slot 30 retains the return address during word scanning.
-; Validate the entire used bitmap, including words outside the eventual clip.
+; Validate layout and storage bounds here. The rectangle pass checks pixel
+; words later, after clipping. Unrelated bitmap contents are not inspected.
 bb_form:
     d=30, esp=Bus
     ra=7, estk=Alu
@@ -588,6 +581,12 @@ bb_form:
     read=Size
     d=Object, r=Bus, s=Register, rb=6, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Carry, brch=bb_invalid
+    seq=Jump, brch=bb_form_done
+; Full validation is reserved for a refresh whose registered geometry differs
+; from the destination Form. Ordinary copies validate only accessed words.
+bb_full_pixels:
+    d=30, esp=Bus
+    ra=7, estk=Alu
     d=1, r=Bus, rb=5, ldrb
 bb_validate:
     ra=5, rb=6, alu=Sub, cin=One, flags
@@ -718,12 +717,16 @@ bb_source_word:
     r=Q, s=Branch, brch=2, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
-    d=Object, r=Bus, rb=2, ldrb
+    d=Object, ldsym, r=Bus, rb=2, ldrb
+    d=Register, ra=2, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
+    ra=2, s=Bus, d=0xffff0000, alu=And, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
 bb_source_zero:
     d=Register, ra=7, seq=Bus
 ; Explicit presentation: inspect rooted cursor/display Forms after the draw.
-; Match their bitmap identities, including alias Forms. Upload each matching
-; complete frame through the common device path; no host heap watching.
+; Match their bitmap identities, including alias Forms. Upload changed
+; 32-bit groups when geometry matches, otherwise a complete frame. The
+; external endpoint accepts pixel words and knows nothing about guest Forms.
 ; R1 scans private-state components 38/39 and survives validation/upload.
 bb_refresh:
     read=Vr, vr=3
@@ -756,8 +759,34 @@ bb_refresh_form:
     ra=11, s=Branch, brch=1023, alu=And, rb=11, ldrb
     d=0x410, r=Bus, rb=0, ldrb
     ra=1, s=Branch, brch=38, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=bb_refresh_upload
+    seq=ConditionalJump, cc=Zero, brch=bb_refresh_geometry
     d=0x510, r=Bus, rb=0, ldrb
+bb_refresh_geometry:
+    ; Rectangles have the destination Form's geometry. A differently shaped
+    ; alias, or a changed device geometry, requires a full replacement instead.
+    d=17, esp=Bus
+    estk=Read
+    ra=2, s=Bus, d=Estk, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_refresh_full
+    d=18, esp=Bus
+    estk=Read
+    ra=3, s=Bus, d=Estk, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_refresh_full
+    ra=0, s=Branch, brch=8, alu=Add, rb=7, ldrb
+    ra=7, io=Read
+    ra=2, s=Bus, d=Device, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_refresh_full
+    ra=7, s=Branch, brch=4, alu=Add, rb=7, ldrb
+    ra=7, io=Read
+    ra=3, s=Bus, d=Device, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_refresh_full
+    ra=7, s=Branch, brch=4, alu=Add, rb=7, ldrb
+    ra=7, io=Read
+    ra=11, s=Bus, d=Device, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_refresh_full
+    d=bb_refresh_next, r=Bus, rb=15, ldrb, seq=Jump, brch=bitmap_patch
+bb_refresh_full:
+    d=bb_refresh_upload, r=Bus, rb=7, ldrb, seq=Jump, brch=bb_full_pixels
 bb_refresh_upload:
     d=bb_refresh_next, r=Bus, rb=15, ldrb, seq=Jump, brch=bitmap_upload
 bb_refresh_next:

@@ -466,7 +466,8 @@ fn fetch_exhaustion_collects_before_refill_and_preserves_request() -> Result<()>
     h.load_processor(&image)?;
     h.start_processor(0)?;
     let mut cpu = Processor::default();
-    h.run_processor(&image, &mut cpu, 100_000)?;
+    // Collection scans the parameterized control-store roots.
+    h.run_processor(&image, &mut cpu, 100_000 * CODE_WORDS.div_ceil(4096))?;
     assert_eq!(cpu.object, Word::signed(99).bits());
     assert_eq!(h.stats.collections, 1);
     // Metadata is read once before exhaustion and once on retry; marking
@@ -621,7 +622,12 @@ fn interrupted_refill_metadata_class_is_a_machine_root() -> Result<()> {
     let image = image(&[object(Command::fetch(target)), Instruction::halt()])?;
     h.load_processor(&image)?;
     h.start_processor(0)?;
-    h.run_processor(&image, &mut Processor::default(), 100_000)?;
+    // Collection scans the parameterized control-store roots.
+    h.run_processor(
+        &image,
+        &mut Processor::default(),
+        100_000 * CODE_WORDS.div_ceil(4096),
+    )?;
     assert_eq!(h.stats.collections, 1);
     assert!(h.oracle.resolve(class).is_ok());
     assert_eq!(h.stats.store_transactions, 3);

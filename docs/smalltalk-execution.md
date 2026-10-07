@@ -10,7 +10,7 @@ The [microcode reading guide](assembler.md#reading-a-microcode-routine) explains
 Sends, blocks, non-local returns, failed sends, and guest process scheduling execute in microcode.
 Identity conversion and instance enumeration also execute in microcode, using generic OBJEKT directory operations.
 Primitive coverage remains incomplete. Storage integration and complete interactive image qualification remain outstanding.
-The default simulation profile has 4096 control words and 512 object-memory words, split into two 256-word semispaces.
+The default simulation profile has 8192 control words and 512 object-memory words, split into two 256-word semispaces.
 `rekursiv_sim::runtime_with_memory(words)` compiles the same RTL with a larger external RAM capacity and a separate build cache.
 The harness reads the capacity from RTL and sizes its external RAM model accordingly.
 The original LargeInteger tests use 65536 words because image dictionaries can exceed the small profile's semispace.
@@ -68,7 +68,7 @@ h.load_processor(&program)?;
 h.start_processor(assembly.entry.unwrap())?;
 ```
 
-The collector occupies control addresses 3968–4035. Bootstrap bodies must fit in the initial semispace.
+The collector occupies control addresses 8064–8131. Bootstrap bodies must fit in the initial semispace.
 The assembler rejects interpreter code that overlaps the collector.
 The larger control store uses an existing RTL parameter. The hardware decoder contains no Smalltalk operations.
 Mapping the control store to FPGA block RAM remains board implementation work.

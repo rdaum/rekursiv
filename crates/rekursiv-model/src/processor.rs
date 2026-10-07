@@ -4,7 +4,7 @@
 use rekursiv_asm::{processor::*, Command, Word};
 
 // Matches the simulation wrapper. Individual RTL modules remain parameterized.
-pub const CODE_WORDS: usize = 4096;
+pub const CODE_WORDS: usize = 8192;
 pub const STACK_WORDS: usize = 32;
 pub const NAM_WORDS: usize = 256;
 
@@ -212,7 +212,9 @@ impl Processor {
             .copied()
             .flatten()
             .ok_or(2u8)?;
-        i.encode().map_err(|_| 1u8)?;
+        // Keep validation on every fetch: callers can replace control words.
+        // Reconstructing all 256 wire bits adds no execution semantics.
+        i.validate().map_err(|_| 1u8)?;
         if (!recovering && i.recovery != Recovery::None)
             || (recovering
                 && (i.object.is_some()

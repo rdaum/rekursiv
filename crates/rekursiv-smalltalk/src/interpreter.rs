@@ -23,7 +23,7 @@ pub const STREAMS_SOURCE: &str = include_str!("../../../microcode/smalltalk/stre
 pub const FLOATS_SOURCE: &str = include_str!("../../../microcode/smalltalk/floats.uc");
 pub const IDENTITIES_SOURCE: &str = include_str!("../../../microcode/smalltalk/identities.uc");
 pub const BITBLT_SOURCE: &str = include_str!("../../../microcode/smalltalk/bitblt.uc");
-pub const COLLECTOR_ENTRY: u16 = 3968;
+pub const COLLECTOR_ENTRY: u16 = 8064;
 
 /// Assemble a root activation whose context and object graph are already
 /// converted. Loading must finish while the processor is halted. The context

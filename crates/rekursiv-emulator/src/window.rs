@@ -133,7 +133,9 @@ pub fn run(
             ..Default::default()
         },
     )?;
-    window.set_target_fps(60);
+    // Execution itself fills the interval between presentations. A separate
+    // frame limiter would sleep away CPU time after each execution slice.
+    window.set_target_fps(0);
     let start = Instant::now();
     let events = Rc::new(RefCell::new(Vec::new()));
     window.set_input_callback(Box::new(KeyEvents(events.clone())));
@@ -157,7 +159,7 @@ pub fn run(
             // CPU execution stays on this thread, so input arrives only between
             // instructions and never observes a half-retired architectural state.
             let budget = Instant::now();
-            for n in 0..100_000 {
+            for n in 0u64.. {
                 match step(machine) {
                     Ok(true) => (),
                     Ok(false) => {
@@ -171,9 +173,13 @@ pub fn run(
                         break;
                     }
                 }
-                if n % 256 == 0 && budget.elapsed() >= Duration::from_millis(8) {
+                if n % 256 == 0 && budget.elapsed() >= Duration::from_secs_f64(1.0 / 60.0) {
                     break;
                 }
+            }
+            if !running {
+                // A halted or faulted CPU has no work to fill the frame budget.
+                window.set_target_fps(60);
             }
             if !running && failure.is_none() {
                 window.set_title(&format!(

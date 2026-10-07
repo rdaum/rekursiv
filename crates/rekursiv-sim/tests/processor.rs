@@ -1305,3 +1305,74 @@ fn bitmap_device_publishes_complete_frames_atomically_and_rejects_partial_or_fai
     }
     Ok(())
 }
+
+#[test]
+fn sparse_bitmap_upload_is_atomic_across_delayed_and_failed_publish() -> Result<()> {
+    use rekursiv_sim::device::{Bitmap, BitmapFrame};
+    let rt = runtime()?;
+    for fail_publish in [false, true] {
+        let mut h = Harness::new(&rt, Timing::default(), None)?;
+        let assembly = rekursiv_asm::text::assemble(
+            "d=0x518, r=Bus, rb=1, ldrb
+             ra=1, d=33, io=Write
+             d=0x51c, r=Bus, rb=1, ldrb
+             ra=1, d=2, io=Write
+             d=0x520, r=Bus, rb=1, ldrb
+             ra=1, d=2, io=Write
+             d=0x524, r=Bus, rb=1, ldrb
+             ra=1, d=2, io=Write
+             d=0x528, r=Bus, rb=1, ldrb
+             ra=1, d=3, io=Write
+             d=0x52c, r=Bus, rb=1, ldrb
+             ra=1, d=0x80000000, io=Write
+             seq=Service, brch=1
+             d=0x524, r=Bus, rb=1, ldrb
+             ra=1, d=1, io=Write
+             halt",
+            0,
+            &[],
+        )?;
+        let image = Image::from_assembly(&assembly)?;
+        h.load_processor(&image)?;
+        let old = BitmapFrame {
+            width: 33,
+            height: 2,
+            stride: 2,
+            words: vec![1, 2, 3, 4],
+        };
+        let mut bitmap = Bitmap::new(64, 64);
+        bitmap.visible = Some(old.clone());
+        h.device.display_bitmap = Some(bitmap);
+        h.device.timing = Timing {
+            request_delay: 4,
+            memory_latency: 7,
+            response_stall: 0,
+        };
+        h.start_processor(0)?;
+        let mut model = Processor::default();
+        h.run_processor_observed(&image, &mut model, 10_000, |h, _| {
+            assert_eq!(
+                h.device.display_bitmap.as_ref().unwrap().visible,
+                Some(old.clone())
+            );
+            Ok(())
+        })?;
+        assert!(model.service);
+        h.device.fail_next = fail_publish;
+        h.resume_processor()?;
+        model.service = false;
+        let result = h.run_processor(&image, &mut model, 10_000);
+        let b = h.device.display_bitmap.as_ref().unwrap();
+        assert_eq!(b.pixel_writes, 1);
+        if fail_publish {
+            assert!(result.is_err());
+            assert_eq!(b.visible, Some(old));
+            assert_eq!(b.publications, 0);
+        } else {
+            result?;
+            assert_eq!(b.visible.as_ref().unwrap().words, vec![1, 2, 3, 0x80000000]);
+            assert_eq!(b.publications, 1);
+        }
+    }
+    Ok(())
+}

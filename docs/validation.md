@@ -113,8 +113,8 @@ It establishes failure behavior, not a functioning disk implementation.
 
 ## FPGA resource estimate
 
-The following estimate uses the original 256-word control store. The current wrapper has 4096 words.
-These figures are not a current resource estimate. `scripts/synth.sh` now checks the 4096-word LOGIK configuration.
+The following estimate uses the original 256-word control store. The current wrapper has 8192 words.
+These figures are not a current resource estimate. `scripts/synth.sh` now checks the 8192-word LOGIK configuration.
 
 On 2026-10-06, Yosys 0.33 mapped the combined `objekt_tb` wrapper to Xilinx 7-series primitives. The
 configuration had 16 pager entries, 32 words per stack, 256 microinstructions, 256 NAM words, and
@@ -299,7 +299,7 @@ The shared peripheral models preserve the existing RTL handshake tests.
 
 `cargo test --locked -p rekursiv-emulator` also covers failed device writes, recovery failure, framebuffer clipping, keyboard mapping, and microcode-driven input/display changes.
 The first ignored native startup test matches all 499 Xerox trace bytecodes and the RTL checkpoint before BitBlt.
-A second runs through 32 successful BitBlts, reaching 9,870 bytecode boundaries, 29 collections, and 33 display publications.
+A second runs through 32 successful BitBlts, reaching 9,870 bytecode boundaries, 24 collections, and 33 display publications.
 Directed BitBlt tests compare native and RTL results with a pixel-level oracle for all 16 rules.
 They cover clipping, word alignment, overlapping/shared bitmaps, nil sources, halftones, and invalid operands.
 Both executors also test registered cursor/display refresh and unchanged destinations on failure.
@@ -309,3 +309,42 @@ Small semispaces force collection; RTL memory and device responses include delay
 A native X11 smoke run also exercised keyboard input, mouse-button input, and cursor movement through the window.
 Every screenshot pixel matched the published scanout plus the cursor at the expected coordinates.
 The emulator does not validate FPGA timing, and shared architectural semantics limit independence from the Rust RTL oracle.
+
+
+### BitBlt rendering measurements
+
+The original-image native test stops after the same 32 completed copies, at bytecode boundary 9,870.
+Both versions produce 33 display publications and this SHA-256 of the little-endian pixel words:
+
+```
+5c88b1fc4cd078c333f200091c7dab230cbbb9a0ba8a3b35e222a26b43fa9115
+```
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Mutator microinstructions | 22,163,025 | 6,883,624 |
+| Collector microinstructions | 2,329,356 | 2,148,003 |
+| OBJEKT commands | 5,033,755 | 1,320,860 |
+| Device requests | 307,689 | 34,562 |
+| Collections | 29 | 24 |
+| Observed native execution time | 4.38 s | 1.47 s |
+
+These release-build timings include startup and collection, with 131,072 RAM words. They exclude image conversion and compilation.
+The elapsed times are individual local measurements, not FPGA timing estimates.
+The new profile has 8,192 control words, compared with 4,096 before. Its collector therefore scans more control-store roots per collection.
+The regression checks the framebuffer checksum and bounds instruction and device-request counts. It does not assert wall time.
+
+Directed native and RTL tests also cover sparse uploads, pixel-group edges, changed geometry, alias geometry, and atomic publication failure.
+A two-row, one-pixel-wide copy uploads two pixel words after registration, regardless of the full framebuffer size.
+Disjoint bitmap copies allocate no scratch object. Aliased source or halftone storage still uses a snapshot.
+The larger control-store profile passes RTL lint and the RTL regressions.
+OBJEKT generic synthesis passes. The 8,192-word LOGIK synthesis run was stopped after nine minutes during process lowering; its result remains unverified.
+These checks do not establish board timing or a mapped LUT count.
+
+Native profiling also found redundant control-word encoding on every instruction fetch.
+Execution now checks the same constraints without constructing the wire representation.
+Three paired release runs of 20 million steps took 2.405–2.484 seconds before and 2.051–2.138 seconds after this change.
+These runs used the original image, 1,048,576 RAM words, and headless presentation.
+They produced identical framebuffers, final micro-PCs, instruction counts, collection counts, and device-request counts.
+The window loop also removes the sleep after its former 8 ms execution budget.
+It now executes for approximately 16.7 ms before presentation. Interactive performance for this change remains unmeasured.

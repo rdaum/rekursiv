@@ -89,8 +89,9 @@ impl Instruction {
             ..Self::default()
         }
     }
-    /// Eight little-endian 32-bit lanes, loaded through the halted programming port.
-    pub fn encode(self) -> Result<[u32; 8], Status> {
+    /// Check static control-word constraints without packing the wire format.
+    /// Executors also use this on fetched instructions, including modified code.
+    pub fn validate(self) -> Result<(), Status> {
         if self.ra >= 16 || self.rb >= 16 || self.compact_code > 3 {
             return Err(Status::BadCommand);
         }
@@ -113,6 +114,14 @@ impl Instruction {
         if (self.write_root || self.bus == Bus::Root) && self.recovery != Recovery::None {
             return Err(Status::BadCommand);
         }
+        if let Some(command) = self.object {
+            command.validate()?;
+        }
+        Ok(())
+    }
+    /// Eight little-endian 32-bit lanes, loaded through the halted programming port.
+    pub fn encode(self) -> Result<[u32; 8], Status> {
+        self.validate()?;
         let mut words = [0u32; 8];
         let mut put = |offset: usize, width: usize, value: u64| {
             for bit in 0..width {
