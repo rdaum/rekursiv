@@ -4,9 +4,10 @@
 the same assembler, instruction definitions, and microcode files as the RTL machine. The window
 presents device pixels and supplies keyboard and mouse input.
 
-The emulator operates at instruction boundaries. It does not predict FPGA cycle counts or
-throughput. Verilator remains necessary for handshake, pipeline, stall, reset, and synthesis
-validation.
+The emulator operates at instruction boundaries. An optional [cycle estimator](cycle-estimates.md)
+estimates hardware throughput under explicit memory and device latency assumptions.
+Verilator remains necessary for handshake, pipeline, stall, and reset validation.
+Synthesis and timing analysis must establish the achievable FPGA clock frequency.
 
 The CLI uses a [Cranelift](https://docs.wasmtime.dev/api/cranelift_jit/index.html) JIT by default.
 It translates arithmetic, flag calculations, branches, stack controls, fetch controls, and validation checks into native code.
@@ -150,6 +151,8 @@ does not read a live Form from the heap.
 | `--stop-at LABEL`   | Stop before an instruction at the named label                                     |
 | `--when Rn=VALUE`   | Add a register condition to `--stop-at`; decimal or `0x` hexadecimal              |
 | `--objekt-metrics`  | Collect and report detailed OBJEKT counters                                       |
+| `--estimate-cycles PROFILE` | Estimate hardware cycles with example `sram` or `dram` latencies             |
+| `--clock-mhz MHZ`   | Convert estimated cycles to time; default 100, requires `--estimate-cycles`       |
 | `--trace FILE`      | Record retired micro-PCs, collector mode, object result, and numeric registers    |
 | `--frame FILE`      | Save the last published display as a PPM, without cursor composition              |
 | `--frames N`        | Close after N presentation iterations, including those that skip uploads          |

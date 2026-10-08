@@ -19,6 +19,7 @@ mod jit;
 pub mod metrics;
 pub mod presentation;
 mod recovery;
+pub mod timing;
 pub use jit::JitStatistics;
 mod scalar;
 use recovery::RecoveryState;
@@ -94,6 +95,7 @@ pub struct Machine {
     code_dirty: bool,
     scalar_code: Vec<Option<ScalarInstruction>>,
     jit: Option<jit::Jit>,
+    cycle_estimate: Option<timing::Estimate>,
 }
 impl Machine {
     pub fn new(
@@ -142,6 +144,7 @@ impl Machine {
             scalar_code,
             code_dirty: false,
             jit: None,
+            cycle_estimate: None,
         })
     }
     /// Read the loaded image without invalidating instruction caches.
@@ -181,6 +184,31 @@ impl Machine {
     }
     pub fn disable_jit(&mut self) {
         self.jit = None;
+    }
+    /// Enable passive hardware cycle estimates before the first execution step.
+    /// Bootstrap is excluded. Timing never changes architectural device clocks.
+    pub fn enable_cycle_estimate(&mut self, config: timing::Config) -> Result<()> {
+        config.validate()?;
+        ensure!(
+            self.stats.retired == 0
+                && self.stats.collector_retired == 0
+                && self.stats.object_commands == 0
+                && self.recovery.is_none()
+                && self.fault.is_none()
+                && self.cycle_estimate.is_none(),
+            "enable cycle estimates once, before execution"
+        );
+        self.cycle_estimate = Some(timing::Estimate::new(config));
+        Ok(())
+    }
+    /// Read timing counters without draining outstanding asynchronous work.
+    pub fn cycle_estimate(&self) -> Option<&timing::Estimate> {
+        self.cycle_estimate.as_ref()
+    }
+    fn estimate_local(&mut self, count: u64) {
+        if let Some(timing) = &mut self.cycle_estimate {
+            timing.local(count, self.recovery.is_some());
+        }
     }
     pub fn recovering(&self) -> bool {
         self.recovery.is_some()
@@ -247,12 +275,14 @@ impl Machine {
                     )
                 }) {
                     self.stats.retired += result.retired;
+                    self.estimate_local(result.retired);
                     steps += result.retired;
                     if let Some(error) = result.error {
                         return Err(error);
                     }
                     if result.fault != 0 {
                         self.join_object()?;
+                        self.estimate_local(1);
                         return Err(self.fail(result.fault, None).into());
                     }
                     continue;
@@ -290,8 +320,12 @@ impl Machine {
         if instruction.is_none_or(|i| i.object_barrier()) {
             self.join_object()?;
         }
-        let instruction = instruction.ok_or_else(|| self.fail(2, None))?;
+        let instruction = instruction.ok_or_else(|| {
+            self.estimate_local(1);
+            self.fail(2, None)
+        })?;
         if self.recovery.is_some() && instruction.recovery == Recovery::Return {
+            self.estimate_local(1);
             // Validate even the return word; it cannot smuggle a stack write or
             // a device operation into the frozen mutator state.
             self.cpu
@@ -318,9 +352,11 @@ impl Machine {
             Ok(p) => p,
             Err(code) => {
                 self.join_object()?;
+                self.estimate_local(1);
                 return Err(self.fail(code, None).into());
             }
         };
+        self.estimate_local(1);
         if instruction.recovery == Recovery::Collect && self.retry_irq.is_none() {
             self.enter_recovery(None, irq)?;
             self.devices.tick(None, false)?;
@@ -329,6 +365,9 @@ impl Machine {
         if instruction.seq == Seq::Hold {
             self.devices.tick(None, false)?;
             return Ok(Step::Held);
+        }
+        if let Some(timing) = &mut self.cycle_estimate {
+            timing.instruction(instruction, self.recovery.is_some());
         }
         if !matches!(instruction.recovery, Recovery::None | Recovery::Collect) {
             let data = Word::from_bits(self.cpu.bus(instruction))?;
@@ -367,12 +406,27 @@ impl Machine {
         }
         if let Some(command) = command {
             self.stats.object_commands += 1;
-            let response = if self.objekt_metrics_enabled {
-                let before = metrics::Observation::capture(&self.objekt, command);
+            let response = if self.objekt_metrics_enabled || self.cycle_estimate.is_some() {
+                let before = self
+                    .objekt_metrics_enabled
+                    .then(|| metrics::Observation::capture(&self.objekt, command));
+                let path = self
+                    .cycle_estimate
+                    .as_ref()
+                    .map(|_| timing::ObjectPath::capture(&self.objekt, command));
                 let outcome = self.objekt.execute(command, false);
-                self.stats
-                    .objekt
-                    .observe(command, before, &outcome, &self.objekt);
+                if let Some(before) = before {
+                    self.stats
+                        .objekt
+                        .observe(command, before, &outcome, &self.objekt);
+                }
+                if let Some(path) = path {
+                    self.cycle_estimate.as_mut().unwrap().object(
+                        path,
+                        &outcome,
+                        instruction.object_async,
+                    );
+                }
                 outcome.response
             } else {
                 self.objekt.execute_response(command, false)
@@ -439,6 +493,9 @@ impl Machine {
     }
     fn join_object(&mut self) -> Result<()> {
         if let Some(response) = self.pending_object.take() {
+            if let Some(timing) = &mut self.cycle_estimate {
+                timing.join();
+            }
             if response.status != Status::Ok {
                 return Err(self.fail(4, Some(response.status)).into());
             }

@@ -28,6 +28,9 @@ fn main() -> Result<()> {
     let mut when = None;
     let mut frames = None;
     let mut objekt_metrics = false;
+    let mut cycle_config = None;
+    let mut clock_mhz = 100.0_f64;
+    let mut clock_given = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--microcode" => {
@@ -55,6 +58,24 @@ fn main() -> Result<()> {
                 };
             }
             "--objekt-metrics" => objekt_metrics = true,
+            "--estimate-cycles" => {
+                cycle_config = Some(match args.next().as_deref() {
+                    Some("sram") => rekursiv_emulator::timing::Config::SRAM,
+                    Some("dram") => rekursiv_emulator::timing::Config::DRAM,
+                    _ => bail!("--estimate-cycles requires sram or dram"),
+                });
+            }
+            "--clock-mhz" => {
+                clock_mhz = args
+                    .next()
+                    .ok_or_else(|| eyre::eyre!("--clock-mhz requires a frequency"))?
+                    .parse()?;
+                ensure!(
+                    clock_mhz.is_finite() && clock_mhz > 0.0,
+                    "clock MHz must be finite and positive"
+                );
+                clock_given = true;
+            }
             "--pager-entries" => {
                 pager_entries = args
                     .next()
@@ -128,7 +149,7 @@ fn main() -> Result<()> {
                 )
             }
             "--help" | "-h" => {
-                println!("rekursiv-emulator [--microcode FILE | --smalltalk VirtualImage | --squeak Squeak1.1.image]\n  No program: run the interactive workstation microcode demo.\n  --headless          Run without a window (deterministic device clock)\n  --engine MODE       jit (default) or interpreter\n  --steps N           Stop after N steps (headless default 10000000; window unlimited)\n  --memory-words N    External RAM words (Smalltalk default 16777216; otherwise 131072)\n  --pager-entries N   Pager slots, power of two from 2 to 65536 (default 65536)\n  --objekt-metrics   Report pager, transfer, allocation, and collector counters\n  --guest-trace FILE  Write bytecode and primitive boundaries\n  --trace FILE        Write retired micro-PCs and numeric state\n  --stop-at LABEL     Stop before the named microinstruction\n  --when Rn=VALUE     Stop only when this register also matches\n  --frame FILE        Save the last published display as a PPM\n  --frames N          Close after N presentation checks (smoke tests)\nClose the window to exit. Escape is delivered to the guest.");
+                println!("rekursiv-emulator [--microcode FILE | --smalltalk VirtualImage | --squeak Squeak1.1.image]\n  No program: run the interactive workstation microcode demo.\n  --headless          Run without a window (deterministic device clock)\n  --engine MODE       jit (default) or interpreter\n  --steps N           Stop after N steps (headless default 10000000; window unlimited)\n  --memory-words N    External RAM words (Smalltalk default 16777216; otherwise 131072)\n  --pager-entries N   Pager slots, power of two from 2 to 65536 (default 65536)\n  --estimate-cycles PROFILE  Estimate hardware cycles: sram or dram (example latencies)\n  --clock-mhz MHZ     Convert estimated cycles to time (default 100; does not pace execution)\n  --objekt-metrics   Report pager, transfer, allocation, and collector counters\n  --guest-trace FILE  Write bytecode and primitive boundaries\n  --trace FILE        Write retired micro-PCs and numeric state\n  --stop-at LABEL     Stop before the named microinstruction\n  --when Rn=VALUE     Stop only when this register also matches\n  --frame FILE        Save the last published display as a PPM\n  --frames N          Close after N presentation checks (smoke tests)\nClose the window to exit. Escape is delivered to the guest.");
                 return Ok(());
             }
             _ => bail!("unknown option {arg}; use --help"),
@@ -146,6 +167,10 @@ fn main() -> Result<()> {
         "--when requires --stop-at"
     );
     ensure!(!headless || frames.is_none(), "--frames requires a window");
+    ensure!(
+        !clock_given || cycle_config.is_some(),
+        "--clock-mhz requires --estimate-cycles"
+    );
     // A full pager keeps the image's working set resident. The small peripheral
     // demo heap cannot hold it; explicit --memory-words still wins for tests.
     let memory = memory.unwrap_or(if smalltalk.is_some() || squeak.is_some() {
@@ -169,6 +194,9 @@ fn main() -> Result<()> {
         )?
     };
     loaded.machine.objekt_metrics_enabled = objekt_metrics;
+    if let Some(config) = cycle_config {
+        loaded.machine.enable_cycle_estimate(config)?;
+    }
     if jit {
         let started = Instant::now();
         let functions = loaded.machine.enable_jit()?;
@@ -326,6 +354,9 @@ fn main() -> Result<()> {
             "JIT execution: {} instructions in {} native blocks, {} single-word preparations",
             stats.block_instructions, stats.block_calls, stats.preparations
         );
+    }
+    if let Some(estimate) = loaded.machine.cycle_estimate() {
+        eprintln!("{}", estimate.report(&loaded.machine.stats, clock_mhz)?);
     }
     if objekt_metrics {
         eprintln!(
