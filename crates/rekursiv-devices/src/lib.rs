@@ -291,6 +291,21 @@ impl Device {
         } else {
             self.wait = 0;
         }
+        self.advance()
+    }
+
+    /// Advance an instruction boundary without a device transaction. Pending
+    /// handshakes retain the checked tick path; ordinary idle ticks only update
+    /// clocks and external arrivals, in the same order as `tick(None, false)`.
+    pub fn tick_idle(&mut self) -> Result<()> {
+        if self.pending.is_some() || self.held.is_some() {
+            return self.tick(None, false);
+        }
+        self.wait = 0;
+        self.advance()
+    }
+
+    fn advance(&mut self) -> Result<()> {
         if self.clocks.as_mut().is_some_and(|clocks| clocks.tick()) {
             let events = self
                 .events
@@ -307,7 +322,7 @@ impl Device {
                     .clocks
                     .as_ref()
                     .ok_or_else(|| eyre::eyre!("pointer sampling requires a clock"))?;
-                Some((clocks.monotonic_ms, clocks.day_milliseconds()))
+                Some(clocks)
             } else {
                 None
             };

@@ -42,6 +42,7 @@ pub(super) fn decode(i: Instruction) -> Option<ScalarInstruction> {
 }
 
 #[repr(C)]
+#[derive(Default)]
 pub(crate) struct StackFetchWrites {
     pub scalar: ScalarWrites,
     pub sp: u32,

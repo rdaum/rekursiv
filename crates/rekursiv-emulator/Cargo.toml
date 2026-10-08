@@ -21,4 +21,9 @@ softbuffer = { version = "0.4", optional = true, default-features = false, featu
 winit = { version = "0.30", optional = true }
 
 [dev-dependencies]
+micromeasure = "0.16.0"
 rekursiv-sim = { path = "../rekursiv-sim" }
+
+[[bench]]
+name = "execution"
+harness = false

@@ -11,10 +11,13 @@ Synthesis and timing analysis must establish the achievable FPGA clock frequency
 
 The CLI uses a [Cranelift](https://docs.wasmtime.dev/api/cranelift_jit/index.html) JIT by default.
 It translates arithmetic, flag calculations, branches, stack controls, fetch controls, and validation checks into native code.
-Native blocks execute up to 32 local instructions per call.
+Native blocks execute up to 32 instructions per call, including resident OBJEKT commands.
 Each instruction retains its device tick, retirement boundary, and fault checks.
 
-Object instructions use native preparation followed by the existing OBJEKT command path.
+Resident object instructions call the existing OBJEKT model from native blocks.
+A Fetch miss stops the block before command issue; the general executor handles refill and collection.
+Allocation and asynchronous commands use native preparation followed by the general executor.
+OBJEKT metrics and cycle estimates use the general command path to retain complete accounting.
 Blocking commands publish local writes only after success.
 A `launch` instruction publishes local writes at command acceptance and defers its reply until an
 [object barrier](interface.md#retirement-conditions-and-errors).
@@ -31,7 +34,9 @@ These adapters handle optional table slots without assumptions about Rust enum l
 Native code extracts the fields and updates fetch state.
 Replacing or resizing either table takes effect on the next access without JIT recompilation.
 
-Floating-point, device, root-access, and collector instructions use the checked interpreter.
+Floating-point, device, and root-access instructions use the checked interpreter.
+Collector local instructions use validated scalar decoding or native blocks.
+Collector maintenance operations execute individually through the recovery state machine.
 Interrupt-sensitive instructions execute individually so each condition uses the correct device state.
 Microcode still implements Smalltalk operations and collection.
 The JIT changes host execution speed without changing the hardware control words or replacing guest operations.
@@ -463,3 +468,25 @@ and two display publications before BitBlt. A second native test completes 32 Bi
 boundaries, 24 collections, and 33 display publications. Directed native and RTL tests independently
 compare all Boolean rules, clipping, alignment, overlap, and refresh with expected pixels. Passing
 these checks does not replace cycle-level RTL validation.
+
+## CPU microbenchmarks
+
+Run the local-datapath and resident-object loops with `micromeasure`:
+
+```sh
+cargo bench --locked -p rekursiv-emulator --bench execution
+```
+
+The benchmarks exclude setup and JIT compilation. Each operation executes 256 microinstructions.
+Cases compare the interpreter and JIT, with and without workstation device ticks.
+The programs are in `microcode/bench/`.
+
+To compare a saved executable against the current build, run:
+
+```sh
+python3 scripts/bench-emulator.py --guest squeak --baseline-binary /path/to/saved-emulator \
+  --runs 3 --steps 500000000 --output artifacts/emulator-comparison
+```
+
+The script alternates execution order and checks final counters and framebuffer hashes.
+Its report records executable hashes, image hash, CPU affinity, and median throughput.

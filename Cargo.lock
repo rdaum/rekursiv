@@ -1907,6 +1907,7 @@ dependencies = [
  "cranelift-jit",
  "cranelift-module",
  "eyre",
+ "micromeasure",
  "rekursiv-asm",
  "rekursiv-devices",
  "rekursiv-model",

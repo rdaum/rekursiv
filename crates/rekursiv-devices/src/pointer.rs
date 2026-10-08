@@ -1,6 +1,6 @@
 //! External pointing-device registers. Coordinates and sampling configuration
 //! are device data; this adapter never constructs guest Points or reads a heap.
-use super::{InputKind, InputPacket, Request};
+use super::{Clocks, InputKind, InputPacket, Request};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy)]
@@ -59,7 +59,7 @@ impl Pointer {
             Effect::Interval(value) => self.sample_interval_ms = value,
         }
     }
-    pub(super) fn tick(&mut self, clock: Option<(u64, u32)>) -> Option<InputPacket> {
+    pub(super) fn tick(&mut self, clock: Option<&Clocks>) -> Option<InputPacket> {
         if let Some(position) = self.schedule.remove(&self.ticks) {
             self.mouse = position;
             if self.linked {
@@ -67,7 +67,8 @@ impl Pointer {
             }
         }
         self.ticks += 1;
-        let (now, timestamp_ms) = clock?;
+        let clock = clock?;
+        let now = clock.monotonic_ms;
         let Some(previous) = self.sampled else {
             self.sampled = Some(self.mouse);
             self.sample_time = now;
@@ -82,7 +83,7 @@ impl Pointer {
                 kind: InputKind::Motion,
                 value: self.mouse.0,
                 extra: self.mouse.1,
-                timestamp_ms,
+                timestamp_ms: clock.day_milliseconds(),
             })
         } else {
             None
@@ -93,6 +94,11 @@ impl Pointer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn clock(now: u64, timestamp: u32) -> Clocks {
+        let mut clock = Clocks::new(0, now, 1000);
+        clock.set_time(u64::from(timestamp / 1000), (timestamp % 1000) as u16, now);
+        clock
+    }
     #[test]
     fn sampling_coalesces_motion_until_the_minimum_interval_without_repeating_stationary_positions()
     {
@@ -100,21 +106,21 @@ mod tests {
             sample_interval_ms: 2,
             ..Default::default()
         };
-        assert_eq!(p.tick(Some((0, 100))), None);
+        assert_eq!(p.tick(Some(&clock(0, 100))), None);
         p.mouse = (1, 2);
-        assert_eq!(p.tick(Some((1, 101))), None);
+        assert_eq!(p.tick(Some(&clock(1, 101))), None);
         p.mouse = (3, 4);
-        let packet = p.tick(Some((2, 102))).unwrap();
+        let packet = p.tick(Some(&clock(2, 102))).unwrap();
         assert_eq!(
             (packet.kind, packet.value, packet.extra, packet.timestamp_ms),
             (InputKind::Motion, 3, 4, 102)
         );
-        assert_eq!(p.tick(Some((100, 200))), None);
+        assert_eq!(p.tick(Some(&clock(100, 200))), None);
         p.mouse = (5, 6);
-        assert!(p.tick(Some((101, 201))).is_some());
+        assert!(p.tick(Some(&clock(101, 201))).is_some());
         p.mouse = (7, 8);
-        assert_eq!(p.tick(Some((102, 202))), None);
+        assert_eq!(p.tick(Some(&clock(102, 202))), None);
         p.sample_interval_ms = 0;
-        assert!(p.tick(Some((102, 202))).is_some());
+        assert!(p.tick(Some(&clock(102, 202))).is_some());
     }
 }

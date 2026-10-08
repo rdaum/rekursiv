@@ -212,7 +212,7 @@ fn a_block_fault_drains_an_older_object_fault_first() -> Result<()> {
         assert_eq!(a.fault, b.fault);
         assert_eq!(a.stats, b.stats);
         assert_eq!(a.objekt, b.objekt);
-        assert_eq!(b.jit_statistics().unwrap().block_instructions, 1);
+        assert_eq!(b.jit_statistics().unwrap().block_instructions, 2);
         assert_eq!(b.fault.unwrap().code, if index == "Clear" { 4 } else { 2 });
     }
     Ok(())
@@ -423,7 +423,51 @@ fn replacing_and_resizing_the_image_cannot_execute_stale_code() -> Result<()> {
                 m.enable_jit()?;
                 m.run_steps(1)?;
                 assert_eq!(m.cpu.rf[0], 59);
-                assert_eq!(m.jit_statistics().unwrap().preparations, 1);
+                assert_eq!(m.jit_statistics().unwrap().block_instructions, 1);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn resident_blocks_and_fetch_fallback_preserve_each_committed_prefix() -> Result<()> {
+    for source in [
+        include_str!("../../../microcode/bench/resident.uc"),
+        include_str!("../../../microcode/collection.uc"),
+        // The invalid Fetch follows completed resident commands and local writes.
+        // Its fallback must retain those effects without issuing them again.
+        "d=0xa000000064, page=Allocate, size=2, scan=0\n\
+         idx=Two\nd=23, mem=Write\nmem=Read\n\
+         d=Object, r=Bus, rb=1, ldrb\n\
+         d=0x8000000011, page=Fetch\nhalt",
+    ] {
+        for budget in [1, 7, 256] {
+            let mut expected = boot::microcode_with_pager(source, 512, 16)?.machine;
+            let mut actual = boot::microcode_with_pager(source, 512, 16)?.machine;
+            actual.enable_jit()?;
+            for _ in 0..8 {
+                let mut failed = false;
+                for _ in 0..budget {
+                    match expected.step() {
+                        Err(_) => {
+                            failed = true;
+                            break;
+                        }
+                        Ok(Step::Halted | Step::Service(_)) => break,
+                        Ok(_) => (),
+                    }
+                }
+                assert_eq!(actual.run_steps(budget).is_err(), failed);
+                assert_eq!(actual.cpu, expected.cpu);
+                assert_eq!(actual.stats, expected.stats);
+                assert_eq!(actual.fault, expected.fault);
+                assert_eq!(actual.objekt, expected.objekt);
+                assert_eq!(actual.recovering(), expected.recovering());
+                compare_devices(&actual, &expected);
+                if failed || actual.cpu.halted || actual.cpu.service {
+                    break;
+                }
             }
         }
     }

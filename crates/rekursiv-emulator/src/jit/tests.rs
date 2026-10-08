@@ -174,7 +174,7 @@ fn compiled_datapath_matches_the_processor_oracle() -> Result<()> {
                 .expect("eligible instruction");
             match (expected, actual) {
                 (Ok((mut expected, command)), Ok((actual, jit_command))) => {
-                    let mut actual = crate::execution::NativeWrites::from(actual);
+                    let mut actual = actual;
                     assert_eq!(command, jit_command, "PC {pc}, case {case}: {i:?}");
                     if command.is_some() {
                         expected.object = 123;
@@ -321,7 +321,7 @@ fn stack_fetch_preparations_match_the_oracle_for_valid_and_invalid_state() -> Re
             let actual = jit.prepare(&cpu, false, &image).unwrap();
             match (expected, actual) {
                 (Ok((mut expected, c)), Ok((actual, jc))) => {
-                    let mut actual = crate::execution::NativeWrites::from(actual);
+                    let mut actual = actual;
                     assert_eq!(c, jc);
                     if c.is_some() {
                         expected.object = 123;

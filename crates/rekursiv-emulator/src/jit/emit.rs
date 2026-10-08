@@ -15,6 +15,10 @@ pub(super) enum Mode {
         device: Value,
         error: Value,
         retired: u64,
+        object: cranelift_codegen::ir::FuncRef,
+        model: Value,
+        command: usize,
+        object_commands: u64,
     },
 }
 pub(super) struct Emit<'a> {
@@ -27,6 +31,7 @@ pub(super) struct Emit<'a> {
     pub(super) pointer: Type,
     pub(super) nam: cranelift_codegen::ir::FuncRef,
     pub(super) map: cranelift_codegen::ir::FuncRef,
+    pub(super) deferred_object: Option<Value>,
 }
 macro_rules! load {
     ($e:expr, $ty:expr, $field:ident) => {
@@ -102,10 +107,14 @@ impl Emit<'_> {
         self.b.switch_to_block(failed);
         let value = match self.mode {
             Mode::Prepare => self.b.ins().iconst(I8, code),
-            Mode::Block { retired, .. } => self
-                .b
-                .ins()
-                .iconst(I64, ((retired << 8) | code as u64) as i64),
+            Mode::Block {
+                retired,
+                object_commands,
+                ..
+            } => self.b.ins().iconst(
+                I64,
+                ((retired << 8) | code as u64 | (object_commands << 56)) as i64,
+            ),
         };
         self.b.ins().return_(&[value]);
         self.b.switch_to_block(good);
@@ -331,9 +340,13 @@ impl Emit<'_> {
             ..
         } = self.mode
         {
+            if i.object.is_some() {
+                self.resident(d);
+            }
             let call = self.b.ins().call(tick, &[device, error]);
             let failed = self.b.inst_results(call)[0];
             self.reject(failed, 255);
+            self.publish_object();
             // Validation and the device tick succeeded. Publish simultaneous
             // local destinations using the already evaluated OLD operands.
             self.cpu_store(offset_of!(Processor, pc), next_pc);

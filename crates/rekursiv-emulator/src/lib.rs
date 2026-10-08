@@ -91,9 +91,10 @@ pub struct Machine {
     retry_irq: Option<bool>,
     // image_mut marks caches dirty before exposing a mutable reference. Public
     // execution entry points refresh them once, before borrowing cached code.
-    // Collector privilege checks always use general preparation.
+    // Collector decoding also checks its restricted instruction subset.
     code_dirty: bool,
     scalar_code: Vec<Option<ScalarInstruction>>,
+    recovery_code: Vec<Option<ScalarInstruction>>,
     jit: Option<jit::Jit>,
     cycle_estimate: Option<timing::Estimate>,
 }
@@ -130,6 +131,11 @@ impl Machine {
             .iter()
             .map(|i| i.and_then(ScalarInstruction::decode))
             .collect();
+        let recovery_code = image
+            .code
+            .iter()
+            .map(|i| i.and_then(ScalarInstruction::decode_recovery))
+            .collect();
         Ok(Self {
             image,
             cpu,
@@ -142,6 +148,7 @@ impl Machine {
             recovery: None,
             retry_irq: None,
             scalar_code,
+            recovery_code,
             code_dirty: false,
             jit: None,
             cycle_estimate: None,
@@ -165,6 +172,12 @@ impl Machine {
             .code
             .iter()
             .map(|i| i.and_then(ScalarInstruction::decode))
+            .collect();
+        self.recovery_code = self
+            .image
+            .code
+            .iter()
+            .map(|i| i.and_then(ScalarInstruction::decode_recovery))
             .collect();
         if let Some(jit) = &mut self.jit {
             jit.invalidate_changed(&self.image);
@@ -263,18 +276,43 @@ impl Machine {
             if self.fault.is_none()
                 && !self.cpu.halted
                 && !self.cpu.service
-                && self.recovery.is_none()
                 && self.retry_irq.is_none()
             {
+                // Local blocks may start by reading Object. Publish a pending
+                // reply before evaluating that word, just as step_with does.
+                // A block with a later barrier is declined while a reply is pending.
+                if self.pending_object.is_some()
+                    && self
+                        .image
+                        .code
+                        .get(self.cpu.pc as usize)
+                        .copied()
+                        .flatten()
+                        .is_none_or(|i| i.object_barrier())
+                {
+                    self.join_object()?;
+                }
                 if let Some(result) = self.jit.as_ref().and_then(|jit| {
                     jit.run_block(
                         &mut self.cpu,
                         &mut self.devices,
                         &self.image,
                         budget - steps,
+                        &mut self.objekt,
+                        jit::BlockPolicy {
+                            allow_object: !self.objekt_metrics_enabled
+                                && self.cycle_estimate.is_none(),
+                            pending_object: self.pending_object.is_some(),
+                            recovering: self.recovery.is_some(),
+                        },
                     )
                 }) {
-                    self.stats.retired += result.retired;
+                    if self.recovery.is_some() {
+                        self.stats.collector_retired += result.retired;
+                    } else {
+                        self.stats.retired += result.retired;
+                    }
+                    self.stats.object_commands += result.object_commands;
                     self.estimate_local(result.retired);
                     steps += result.retired;
                     if let Some(error) = result.error {
@@ -283,9 +321,14 @@ impl Machine {
                     if result.fault != 0 {
                         self.join_object()?;
                         self.estimate_local(1);
-                        return Err(self.fail(result.fault, None).into());
+                        return Err(self.fail(result.fault, result.object_status).into());
                     }
-                    continue;
+                    if !result.transfer {
+                        continue;
+                    }
+                    // Native code stopped before issuing a Fetch miss. Its
+                    // retired prefix is complete; execute this word once with
+                    // normal refill/GC handling and remaining step budget.
                 }
             }
             let step = self.step_with::<Native>()?;
@@ -338,7 +381,7 @@ impl Machine {
             self.cpu = gc.saved;
             self.retry_irq = Some(gc.irq);
             self.stats.collections += 1;
-            self.devices.tick(None, false)?;
+            self.devices.tick_idle()?;
             return Ok(Step::RecoveryReturned);
         }
         let irq = self.retry_irq.unwrap_or_else(|| {
@@ -347,8 +390,9 @@ impl Machine {
                 .as_ref()
                 .is_some_and(|e| e.status() != 0)
         });
-        let prepared = E::prepare(self, irq);
-        let (mut next, command) = match prepared {
+        let mut next = E::Writes::default();
+        let prepared = E::prepare(self, irq, &mut next);
+        let command = match prepared {
             Ok(p) => p,
             Err(code) => {
                 self.join_object()?;
@@ -359,11 +403,11 @@ impl Machine {
         self.estimate_local(1);
         if instruction.recovery == Recovery::Collect && self.retry_irq.is_none() {
             self.enter_recovery(None, irq)?;
-            self.devices.tick(None, false)?;
+            self.devices.tick_idle()?;
             return Ok(Step::RecoveryEntered);
         }
         if instruction.seq == Seq::Hold {
-            self.devices.tick(None, false)?;
+            self.devices.tick_idle()?;
             return Ok(Step::Held);
         }
         if let Some(timing) = &mut self.cycle_estimate {
@@ -437,7 +481,7 @@ impl Machine {
                 && matches!(command.pager, Pager::Allocate | Pager::Fetch)
             {
                 self.enter_recovery(Some(command), irq)?;
-                self.devices.tick(None, false)?;
+                self.devices.tick_idle()?;
                 return Ok(Step::RecoveryEntered);
             }
             if instruction.object_async {
@@ -480,7 +524,7 @@ impl Machine {
             }
             self.stats.device_requests += 1;
         } else {
-            self.devices.tick(None, false)?;
+            self.devices.tick_idle()?;
         }
         next.commit(&mut self.cpu, &self.image, instruction);
         if self.recovering() {

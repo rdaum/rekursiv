@@ -351,8 +351,8 @@ fn main() -> Result<()> {
     );
     if let Some(stats) = loaded.machine.jit_statistics() {
         eprintln!(
-            "JIT execution: {} instructions in {} native blocks, {} single-word preparations",
-            stats.block_instructions, stats.block_calls, stats.preparations
+            "JIT execution: {} instructions in {} native blocks, {} single-word preparations, {} transfer fallbacks",
+            stats.block_instructions, stats.block_calls, stats.preparations, stats.transfer_fallbacks
         );
     }
     if let Some(estimate) = loaded.machine.cycle_estimate() {

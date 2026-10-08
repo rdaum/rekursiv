@@ -14,6 +14,25 @@ pub(crate) struct ScalarInstruction {
 }
 
 impl ScalarInstruction {
+    /// Predecode the collector's permitted local datapath. Maintenance effects
+    /// still execute one microinstruction at a time in RecoveryState.
+    pub(crate) fn decode_recovery(i: Instruction) -> Option<Self> {
+        if i.validate().is_err()
+            || i.object.is_some()
+            || i.halt
+            || i.seq == Seq::Service
+            || matches!(i.recovery, Recovery::Collect | Recovery::Return)
+        {
+            return None;
+        }
+        let mut decoded = Self::decode(Instruction {
+            recovery: Recovery::None,
+            ..i
+        })?;
+        decoded.instruction = i;
+        Some(decoded)
+    }
+
     pub(crate) fn decode(i: Instruction) -> Option<Self> {
         if i.recovery != Recovery::None
             || i.device != Device::None
@@ -234,6 +253,7 @@ impl ScalarInstruction {
 
 // Generated code uses offset_of! from this build, so this record can retain
 // Rust's compact field layout. It is passed by pointer, never by value over C.
+#[derive(Default)]
 pub(crate) struct ScalarWrites {
     pub(super) pc: u16,
     pub(super) upcor: u16,
