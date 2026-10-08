@@ -61,6 +61,7 @@ transfers put the least significant word first unless a device explicitly specif
 | `0x0400–0x04ff` | Cursor           | Position, mouse-link flag, dimensions, bitmap upload offset/data, publish |
 | `0x0500–0x05ff` | Display          | Dimensions, stride, pixel format, upload offset/data, publish             |
 | `0x0600–0x06ff` | Block storage    | Sector address, transfer length, direction, data, submit, completion      |
+| `0x0700–0x07ff` | External files | Byte paths, opaque handles, byte transfers and volume properties |
 
 ### Identification
 
@@ -211,10 +212,16 @@ continue. The external FIFO has a configurable capacity, with 32 packets in the 
 profile. Physical overflow preserves existing packets and sets a sticky flag; microcode stops with
 status 5 instead of hiding data loss.
 
+The Squeak driver uses ASCII physical codes below 128. Button codes 128–130 map to
+blue, yellow and red buttons. Codes 136/137 are Shift, 138 Control, 139 Caps Lock,
+140/141 Alt and 142 Super. The guest driver applies letter case and US punctuation mapping.
+It encodes Shift, Control, Option and Command in the archived keyboard modifier bits.
+Caps Lock changes letters only; Caps Lock with Shift produces lowercase letters.
+
 ### Cursor and display bitmaps
 
 Cursor and display uploads use raw pixel words with explicit dimensions and stride. The format is
-one bit per pixel, most significant pixel first within each 32-bit word. The cursor bank starts at
+1, 2, 4, 8, 16 or 32 bits per pixel, most significant pixel first within each word. The default is monochrome. The cursor bank starts at
 `0x410`; the display bank starts at `0x510`.
 
 | Bank offset | Access       | Bitmap operation                                                    |
@@ -227,6 +234,22 @@ one bit per pixel, most significant pixel first within each 32-bit word. The cur
 | `+0x14`     | Write        | 0 begins a full replacement; 2 begins a sparse patch; 1 publishes   |
 | `+0x18`     | Write        | Set upload offset in words                                          |
 | `+0x1c`     | Write        | Store one pixel word and increment the upload offset                |
+| `+0x20`     | Read / Write | Read visible depth / stage depth (1, 2, 4, 8, 16, 32) |
+| `+0x24`     | Write | Stage palette index, 0–255 |
+| `+0x28`     | Write | Stage RGB888 palette entry, then increment index |
+| `+0x2c`     | Write | Stage signed cursor origin X |
+| `+0x30`     | Write | Stage signed cursor origin Y |
+| `+0x34`     | Write | Stage cursor composition: 0 invert RGB, 1 paint palette entry one |
+
+Indexed depths use the published palette. Depth 16 uses RGB555; depth 32 uses XRGB8888.
+The default palette maps zero to white and all other indices to black.
+The cursor presentation adds its signed origin to the physical pointer position.
+Cursor set bits use the selected composition mode; clear bits remain transparent.
+The default mode inverts RGB, preserving the Xerox monochrome driver contract.
+The Squeak driver selects paint mode with a black foreground, matching the archive's `ioSetCursor` data/mask setup.
+Begin captures depth, palette, origin and cursor composition along with geometry. These values publish atomically with pixels.
+A patch requires the same depth as the visible frame. It can update palette/origin without pixel writes.
+Minimum stride is `ceil(width * depth / 32)` words.
 
 Begin captures valid geometry and replaces any previous pending upload. Geometry changes after Begin
 affect the next upload. A full replacement requires every word, including row padding, before
@@ -239,7 +262,7 @@ staging. It does not copy the complete visible frame for every patch. Visible ge
 sparse patches are additions in device ABI version 1.1. The device supplies storage and presentation
 for pixels. It does not inspect a guest Form or perform BitBlt.
 
-Primitives 101 and 102 accept a pointer Form with bits, width, height, and offset fields. Microcode
+The Xerox profile's primitives 101 and 102 accept a pointer Form with bits, width, height, and offset fields. Microcode
 checks positive SmallInteger dimensions, word-format bitmap storage, sufficient length, and each
 used word's raw 16-bit representation. It accepts compatible Form subclasses. The offset field
 belongs to guest drawing policy and does not define a hardware hotspot. Primitive 101 requires the
@@ -345,6 +368,45 @@ The selected image's AltoFilePage buffer contains a 16-byte label followed by 51
 separate header, label, and data records. Primitive 128 must translate that layout through machine
 code; the generic device must not decode it. Its page-to-sector mapping, command handling, and
 delayed completion path are part of stage 5 storage integration.
+
+### External file volume
+
+The optional file endpoint occupies `0x700–0x74c`, separate from the planned block-storage region.
+It provides external storage bytes, without access to CPU state or guest objects.
+The Squeak microcode marshals paths, buffers and opaque handles through these registers.
+The emulator mounts file copies at startup. Writes remain in the device instance and do not modify host files.
+
+| Address | Access | Meaning |
+| --- | --- | --- |
+| `0x700` | Write | Command: 1 open, 2 close, 3 read, 4 write, 5 seek, 6 query, 7 delete, 8 set boot name |
+| `0x704` | Read | Last command status: 0 success, 1 failure |
+| `0x708` | Write | Path length, at most 4096; clears staged path |
+| `0x70c` | Write | Append one path byte |
+| `0x710` | Write | Open flags: 0 read existing, 1 read/write and create if missing |
+| `0x714` | Read/write | Selected opaque handle; successful open assigns a new handle |
+| `0x718` | Read/write | Position / staged seek position |
+| `0x720` | Read/write | Transferred count / requested count; writing clears the transfer buffer |
+| `0x724` | Read/write | Transfer byte; accepted reads advance the buffer cursor |
+| `0x728` | Read | Selected file size |
+| `0x740` | Write | Select property: 0 root path, 1 boot filename, 2 path separator; resets property cursor |
+| `0x744` | Read | Property byte length |
+| `0x748` | Write | Property byte cursor |
+| `0x74c` | Read | Property byte; accepted reads advance the cursor |
+
+Commands complete when the device response is accepted. Failed requests have no side effects.
+Paths must contain the staged number of bytes before open/delete or boot-name update.
+Mounted names use `/` internally; the configured root prefix and separator are normalized on lookup.
+A closed or foreign handle fails. Handles are never reused within a device instance.
+Read counts can be shorter at end of file. Transfers are limited to 1 MiB and each file to 64 MiB.
+Seeking beyond end of file is allowed. A later write fills the gap with zero bytes.
+Command 8 changes the boot-name property only; it neither renames a file nor saves a snapshot.
+Directory enumeration, durable writes and a file-device hardware adapter remain unfinished.
+
+The Squeak profile keeps an eight-byte handle record in a guest ByteArray.
+Microcode validates it and performs every buffer load/store through OBJEKT.
+Byte buffers transfer directly. Word buffers transfer low byte first, retaining untouched bytes after a short read.
+Primitive results count complete guest elements, matching the archived VM.
+The device sees bytes and handle numbers only.
 
 ### Snapshot target registration
 

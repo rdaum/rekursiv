@@ -94,7 +94,8 @@ typedef struct packed {
 // Declarations run from most significant bit to least significant bit.
 // Reserved fields must be zero; rejecting them avoids silent image corruption.
 typedef struct packed {
-    logic [25:0] reserved_high;        // 255:230
+    logic [24:0] reserved_high;        // 255:231
+    logic fp64;                       // 230: even/odd numeric register pairs
     logic object_async;               // 229
     logic object_prepared;            // 228
     logic object_prepare;             // 227

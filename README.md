@@ -40,7 +40,7 @@ The implementation follows the three main parts of the Rekursiv architecture:
 - **OBJEKT** manages object identities, resident metadata, field access, allocation, and transfers
   between object memory and backing storage.
 - **LOGIK** executes microcode and controls instruction dispatch, branches, calls, and stacks.
-- **NUMERIK** provides the integer arithmetic unit, registers, and arithmetic flags.
+- **NUMERIK** provides integer and floating-point arithmetic, registers, and arithmetic flags.
 
 This version uses a **40-bit object representation**, with tagged object references and compact
 values. It defines its own control-word encodings and memory handshakes. Object memory is intended
@@ -58,8 +58,8 @@ The machine currently runs **Smalltalk-80** from a converted Xerox image, with a
 keyboard, and mouse. The "Blue Book" was used as a reference to write the microcode which ultimately
 executes on the emulated Rekursiv hardware.
 
-The Smalltalk desktop is tested only in the native software emulator. FPGA board integration remains
-unfinished.
+A separate microcode profile runs the **Squeak 1.1** colour desktop, with binary64 Floats and mouse menus.
+Both desktops are tested only in the native software emulator. FPGA board integration remains unfinished.
 
 ![Smalltalk-80 desktop and System Browser in the Rekursiv emulator](docs/images/st80.png)
 
@@ -82,7 +82,7 @@ simulation harness supplies external memory and backing storage. The allocation 
 examples execute their program control flow and garbage collection on the RTL processor.
 
 The Smalltalk microcode executes bytecodes, runtime primitives, and process scheduling. NUMERIK
-supports integer and binary32 arithmetic. BitBlt runs in microcode and refreshes the display as the
+supports integer, binary32 and binary64 arithmetic. BitBlt runs in microcode and refreshes the display as the
 original Smalltalk image draws its desktop. Disk transfers, snapshot saving, and FPGA board
 integration remain unfinished. The RTL passes generic synthesis checks. It has not yet been
 validated on an FPGA board.
@@ -96,6 +96,17 @@ python3 scripts/fetch-smalltalk-image.py
 cargo run --release --locked -p rekursiv-emulator -- \
   --smalltalk artifacts/st80/VirtualImage --memory-words 16777216
 ```
+
+To run the archived Squeak 1.1 image:
+
+```sh
+python3 scripts/fetch-squeak-image.py
+cargo run --release --locked -p rekursiv-emulator -- \
+  --squeak artifacts/squeak-1.1/Squeak1.1.image
+```
+
+Middle-click the background for the system menu. The [Squeak guide](docs/squeak-1.1.md)
+covers supported primitives and remaining work. File writes remain in memory; snapshots cannot yet be saved.
 
 For the standalone display and input demo:
 

@@ -462,12 +462,14 @@ fn framebuffer_padding_and_cursor_edges_are_clipped() {
         height: 2,
         stride: 1,
         words: vec![0xa0000000, 0x40000000],
+        ..BitmapFrame::default()
     };
     let cursor = BitmapFrame {
         width: 2,
         height: 2,
         stride: 1,
         words: vec![0xc0000000; 2],
+        ..BitmapFrame::default()
     };
     assert_eq!(
         presentation::pixels(&frame, None),
@@ -480,5 +482,40 @@ fn framebuffer_padding_and_cursor_edges_are_clipped() {
     assert_eq!(
         presentation::pixels(&frame, Some((&cursor, (2, 1)))),
         vec![0, 0xffffff, 0, 0xffffff, 0, 0]
+    );
+}
+
+#[test]
+fn packed_colour_scanout_uses_device_palette_and_rgb_formats() {
+    use rekursiv_devices::BitmapFrame;
+    let mut frame = BitmapFrame {
+        width: 4,
+        height: 1,
+        stride: 1,
+        depth: 8,
+        words: vec![0x00010203],
+        ..BitmapFrame::default()
+    };
+    frame.palette[..4].copy_from_slice(&[0x123456, 0xff0000, 0x00ff00, 0x0000ff]);
+    assert_eq!(presentation::pixels(&frame, None), frame.palette[..4]);
+    frame.depth = 16;
+    frame.width = 2;
+    frame.words[0] = 0x7c0003e0;
+    assert_eq!(presentation::pixels(&frame, None), [0xff0000, 0x00ff00]);
+    frame.depth = 32;
+    frame.width = 1;
+    frame.words[0] = 0xab123456;
+    assert_eq!(presentation::pixels(&frame, None), [0x123456]);
+    let cursor = BitmapFrame {
+        width: 1,
+        height: 1,
+        stride: 1,
+        words: vec![0x80000000],
+        offset: (-1, -1),
+        ..BitmapFrame::default()
+    };
+    assert_eq!(
+        presentation::pixels(&frame, Some((&cursor, (1, 1)))),
+        [0xedcba9]
     );
 }

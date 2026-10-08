@@ -15,7 +15,7 @@ module numerik (
     input logic clk_i,
     input logic rst_i,
     input logic retire_i, input logic save_i, restore_i,
-    input logic fp_start_i, output logic fp_done_o,
+    input logic fp_start_i, input logic fp64_i, output logic fp_done_o,
     input logic [3:0] fp_operation_i, input logic [2:0] fp_rounding_i,
     input logic [3:0] operation_i,
     input logic [3:0] ra_i,
@@ -50,14 +50,28 @@ module numerik (
     logic [31:0] r_operand, s_operand;
     logic carry_input, unused_fp_ready;
     logic [31:0] integer_y, fp_result;
-    logic [4:0] fp_exceptions, fp_flags, saved_fp_flags;
+    logic [4:0] fp_exceptions, fp32_exceptions, fp64_exceptions, fp_flags, saved_fp_flags;
+    logic [31:0] fp32_result;
+    logic [63:0] fp64_result;
+    logic fp32_done, fp64_done, unused_fp64_ready;
+    assign fp_done_o=fp64_i ? fp64_done : fp32_done;
+    assign fp_result=fp64_i ? fp64_result[31:0] : fp32_result;
+    assign fp_exceptions=fp64_i ? fp64_exceptions : fp32_exceptions;
+    numerik_fp64 floating_point_wide (
+        .clk_i(clk_i), .rst_i(rst_i), .valid_i(fp_start_i && fp64_i), .ready_o(unused_fp64_ready),
+        .operation_i(fp_operation_i), .rounding_i(fp_rounding_i),
+        .a_i({registers[ra_i | 4'd1],registers[ra_i]}),
+        .b_i({registers[rb_i | 4'd1],registers[rb_i]}),
+        .valid_o(fp64_done), .ready_i(retire_i && operation_i==ALU_FLOAT && fp64_i),
+        .result_o(fp64_result), .exceptions_o(fp64_exceptions)
+    );
     arithmetic_flags_t integer_flags;
     numerik_fp32 floating_point (
-        .clk_i(clk_i), .rst_i(rst_i), .valid_i(fp_start_i), .ready_o(unused_fp_ready),
+        .clk_i(clk_i), .rst_i(rst_i), .valid_i(fp_start_i && !fp64_i), .ready_o(unused_fp_ready),
         .operation_i(fp_operation_i), .rounding_i(fp_rounding_i),
         .a_i(r_operand), .b_i(s_operand),
-        .valid_o(fp_done_o), .ready_i(retire_i && operation_i==ALU_FLOAT),
-        .result_o(fp_result), .exceptions_o(fp_exceptions)
+        .valid_o(fp32_done), .ready_i(retire_i && operation_i==ALU_FLOAT && !fp64_i),
+        .result_o(fp32_result), .exceptions_o(fp32_exceptions)
     );
     // Integer condition flags remain independent of FP exceptions. FloatStatus
     // reads the exceptions from the most recently retired Float operation.
@@ -130,7 +144,7 @@ module numerik (
             if (write_register_i) registers[rb_i] <= y_o;
             if (load_q_i) q <= y_o;
             if (write_flags_i) flags <= calculated_flags;
-            product <= calculated_product;
+            product <= (operation_i==ALU_FLOAT && fp64_i) ? fp64_result : calculated_product;
             if(operation_i==ALU_FLOAT) fp_flags<=fp_exceptions;
         end
     end

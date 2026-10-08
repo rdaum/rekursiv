@@ -1,0 +1,9 @@
+{
+  "archive_url": "https://files.squeak.org/1.1/Squeak1.1.zip",
+  "archive_sha256": "5a7896155b51971515080aa84be4462a621dd80634f12a36a319e5192248d937",
+  "files": {
+    "Squeak1.1.image": "4903675c5f3a979b9804a35851e4c8e6dccc58cef172de85b59d86db37e1d049",
+    "Squeak1.1.changes": "95e019104b09b14e03c932713ff2f4bfb51c87edafb9b1e182d3d9390727dbe4",
+    "SqueakV1.sources": "1320b1b34ee1a6ccf6d74d1d6e98df6b3dd2a2cd9f34654d5aa7ae1cc7e4120b"
+  }
+}

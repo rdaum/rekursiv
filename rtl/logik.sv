@@ -194,7 +194,7 @@ module logik #(
     assign fp_start=state==EXECUTE && next_state==NUMERIC_WAIT && !rst_i;
     numerik arithmetic (
         .fp_start_i(fp_start), .fp_done_o(fp_done),
-        .fp_operation_i(instruction.fp_operation), .fp_rounding_i(instruction.fp_rounding),
+        .fp64_i(instruction.fp64), .fp_operation_i(instruction.fp_operation), .fp_rounding_i(instruction.fp_rounding),
         .save_i(gc_enter),.restore_i(gc_exit),
         .clk_i(clk_i), .rst_i(rst_i), .retire_i(retire),
         .operation_i(instruction.alu), .ra_i(instruction.ra), .rb_i(instruction.rb),
@@ -266,8 +266,8 @@ module logik #(
         else if (instruction.device > 2 ||
             (instruction.device != 0 && (instruction.object_enable || instruction.alu == ALU_FLOAT ||
                 instruction.recovery != 0 || gc_active_o || register_a[1:0] != 0))) local_fault = FAULT_ENCODING;
-        else if(instruction.fp_operation>9 || instruction.fp_rounding>4 ||
-            (instruction.alu!=ALU_FLOAT && (instruction.fp_operation!=0 || instruction.fp_rounding!=0)) ||
+        else if((instruction.fp64 && (instruction.r_source!=SOURCE_REGISTER || instruction.s_source!=SOURCE_REGISTER || instruction.ra[0] || instruction.rb[0])) || instruction.fp_operation>9 || instruction.fp_rounding>4 ||
+            (instruction.alu!=ALU_FLOAT && (instruction.fp_operation!=0 || instruction.fp_rounding!=0 || instruction.fp64)) ||
             (instruction.alu==ALU_FLOAT && (instruction.object_enable || instruction.recovery!=0 || gc_active_o ||
                 instruction.shift!=SHIFT_NONE || instruction.carry!=CARRY_ZERO || instruction.estk==ESTK_COMPACT))) local_fault=FAULT_ENCODING;
         // Collect is an effect-free mutator request, never a maintenance op.

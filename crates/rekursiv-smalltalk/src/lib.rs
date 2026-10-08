@@ -1,12 +1,14 @@
-//! Offline Smalltalk-80 Version 2 image conversion.
+//! Offline Xerox Smalltalk-80 Version 2 and Squeak 1.1 image tools.
 //!
 //! This crate does not execute guest bytecodes, primitives, or garbage collection.
 //! Its output is a set of ordinary OBJEKT backing records and boot metadata.
-//! The representation contract is in `docs/smalltalk-image.md`.
+//! The representation contracts are in `docs/smalltalk-image.md` and
+//! `docs/squeak-1.1.md`. Both profiles assemble separate execution microcode.
 pub mod audit;
 pub mod interpreter;
 pub mod layout;
 pub mod source;
+pub mod squeak;
 pub mod target;
 
 use std::fmt;

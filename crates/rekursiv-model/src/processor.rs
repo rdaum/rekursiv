@@ -430,9 +430,20 @@ impl Processor {
             op => {
                 let value = match op {
                     Alu::Float => {
-                        let (bits, exceptions) = crate::float::evaluate(i.float, i.rounding, r, s);
-                        n.fp_flags = exceptions;
-                        bits
+                        if i.precision == Precision::Binary64 {
+                            let a = u64::from(r) | (u64::from(self.rf[i.ra as usize + 1]) << 32);
+                            let b = u64::from(s) | (u64::from(self.rf[i.rb as usize + 1]) << 32);
+                            let (bits, exceptions) =
+                                crate::float::evaluate64(i.float, i.rounding, a, b);
+                            n.product = bits;
+                            n.fp_flags = exceptions;
+                            bits as u32
+                        } else {
+                            let (bits, exceptions) =
+                                crate::float::evaluate(i.float, i.rounding, r, s);
+                            n.fp_flags = exceptions;
+                            bits
+                        }
                     }
                     Alu::FloatStatus => self.fp_flags as u32,
                     Alu::Pass => r,

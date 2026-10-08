@@ -1279,6 +1279,14 @@ project behavior.
 
 ## Smalltalk-80 port
 
+The [Squeak 1.1 port](docs/squeak-1.1.md) defines a separate 32-bit guest profile.
+Its image reader, OBJEKT conversion and execution microcode are implemented.
+The native emulator restores the colour desktop and handles mouse menus.
+Binary64 NUMERIK arithmetic preserves Float precision; microcode implements packed-colour drawing and device primitives.
+Directed RTL tests cover binary64 retirement, packed BitBlt, paging and collection.
+Full desktop execution on RTL, snapshots and persistent workstation storage remain unfinished.
+Squeak class layouts and primitive numbers remain language policy, outside the generic machine.
+
 The intended first language target is a single-core port of the Blue Book Smalltalk-80 VM. Multicore
 execution, MVCC, and snapshot isolation remain deferred. The eventual goal is a usable Smalltalk /
 object-oriented workstation. It will boot a converted Smalltalk-80 image on the Mellanox NV303212A

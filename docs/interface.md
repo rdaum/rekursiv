@@ -551,7 +551,8 @@ The packed word is 256 bits. The exact symbolic values are defined in `rekursiv_
 | 227                       | Prepare address from old selection and new index                     |
 | 228                       | Memory operation uses the previous prepared address                  |
 | 229                       | Launch prepared memory command without waiting for its reply         |
-| 94, 98, 113, 255:230      | Reserved; must be zero                                               |
+| 230                       | Binary64 precision for Float; even register pairs, result in PRODUCT |
+| 94, 98, 113, 255:231      | Reserved; must be zero                                               |
 
 Invalid selectors and reserved bits halt execution before an OBJEKT command can issue. The literal
 field supplies D unless another source is selected. Other sources include cached stack values, the

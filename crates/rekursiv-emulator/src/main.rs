@@ -1,3 +1,4 @@
+mod guest_trace;
 use eyre::{bail, ensure, Result};
 use rekursiv_emulator::{boot, presentation, Step};
 use std::{
@@ -14,12 +15,14 @@ fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let mut program = None;
     let mut smalltalk = None;
+    let mut squeak = None;
     let mut headless = false;
     let mut jit = true;
     let mut limit = None;
     let mut memory = None;
     let mut pager_entries = boot::DEFAULT_PAGER_ENTRIES;
     let mut trace = None;
+    let mut guest_trace = None;
     let mut frame = None;
     let mut stop = None;
     let mut when = None;
@@ -36,6 +39,11 @@ fn main() -> Result<()> {
             "--smalltalk" => {
                 smalltalk = Some(PathBuf::from(args.next().ok_or_else(|| {
                     eyre::eyre!("--smalltalk requires a VirtualImage path")
+                })?))
+            }
+            "--squeak" => {
+                squeak = Some(PathBuf::from(args.next().ok_or_else(|| {
+                    eyre::eyre!("--squeak requires a Squeak1.1.image path")
                 })?))
             }
             "--headless" => headless = true,
@@ -67,6 +75,12 @@ fn main() -> Result<()> {
                         .ok_or_else(|| eyre::eyre!("--memory-words requires a count"))?
                         .parse::<usize>()?,
                 );
+            }
+            "--guest-trace" => {
+                guest_trace =
+                    Some(PathBuf::from(args.next().ok_or_else(|| {
+                        eyre::eyre!("--guest-trace requires a path")
+                    })?));
             }
             "--trace" => {
                 trace = Some(PathBuf::from(
@@ -114,15 +128,18 @@ fn main() -> Result<()> {
                 )
             }
             "--help" | "-h" => {
-                println!("rekursiv-emulator [--microcode FILE | --smalltalk VirtualImage]\n  No program: run the interactive workstation microcode demo.\n  --headless          Run without a window (deterministic device clock)\n  --engine MODE       jit (default) or interpreter\n  --steps N           Stop after N steps (headless default 10000000; window unlimited)\n  --memory-words N    External RAM words (Smalltalk default 16777216; otherwise 131072)\n  --pager-entries N   Pager slots, power of two from 2 to 65536 (default 65536)\n  --objekt-metrics   Report pager, transfer, allocation, and collector counters\n  --trace FILE        Write retired micro-PCs and numeric state\n  --stop-at LABEL     Stop before the named microinstruction\n  --when Rn=VALUE     Stop only when this register also matches\n  --frame FILE        Save the last published display as a PPM\n  --frames N          Close after N presentation checks (smoke tests)\nClose the window to exit. Escape is delivered to the guest.");
+                println!("rekursiv-emulator [--microcode FILE | --smalltalk VirtualImage | --squeak Squeak1.1.image]\n  No program: run the interactive workstation microcode demo.\n  --headless          Run without a window (deterministic device clock)\n  --engine MODE       jit (default) or interpreter\n  --steps N           Stop after N steps (headless default 10000000; window unlimited)\n  --memory-words N    External RAM words (Smalltalk default 16777216; otherwise 131072)\n  --pager-entries N   Pager slots, power of two from 2 to 65536 (default 65536)\n  --objekt-metrics   Report pager, transfer, allocation, and collector counters\n  --guest-trace FILE  Write bytecode and primitive boundaries\n  --trace FILE        Write retired micro-PCs and numeric state\n  --stop-at LABEL     Stop before the named microinstruction\n  --when Rn=VALUE     Stop only when this register also matches\n  --frame FILE        Save the last published display as a PPM\n  --frames N          Close after N presentation checks (smoke tests)\nClose the window to exit. Escape is delivered to the guest.");
                 return Ok(());
             }
             _ => bail!("unknown option {arg}; use --help"),
         }
     }
     ensure!(
-        program.is_none() || smalltalk.is_none(),
-        "choose microcode or a Smalltalk image"
+        usize::from(program.is_some())
+            + usize::from(smalltalk.is_some())
+            + usize::from(squeak.is_some())
+            <= 1,
+        "choose microcode, a Xerox image, or a Squeak image"
     );
     ensure!(
         when.is_none() || stop.is_some(),
@@ -131,12 +148,14 @@ fn main() -> Result<()> {
     ensure!(!headless || frames.is_none(), "--frames requires a window");
     // A full pager keeps the image's working set resident. The small peripheral
     // demo heap cannot hold it; explicit --memory-words still wins for tests.
-    let memory = memory.unwrap_or(if smalltalk.is_some() {
+    let memory = memory.unwrap_or(if smalltalk.is_some() || squeak.is_some() {
         16_777_216
     } else {
         131_072
     });
-    let mut loaded = if let Some(path) = smalltalk {
+    let mut loaded = if let Some(path) = squeak.as_ref() {
+        boot::squeak_with_pager(&std::fs::read(path)?, memory, pager_entries)?
+    } else if let Some(path) = smalltalk {
         boot::smalltalk_with_pager(&std::fs::read(path)?, memory, pager_entries)?
     } else {
         boot::microcode_with_pager(
@@ -169,6 +188,28 @@ fn main() -> Result<()> {
             .as_secs()
     };
     loaded.machine.devices = presentation::workstation(utc, if headless { 1000 } else { u64::MAX });
+    if let Some(path) = &squeak {
+        loaded.machine.devices.display_bitmap = Some(rekursiv_devices::Bitmap::new(1024, 768));
+        let name = path
+            .file_name()
+            .ok_or_else(|| eyre::eyre!("image has no filename"))?
+            .to_string_lossy();
+        let mut files =
+            rekursiv_devices::Files::new(b"C:\\", format!("C:\\{name}").as_bytes(), b'\\');
+        let directory = path.parent().unwrap_or(std::path::Path::new("."));
+        for name in [name.as_ref(), "SqueakV1.sources", "Squeak1.1.changes"] {
+            match std::fs::read(directory.join(name)) {
+                Ok(bytes) => {
+                    files
+                        .contents
+                        .insert(format!("/{name}").into_bytes(), bytes);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                Err(e) => return Err(e.into()),
+            }
+        }
+        loaded.machine.devices.files = Some(files);
+    }
     let breakpoint = stop
         .map(|label| {
             loaded
@@ -193,6 +234,9 @@ fn main() -> Result<()> {
             Ok(pc)
         })
         .transpose()?;
+    let mut guest_trace = guest_trace
+        .map(|path| guest_trace::GuestTrace::create(&path, &loaded.symbols))
+        .transpose()?;
     let mut trace = trace
         .map(std::fs::File::create)
         .transpose()?
@@ -206,11 +250,14 @@ fn main() -> Result<()> {
         {
             return Ok(false);
         }
-        if trace.is_none() && breakpoint.is_none() {
+        if trace.is_none() && guest_trace.is_none() && breakpoint.is_none() {
             // Bound each batch so the window worker can service input and stop
             // requests promptly. Debugging keeps exact single-step observation.
             steps += machine.run_steps((limit - steps).min(256))?;
             return Ok(!machine.cpu.halted && !machine.cpu.service);
+        }
+        if let Some(trace) = &mut guest_trace {
+            trace.observe(machine)?;
         }
         let pc = machine.cpu.pc;
         let gc = machine.recovering();
@@ -252,6 +299,18 @@ fn main() -> Result<()> {
         }
     };
     let elapsed = started.elapsed();
+    if loaded.machine.cpu.halted && loaded.symbols.contains_key("primitive_unimplemented") {
+        eprintln!(
+            "Squeak stop: status={}, R0={}, method={:010x}, context={:010x}",
+            loaded.machine.cpu.rf[15],
+            loaded.machine.cpu.rf[0],
+            loaded.machine.objekt.state.vr[7].bits(),
+            loaded.machine.objekt.state.vr[0].bits()
+        );
+    }
+    if let Some(trace) = &mut guest_trace {
+        trace.flush()?;
+    }
     if let Some(trace) = &mut trace {
         trace.flush()?;
     }

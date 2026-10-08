@@ -57,6 +57,7 @@ pub fn runtime_with_memory(memory_words: usize) -> Result<VerilatorRuntime> {
         root.join("rtl/numerik.sv"),
         root.join("rtl/numerik_alu.sv"),
         root.join("rtl/numerik_fp32.sv"),
+        root.join("rtl/numerik_fp64.sv"),
         root.join("rtl/hardfloat.sv"),
         root.join("rtl/logik_store.sv"),
         root.join("rtl/logik_stacks.sv"),

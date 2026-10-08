@@ -288,6 +288,7 @@ mod tests {
             height: 1,
             stride: 1,
             words: vec![0],
+            ..BitmapFrame::default()
         });
         bitmap.publications = 1;
         let mut cache = BitmapCache::default();
@@ -315,6 +316,7 @@ mod tests {
             height: 1,
             stride: 1,
             words: vec![0x8000_0000],
+            ..BitmapFrame::default()
         }));
         let with_cursor = screen.clone();
         screen.position = (11, 20);
@@ -345,6 +347,7 @@ mod tests {
                 height,
                 stride: 1,
                 words,
+                ..BitmapFrame::default()
             });
             bitmap.publications = 1;
         }

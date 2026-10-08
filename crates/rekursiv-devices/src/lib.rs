@@ -4,8 +4,10 @@
 //! when the consumer accepts the reply.
 use eyre::{ensure, Result};
 use std::collections::BTreeMap;
+mod files;
+pub use files::Files;
 mod bitmap;
-pub use bitmap::{Bitmap, BitmapFrame};
+pub use bitmap::{Bitmap, BitmapFrame, CursorMode};
 mod clocks;
 pub use clocks::Clocks;
 mod input;
@@ -33,6 +35,7 @@ struct Pending {
     pointer_effect: Option<pointer::Effect>,
     input_effect: Option<input::Effect>,
     bitmap_effect: Option<(bool, bitmap::Effect)>,
+    file_effect: Option<files::Effect>,
 }
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Timing {
@@ -95,6 +98,7 @@ pub struct Device {
     pub input: Option<Input>,
     pub cursor_bitmap: Option<Bitmap>,
     pub display_bitmap: Option<Bitmap>,
+    pub files: Option<Files>,
     pending: Option<Pending>,
     held: Option<Request>,
     wait: u32,
@@ -173,6 +177,8 @@ impl Device {
                 })
                 .unwrap()
                 .commit(effect);
+            } else if let Some(effect) = p.file_effect.filter(|_| !p.reply.error) {
+                self.files.as_mut().unwrap().commit(effect);
             } else if p.request.write && !p.reply.error {
                 match (p.request.address, self.events.as_mut()) {
                     (0x104, Some(events)) => events.acknowledge(p.request.data),
@@ -194,6 +200,7 @@ impl Device {
             let mut pointer_effect = None;
             let mut input_effect = None;
             let mut bitmap_effect = None;
+            let mut file_effect = None;
             let value = if let Some(clocks) = self
                 .clocks
                 .as_ref()
@@ -220,8 +227,8 @@ impl Device {
                     input_effect = effect;
                     value
                 })
-            } else if (0x410..0x430).contains(&request.address)
-                || (0x510..0x530).contains(&request.address)
+            } else if (0x410..0x448).contains(&request.address)
+                || (0x510..0x548).contains(&request.address)
             {
                 let cursor = request.address < 0x500;
                 let base = if cursor { 0x410 } else { 0x510 };
@@ -241,6 +248,15 @@ impl Device {
                 } else {
                     None
                 }
+            } else if let Some(files) = self
+                .files
+                .as_ref()
+                .filter(|_| (0x700..0x750).contains(&request.address))
+            {
+                files.preview(request).map(|(value, effect)| {
+                    file_effect = effect;
+                    value
+                })
             } else if let Some(events) = &self.events {
                 match (request.address, request.write) {
                     (0x100, false) => Some(events.status()),
@@ -264,6 +280,7 @@ impl Device {
                 pointer_effect,
                 input_effect,
                 bitmap_effect,
+                file_effect,
             });
             if !self.discard_history {
                 self.requests.push(request);

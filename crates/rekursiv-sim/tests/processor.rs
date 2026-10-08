@@ -1304,6 +1304,7 @@ fn bitmap_device_publishes_complete_frames_atomically_and_rejects_partial_or_fai
             height: 1,
             stride: 1,
             words: vec![0],
+            ..BitmapFrame::default()
         };
         let mut bitmap = Bitmap::new(64, 64);
         bitmap.visible = Some(old.clone());
@@ -1336,7 +1337,8 @@ fn bitmap_device_publishes_complete_frames_atomically_and_rejects_partial_or_fai
                     width: 33,
                     height: 1,
                     stride: 2,
-                    words: vec![0xfedcba98, 0x80000000]
+                    words: vec![0xfedcba98, 0x80000000],
+                    ..BitmapFrame::default()
                 })
             );
             assert_eq!(bitmap.publications, 1);
@@ -1383,6 +1385,7 @@ fn sparse_bitmap_upload_is_atomic_across_delayed_and_failed_publish() -> Result<
             height: 2,
             stride: 2,
             words: vec![1, 2, 3, 4],
+            ..BitmapFrame::default()
         };
         let mut bitmap = Bitmap::new(64, 64);
         bitmap.visible = Some(old.clone());
@@ -1419,4 +1422,71 @@ fn sparse_bitmap_upload_is_atomic_across_delayed_and_failed_publish() -> Result<
         }
     }
     Ok(())
+}
+
+/// Register pairs and PRODUCT must agree at every retirement, including a GC
+/// between completing a binary64 operation and transferring its high half.
+#[test]
+fn binary64_product_and_status_survive_collection() -> Result<()> {
+    let rt = runtime()?;
+    let mut h = Harness::new(
+        &rt,
+        Timing {
+            request_delay: 3,
+            memory_latency: 5,
+            response_stall: 4,
+        },
+        None,
+    )?;
+    let class = Word::reference(1, true)?;
+    h.install(class, class, 0, &[])?;
+    h.install(Word::reference(2, true)?, class, 0, &vec![Word::NIL; 256])?;
+    let assembly = rekursiv_asm::text::assemble(
+        "d=0, r=Bus, rb=2, ldrb\n\
+         d=0x3ff00000, r=Bus, rb=3, ldrb\n\
+         d=0, r=Bus, rb=4, ldrb\n\
+         d=0x40080000, r=Bus, rb=5, ldrb\n\
+         ra=2, rb=4, alu=Float, precision=Binary64, fp=Divide, ldq, flags\n\
+         alu=FloatStatus, rb=6, ldrb\n\
+         d=CLASS, page=Fetch\n\
+         d=CLASS, page=Allocate, size=4, scan=1\n\
+         alu=ProductHigh, rb=7, ldrb\n\
+         alu=ProductLow, rb=8, ldrb\n\
+         alu=FloatStatus, rb=9, ldrb\n\
+         halt",
+        0,
+        &[("CLASS", class.bits() as i64)],
+    )?;
+    let image = Image::from_assembly(&assembly)?.with_ram_collector(128, 16)?;
+    h.load_processor(&image)?;
+    h.start_processor(0)?;
+    let mut model = Processor::default();
+    assert_eq!(h.run_processor(&image, &mut model, 500_000)?, 12);
+    assert_eq!(model.product, (1.0f64 / 3.0).to_bits());
+    assert_eq!(
+        ((model.rf[7] as u64) << 32) | model.rf[8] as u64,
+        model.product
+    );
+    assert_eq!((model.rf[6], model.rf[9]), (1, 1));
+    assert_eq!(h.stats.collections, 1);
+    Ok(())
+}
+
+#[test]
+fn binary64_encoding_requires_register_pairs() {
+    for source in [
+        "precision=Binary64",
+        "alu=Float, precision=Binary64, ra=1",
+        "alu=Float, precision=Binary64, rb=15",
+        "alu=Float, precision=Binary64, r=Q",
+        "alu=Float, precision=Binary64, s=Bus",
+    ] {
+        assert!(
+            rekursiv_asm::text::assemble(source, 0, &[]).is_err(),
+            "{source}"
+        );
+    }
+    let a =
+        rekursiv_asm::text::assemble("alu=Float, precision=Binary64, ra=14, rb=2", 0, &[]).unwrap();
+    assert_eq!((a.code[&0].encode().unwrap()[7] >> 6) & 1, 1);
 }

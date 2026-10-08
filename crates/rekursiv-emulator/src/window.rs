@@ -83,6 +83,9 @@ fn key_code(key: KeyCode) -> Option<u16> {
         ShiftRight => 137,
         ControlLeft | ControlRight => 138,
         CapsLock => 139,
+        AltLeft => 140,
+        AltRight => 141,
+        SuperLeft | SuperRight => 142,
         _ => return None,
     })
 }
@@ -108,12 +111,13 @@ impl Keyboard {
             self.locked = !self.locked;
             return Some((code, self.locked));
         }
-        if code == 138
-            && self.held.contains(&if key == KeyCode::ControlLeft {
-                KeyCode::ControlRight
-            } else {
-                KeyCode::ControlLeft
-            })
+        // Left/right Control and Super share one physical device code. Keep
+        // it held until both keys are released.
+        if matches!(code, 138 | 142)
+            && self
+                .held
+                .iter()
+                .any(|&other| other != key && key_code(other) == Some(code))
         {
             return None;
         }

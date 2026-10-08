@@ -1,25 +1,40 @@
 //! Framebuffer presentation and physical input, without access to guest memory.
 use eyre::Result;
-use rekursiv_devices::{BitmapFrame, Clocks, Device, InputKind, InputPacket};
+use rekursiv_devices::{BitmapFrame, Clocks, CursorMode, Device, InputKind, InputPacket};
 
 pub fn workstation(utc_seconds: u64, ticks_per_ms: u64) -> Device {
     Device::workstation(utc_seconds, ticks_per_ms)
 }
-/// Convert the published one-bit scanout buffer. Set bits are black.
-/// Cursor pixels invert the scanout, with clipping at every display edge.
+/// Convert external scanout data, without interpreting guest objects.
+/// Indexed pixels use the published palette. RGB555 expands each channel to
+/// eight bits. Cursor set bits use the published composition mode and origin;
+/// the peripheral contract, not the guest language, determines presentation.
 pub fn pixels(frame: &BitmapFrame, cursor: Option<(&BitmapFrame, (i32, i32))>) -> Vec<u32> {
     let mut rgb = vec![0xffffff; (frame.width * frame.height) as usize];
+    let per_word = 32 / frame.depth;
+    let mask = u32::MAX >> (32 - frame.depth);
     for y in 0..frame.height {
         for x in 0..frame.width {
-            if frame.words[(y * frame.stride + x / 32) as usize] & (1 << (31 - x % 32)) != 0 {
-                rgb[(y * frame.width + x) as usize] = 0;
-            }
+            let word = frame.words[(y * frame.stride + x / per_word) as usize];
+            let value = (word >> (32 - frame.depth * (x % per_word + 1))) & mask;
+            rgb[(y * frame.width + x) as usize] = match frame.depth {
+                1 | 2 | 4 | 8 => frame.palette[value as usize],
+                16 => {
+                    let expand = |v: u32| ((v & 31) << 3) | ((v & 31) >> 2);
+                    (expand(value >> 10) << 16) | (expand(value >> 5) << 8) | expand(value)
+                }
+                32 => value & 0xffffff,
+                _ => unreachable!("validated scanout depth"),
+            };
         }
     }
     if let Some((cursor, (cx, cy))) = cursor {
         for y in 0..cursor.height {
             for x in 0..cursor.width {
-                let (dx, dy) = (i64::from(cx) + i64::from(x), i64::from(cy) + i64::from(y));
+                let (dx, dy) = (
+                    i64::from(cx) + i64::from(cursor.offset.0) + i64::from(x),
+                    i64::from(cy) + i64::from(cursor.offset.1) + i64::from(y),
+                );
                 if dx >= 0
                     && dy >= 0
                     && dx < i64::from(frame.width)
@@ -27,7 +42,11 @@ pub fn pixels(frame: &BitmapFrame, cursor: Option<(&BitmapFrame, (i32, i32))>) -
                     && cursor.words[(y * cursor.stride + x / 32) as usize] & (1 << (31 - x % 32))
                         != 0
                 {
-                    rgb[dy as usize * frame.width as usize + dx as usize] ^= 0xffffff;
+                    let pixel = &mut rgb[dy as usize * frame.width as usize + dx as usize];
+                    match cursor.cursor_mode {
+                        CursorMode::Invert => *pixel ^= 0xffffff,
+                        CursorMode::Paint => *pixel = cursor.palette[1],
+                    }
                 }
             }
         }

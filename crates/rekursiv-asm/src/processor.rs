@@ -21,6 +21,7 @@ field!(Condition { Always=0, Zero=1, Sign=2, Carry=3, Overflow=4, CorrectedSign=
 field!(Alu { Pass=0, Add=1, Sub=2, SubReverse=3, And=4, Or=5, Xor=6, Not=7, Rotate=8, MultiplySigned=9, MultiplyUnsigned=10, ProductHigh=11, ProductLow=12, Float=13, FloatStatus=14 });
 // Numeric operations are independent of language primitive numbers.
 field!(FloatOp { Add=0, Subtract=1, Multiply=2, Divide=3, Sqrt=4, Compare=5, FromSigned=6, ToSigned=7, FromUnsigned=8, ToUnsigned=9 });
+field!(Precision { Binary32=0, Binary64=1 });
 field!(Rounding { NearestEven=0, TowardZero=1, Down=2, Up=3, NearestAway=4 });
 field!(Device { None=0, Read=1, Write=2 });
 field!(Source { Register=0, Bus=1, Estk=2, Q=3, Branch=4 });
@@ -53,6 +54,8 @@ pub struct Instruction {
     pub alu: Alu,
     pub float: FloatOp,
     pub rounding: Rounding,
+    /// Binary64 reads even/odd register pairs; the complete result replaces product.
+    pub precision: Precision,
     pub device: Device,
     pub write_root: bool,
     pub r: Source,
@@ -134,13 +137,23 @@ impl Instruction {
             return Err(Status::BadCommand);
         }
         if (self.alu != Alu::Float
-            && (self.float != FloatOp::Add || self.rounding != Rounding::NearestEven))
+            && (self.float != FloatOp::Add
+                || self.rounding != Rounding::NearestEven
+                || self.precision != Precision::Binary32))
             || (self.alu == Alu::Float
                 && (self.object.is_some()
                     || self.recovery != Recovery::None
                     || self.shift != Shift::None
                     || self.carry != Carry::Zero
                     || self.estk == Estk::Compact))
+        {
+            return Err(Status::BadCommand);
+        }
+        if self.precision == Precision::Binary64
+            && (self.r != Source::Register
+                || self.s != Source::Register
+                || !self.ra.is_multiple_of(2)
+                || !self.rb.is_multiple_of(2))
         {
             return Err(Status::BadCommand);
         }
@@ -220,6 +233,7 @@ impl Instruction {
         put(224, 2, self.device as u64);
         put(226, 1, self.write_root as u64);
         put(229, 1, self.object_async as u64);
+        put(230, 1, self.precision as u64);
         Ok(words)
     }
 }

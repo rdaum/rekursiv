@@ -320,6 +320,7 @@ fn instruction(
             "rb" => i.rb = number(15)? as u8,
             "alu" => i.alu = enumeration(line, value)?,
             "fp" => i.float = enumeration(line, value)?,
+            "precision" => i.precision = enumeration(line, value)?,
             "round" => i.rounding = enumeration(line, value)?,
             "io" => i.device = enumeration(line, value)?,
             "r" => i.r = enumeration(line, value)?,

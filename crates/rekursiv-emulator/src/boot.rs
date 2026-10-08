@@ -1,5 +1,7 @@
 //! Offline loading adapters. Only this module knows the Smalltalk image format.
 use crate::Machine;
+#[path = "boot/squeak.rs"]
+mod squeak;
 use eyre::{ensure, Result};
 use rekursiv_asm::{text, Entry, Service, Status};
 use rekursiv_model::{
@@ -7,6 +9,7 @@ use rekursiv_model::{
     store::Record,
 };
 use rekursiv_smalltalk::{interpreter, layout, source, target};
+pub use squeak::{squeak, squeak_source, squeak_with_pager};
 use std::collections::BTreeMap;
 pub const DEFAULT_PAGER_ENTRIES: usize = 65_536;
 pub const COLLECTOR_ENTRY: u16 = 8064;
