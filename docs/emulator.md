@@ -194,21 +194,57 @@ Each run executes 50 million steps with deterministic device time.
 The script compares final processor counters and framebuffer hashes, then reports median execution rates.
 Logs, frames, and a JSON summary go to `artifacts/jit-benchmark`.
 Compilation time is separate from execution time.
-A separate before/after comparison used three alternating pairs on an ARM Cortex-X925 core, pinned to CPU 7.
-Both versions used the JIT, deterministic device time, and 16,777,216 RAM words.
-The baseline was commit `28c324a`, before explicit cache invalidation and the OBJEKT response-only path.
+The comparison below uses `0856f18` as the baseline and `1e65be2` as the optimized version.
+Both use the JIT, deterministic device time, and 16,777,216 RAM words.
+Each result is the median of three alternating pairs, pinned to Cortex-X925 CPU 7 (3.9 GHz maximum).
 
-| Step budget | Baseline | Current | Throughput gain |
-| --- | --- | --- | --- |
-| 50 million | 25.5 million/s | 33.6 million/s | 31.6% |
-| 500 million | 20.4 million/s | 25.7 million/s | 25.6% |
+| Guest | Step budget | Baseline | Optimized | Speedup |
+| --- | --- | --- | --- | --- |
+| Squeak 1.1 | 500 million | 29.19 million/s | 73.45 million/s | 2.52× |
+| Squeak 1.1 | 1 billion | 27.19 million/s | 68.06 million/s | 2.50× |
+| Xerox V2 | 500 million | 25.66 million/s | 63.83 million/s | 2.49× |
 
-Rates are medians and exclude image loading and compilation.
-Each pair produced the same final counters and framebuffer hash.
-These runs had no collections; collection-heavy workloads need separate measurements.
+Every run matches its baseline's final counters and framebuffer hash.
+The 500-million-step Squeak run includes 17.59 million collector instructions and one completed collection.
+The billion-step run includes 29.22 million collector instructions and three collections.
+Xerox has no collections in this interval.
+At 500 million steps, Squeak ranges from 72.23 to 73.84 million/s; Xerox ranges from 63.63 to 63.94 million/s.
+At one billion steps, Squeak ranges from 68.04 to 68.18 million/s.
+Rates exclude image loading and compilation.
+Squeak JIT compilation takes about 1.86 seconds, compared with 0.76 seconds for the baseline.
+
 On Linux, `taskset -c 7 python3 scripts/bench-emulator.py` pins an engine comparison to that core.
 Choose a suitable CPU number on your host; mixed CPU types can affect comparisons.
-These measurements describe native emulation, not FPGA throughput.
+The [CPU microbenchmark commands](#cpu-microbenchmarks) also support saved-binary comparisons.
+These measurements describe native emulation, not measured FPGA throughput.
+
+The optimizations reduce retirement-record copies and execute resident OBJEKT commands within native blocks.
+A compact dispatch table keeps cold source snapshots separate from frequently accessed fields.
+Collector local instructions use predecoded scalar execution, and idle device ticks skip unused handshake work.
+Instruction boundaries, peripheral ticks, fault ordering, and collection semantics remain intact.
+
+A `perf stat` comparison used the same 500-million-step Squeak workload on CPU 7.
+These counters include image loading and JIT compilation, unlike the execution rates above.
+The command uses the Cortex-X925 PMU; other processors need their own event names.
+
+```sh
+perf stat -e armv8_pmuv3_1/cycles/u,armv8_pmuv3_1/instructions/u,armv8_pmuv3_1/l1d_cache_refill/u,armv8_pmuv3_1/l1i_cache_refill/u,armv8_pmuv3_1/stall_backend/u,armv8_pmuv3_1/stall_frontend/u \
+  -- taskset -c 7 target/release/rekursiv-emulator --headless \
+  --squeak artifacts/squeak-1.1/Squeak1.1.image --steps 500000000
+```
+
+| Host counter | Baseline | Optimized |
+| --- | --- | --- |
+| User cycles | 69.74 billion | 33.48 billion |
+| Retired host instructions | 285.84 billion | 171.20 billion |
+| Backend stall cycles | 17.00 billion | 4.24 billion |
+| Frontend stall cycles | 5.16 billion | 5.17 billion |
+| L1 data-cache refills | 384.05 million | 329.43 million |
+| L1 instruction-cache refills | 759.10 million | 1,027.76 million |
+
+The larger native blocks reduce dispatch overhead but increase instruction-cache refills and compilation cost.
+The profile points to instruction processing and dependent state updates, rather than bulk arithmetic suited to SIMD.
+Remaining hotspots include device ticks, OBJEKT commands, and the general executor for unsupported native instructions.
 
 A library caller starts with the interpreter and enables translation through `Machine::enable_jit()`.
 `Machine::run_steps(budget)` uses native blocks when possible and never exceeds its step budget.
@@ -480,6 +516,17 @@ cargo bench --locked -p rekursiv-emulator --bench execution
 The benchmarks exclude setup and JIT compilation. Each operation executes 256 microinstructions.
 Cases compare the interpreter and JIT, with and without workstation device ticks.
 The programs are in `microcode/bench/`.
+
+At `1e65be2`, the same Cortex-X925 core measured these median rates:
+
+| Loop | Interpreter | JIT | JIT with workstation ticks |
+| --- | --- | --- | --- |
+| Local datapath | 36.07 million/s | 237.83 million/s | 178.71 million/s |
+| Resident objects | 26.89 million/s | 107.71 million/s | 94.86 million/s |
+
+Each case uses 20 samples after warmup; compilation stays outside measurement.
+These small loops fit in cache and do not represent complete guest performance.
+The full-image comparisons above include transfers, collection, and guest device traffic.
 
 To compare a saved executable against the current build, run:
 
