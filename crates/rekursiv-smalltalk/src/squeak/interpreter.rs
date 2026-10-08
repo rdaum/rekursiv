@@ -30,6 +30,7 @@ const SOURCES: &[&str] = &[
     include_str!("../../../../microcode/squeak/pixels.uc"),
     include_str!("../../../../microcode/squeak/words.uc"),
     include_str!("../../../../microcode/squeak/glyphs.uc"),
+    include_str!("../../../../microcode/squeak/scanner.uc"),
     include_str!("../../../../microcode/squeak/refresh.uc"),
 ];
 

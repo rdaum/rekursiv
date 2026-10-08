@@ -190,6 +190,7 @@ Implemented primitive families are:
 | 90, 101–102, 106–109 | Mouse, cursor, display, screen extent, buttons and keyboard |
 | 93, 124–125, 133–137 | Input, low-space and timer registration; clocks and interrupt key |
 | 96, 105, 145 | Packed-colour BitBlt, bulk replacement and constant fill |
+| 103 | Character scanning, font metrics, stop conditions and glyph drawing |
 | 110–112, 129–131 | Identity, class, free capacity, special-object array and explicit collection |
 | 121–122, 142 | Image name, display configuration and VM path |
 | 150–155, 157–158, 161 | File handles, positions, read/write, size and directory separator |
@@ -222,12 +223,19 @@ Float primitives also run through both native microinstruction engines.
 Microcode handles packed 32-bit bitmap words at depths 1, 2, 4, 8, 16 and 32.
 BitBlt implements Boolean rules 0–15 and transparent paint/mask rules 25–26.
 It clips coordinates, applies indexed colour maps and halftones, and preserves overlapping source data.
-Aligned Boolean copies and fills process whole words. Edges and mapped pixels use a pixel loop.
+Aligned Boolean copies and fills process whole words.
+Mapped 1-bit glyph copies to 8-bit destinations cache both colours and merge pixels before each destination word write.
+Other mapped pixels use the general pixel loop.
 Only changed words are written. Registered display updates publish through the external scanout device.
 The host converts published pixels for presentation; it does not read Forms or perform BitBlt.
 
-The optional primitive 103 character scanner fails into the archive's complete Smalltalk implementation.
-That guest code draws glyphs through primitive 96.
+Primitive 103 scans character runs in microcode and calls the shared BitBlt path for each glyph.
+It supports measurement without drawing, character stops, right-margin stops and end-of-run results.
+The scanner validates run metrics and raster operands before it draws the first glyph.
+Unsupported inputs retain the complete Smalltalk fallback.
+The accelerator requires a String, Array tables, SmallInteger coordinates, and identical argument and receiver stop tables.
+This last condition preserves the archived fallback's distinction between the table it tests and the table it returns from.
+
 Mouse, buttons, keyboard modifiers, clocks and semaphore delivery execute through the same microcode boundary path.
 Timer expiry clears its registration and signals once. A full keyboard ring does not block timer delivery.
 Allocation primitives preserve the registered low-space reserve and fail into guest code after collection cannot satisfy it.

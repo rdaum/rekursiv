@@ -21,10 +21,14 @@ fn microcode_retirements_and_object_state_match_rtl_through_allocation_and_gc() 
 
 /// Compare every retirement, including all object commands, under stalls.
 fn compare_rtl(f: &Fixture, force_gc: bool) -> Result<Machine> {
+    compare_rtl_with_memory(f, force_gc, 1024)
+}
+
+fn compare_rtl_with_memory(f: &Fixture, force_gc: bool, memory_words: usize) -> Result<Machine> {
     use rekursiv_asm::Service;
     use rekursiv_model::processor::Processor;
     use rekursiv_sim::{Harness, Timing};
-    let mut loaded = boot::squeak_source(&f.image, 1024, 16)?;
+    let mut loaded = boot::squeak_source(&f.image, memory_words, 16)?;
     let m = &mut loaded.machine;
     let filler = rekursiv_asm::Entry {
         reference: Word::reference(32000, false)?,
@@ -39,7 +43,7 @@ fn compare_rtl(f: &Fixture, force_gc: bool) -> Result<Machine> {
     if force_gc {
         m.objekt.service(Service::Install(filler), false);
     }
-    let runtime = rekursiv_sim::runtime_with_memory(1024)?;
+    let runtime = rekursiv_sim::runtime_with_memory(memory_words)?;
     let mut h = Harness::new(
         &runtime,
         Timing {
@@ -66,6 +70,7 @@ fn compare_rtl(f: &Fixture, force_gc: bool) -> Result<Machine> {
     h.load_processor(&image)?;
     h.start_processor(m.cpu.pc)?;
     let mut oracle = Processor::default();
+    let start_cycles = h.stats.cycles;
     h.run_processor_observed(&image, &mut oracle, 20_000_000, |h, expected| {
         let mut complete = false;
         for _ in 0..1_000_000 {
@@ -81,6 +86,14 @@ fn compare_rtl(f: &Fixture, force_gc: bool) -> Result<Machine> {
     })?;
     assert_eq!(m.cpu.rf[15], 1);
     assert_eq!(m.stats.collections, h.stats.collections);
+    let cycles = h.stats.cycles - start_cycles;
+    let instructions = m.stats.retired + m.stats.collector_retired;
+    eprintln!(
+        "RTL: {instructions} microinstructions ({} collector), {cycles} cycles, {:.2} cycles/instruction, {:.2} M instructions/s at 100 MHz; pager=16, RAM={memory_words}, request delay=2, memory latency=3, response stall=2, command gate=4/7 cycles",
+        m.stats.collector_retired,
+        cycles as f64 / instructions as f64,
+        100.0 * instructions as f64 / cycles as f64,
+    );
     Ok(loaded.machine)
 }
 
@@ -124,5 +137,24 @@ fn mapped_glyph_words_and_edges_match_rtl_under_memory_stalls() -> Result<()> {
             .collect::<Vec<_>>(),
         expected
     );
+    Ok(())
+}
+
+#[test]
+fn character_scanner_matches_rtl_through_refills_and_raster_calls() -> Result<()> {
+    let sf = super::scanner::fixture(1, 3, 5, true, None);
+    // Both character tables must fit in the resident semispace together.
+    // These fixtures deliberately collide in the 16-slot pager. Their CPI
+    // measures the stress test, not a desktop with the normal pager capacity.
+    for memory_words in [4096, 32768] {
+        let m = compare_rtl_with_memory(&sf.f, false, memory_words)?;
+        assert_eq!(m.objekt.state.vr[5], Word::signed(9002));
+        let fields = body(&m, target::reference(sf.scanner)?)?;
+        assert_eq!(fields[6], Word::signed(4));
+        assert_eq!(fields[17], Word::signed(2));
+        if memory_words == 32768 {
+            assert_eq!(m.stats.collections, 0);
+        }
+    }
     Ok(())
 }

@@ -23,6 +23,8 @@ Rust loads the image and observes execution; it does not implement Squeak primit
 | `bitmaps.uc` | Form validation, palette setup and atomic scanout upload |
 | `bitblt.uc` | Raster operands, clipping, rooted scratch frame and alias handling |
 | `pixels.uc`, `words.uc` | Pixel mapping, Boolean rules and aligned word operations |
+| `glyphs.uc` | Mapped monochrome glyphs with one write per destination word |
+| `scanner.uc` | Character runs, font metrics, stop conditions and BitBlt calls |
 | `refresh.uc` | Publish changed display/cursor regions through device registers |
 | `devices.uc`, `events.uc` | Clocks, mouse, keyboard buffering, timer and low-space delivery |
 | `files.uc` | Guest paths, handle validation and byte/word file transfers |
@@ -39,7 +41,7 @@ NUMERIK R8 holds the one-based guest byte IP; R9 holds SP, including temporaries
 R10 caches literal count, R11 method byte length, R12 stack floor and R14 frame capacity.
 R13 identifies the bytecode, except within allocating helpers that no longer need it.
 R15 holds a primitive failure continuation or a terminal status.
-References must stay in tagged VRs, object fields or live expression-stack slots across allocation and paging.
+References must stay in tagged VRs, root slots, object fields or live expression-stack slots across allocation and paging.
 
 `boundary` saves IP/SP, releases scratch roots and checks deferred process switches.
 `decoded` exposes a fetched byte in R0, with R8 advanced past it.
@@ -55,6 +57,11 @@ The [port document](../../docs/squeak-1.1.md) lists the implemented contract, li
 Root slots 0–2 hold the special-object array, initial context and identity-hash state.
 Slot 3 holds the cursor Form; slot 4 is a pending low-space flag.
 Slots 5–7 hold keyboard ring indices/count; 10–14 hold interrupt and low-space state.
+
+The character scanner uses slots 8–9 and 15–25 during a primitive call.
+These slots hold its arguments, counters and caller state while BitBlt uses the expression stack.
+The scanner clears these slots before return or fallback.
+
 Slots 26–31 hold the active context, input semaphore, timer semaphore, keyboard ring,
 low-space semaphore and idle flag. Raw counters carry no object references.
 The registered display lives in the guest special-object array.
@@ -62,3 +69,8 @@ The registered display lives in the guest special-object array.
 BitBlt saves IP/SP in its rooted expression-stack frame while R8/R9 traverse pixels.
 Shared validators use expression-stack slot zero for compact checks.
 They must not overwrite a caller's rooted Form or temporary object slot.
+
+Internal BitBlt callers enter `bb_enter` with the receiver in VR6 and a failure continuation in R15.
+CSTK[2] holds the success continuation. BitBlt preserves VR0–VR2, VR6–VR7 and the caller IP/SP.
+The scanner validates raster operands with a zero-width call before it draws any glyph.
+It restores the original width and sourceX after this call, including on failure.

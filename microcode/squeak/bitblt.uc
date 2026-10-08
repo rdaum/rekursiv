@@ -15,6 +15,12 @@
 primitive_bitblt:
     ra=1, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
+    d=2, csp=Bus
+    d=send_result, cstk=Bus
+    d=0, csp=Bus
+; Internal callers set CSTK[2] to their success continuation and R15 to their
+; failure continuation. VR6/7 and VR0..2 survive. Drawing owns ESTK[0..31].
+bb_enter:
     d=27, esp=Bus
     ra=8, estk=Alu
     d=28, esp=Bus
@@ -435,7 +441,10 @@ bb_success:
     d=Estk, r=Bus, rb=9, ldrb
     d=0, esp=Bus, sp=Bus
     d=0, r=Bus, rb=1, ldrb, estk=Bus
-    seq=Jump, brch=send_result
+    d=2, csp=Bus
+    cstk=Read
+    d=0, csp=Bus
+    d=Cstk, seq=Bus
 bb_failed:
     d=27, esp=Bus
     estk=Read

@@ -3,10 +3,8 @@
 ; Declared failures execute the guest method. Unimplemented required operations
 ; stop with status 8 at primitive_unimplemented, retaining number and operands.
 dispatch_primitive:
-    ; Optional character-scanner accelerator: the archived method contains the
-    ; complete Smalltalk loop, which calls our BitBlt primitive for each glyph.
     ra=0, s=Branch, brch=103, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
+    seq=ConditionalJump, cc=Zero, brch=primitive_scanner
     ra=0, s=Branch, brch=65, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=primitive_stream
     ra=0, s=Branch, brch=66, alu=Sub, cin=One, flags

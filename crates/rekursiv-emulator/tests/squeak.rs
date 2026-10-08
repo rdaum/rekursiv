@@ -79,3 +79,9 @@ mod devices;
 
 #[path = "squeak/collections.rs"]
 mod collections;
+
+#[path = "squeak/scanner.rs"]
+mod scanner;
+
+#[path = "squeak/scanner_archive.rs"]
+mod scanner_archive;
