@@ -111,3 +111,18 @@ fn packed_bitblt_word_and_edge_paths_match_rtl_under_memory_stalls() -> Result<(
     );
     Ok(())
 }
+
+#[test]
+fn mapped_glyph_words_and_edges_match_rtl_under_memory_stalls() -> Result<()> {
+    let (f, bits, expected) =
+        super::glyphs::fixture([1, 1, 9, 2, 30, 1, 0, 0, 37, 5], &[0x0ff00ff0, 0xf00ff00f]);
+    let m = compare_rtl(&f, false)?;
+    assert_eq!(
+        body(&m, target::reference(bits)?)?[2..]
+            .iter()
+            .map(|w| w.bits() as u32)
+            .collect::<Vec<_>>(),
+        expected
+    );
+    Ok(())
+}

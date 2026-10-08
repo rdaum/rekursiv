@@ -7,7 +7,7 @@ bb_row:
     d=0xffffffff, r=Bus, rb=0, ldrb
     read=Vr, vr=5
     d=Object, ldsym
-    d=NIL, seq=ConditionalJump, cc=Symbol, brch=bb_pixel
+    d=NIL, seq=ConditionalJump, cc=Symbol, brch=bb_row_ready
     d=6, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=2, ldrb
@@ -26,6 +26,11 @@ bb_halftone_row:
     d=Q, idx=Load
     mem=Read
     d=Object, r=Bus, rb=0, ldrb
+bb_row_ready:
+    d=31, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_glyph_row
 bb_pixel:
     d=5, esp=Bus
     estk=Read

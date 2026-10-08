@@ -71,6 +71,9 @@ mod floats;
 #[path = "squeak/graphics.rs"]
 mod graphics;
 
+#[path = "squeak/glyphs.rs"]
+mod glyphs;
+
 #[path = "squeak/devices.rs"]
 mod devices;
 
