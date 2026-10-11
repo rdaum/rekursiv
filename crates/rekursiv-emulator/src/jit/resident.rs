@@ -48,6 +48,7 @@ impl Emit<'_> {
             command,
             retired,
             object_commands,
+            guest_bytecodes,
             ..
         } = self.mode
         else {
@@ -66,7 +67,7 @@ impl Emit<'_> {
         let status = self.b.ins().ishl_imm_s(status, 48);
         let prefix = self.b.ins().iconst(
             I64,
-            (4 | (retired << 8) | ((object_commands + 1) << 56)) as i64,
+            super::block_result(4, retired, object_commands + 1, guest_bytecodes) as i64,
         );
         let result = self.b.ins().bor(status, prefix);
         self.b.ins().return_(&[result]);

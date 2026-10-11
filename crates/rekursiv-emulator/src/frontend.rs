@@ -59,6 +59,7 @@ impl Screen {
 pub struct Snapshot {
     pub screen: Screen,
     pub stats: Statistics,
+    pub guest_counter_enabled: bool,
     pub execution_time: Duration,
     pub running: bool,
     pub pc: u16,
@@ -69,6 +70,7 @@ impl Default for Snapshot {
         Self {
             screen: Screen::default(),
             stats: Statistics::default(),
+            guest_counter_enabled: false,
             execution_time: Duration::ZERO,
             running: true,
             pc: 0,
@@ -265,6 +267,7 @@ fn publish(
     *exchange.snapshot.lock().unwrap() = Snapshot {
         screen,
         stats: machine.stats,
+        guest_counter_enabled: machine.guest_counter_enabled(),
         execution_time: timing.execution,
         running,
         pc: machine.cpu.pc,
@@ -391,8 +394,10 @@ mod tests {
     fn worker_finishes_without_a_render_consumer_and_matches_direct_execution() -> Result<()> {
         let source = include_str!("../../../microcode/collection.uc");
         let mut direct = boot::microcode_with_pager(source, 512, 16)?.machine;
+        direct.enable_guest_counter(1)?;
         while !matches!(direct.step()?, Step::Halted | Step::Service(_)) {}
         let mut threaded = boot::microcode_with_pager(source, 512, 16)?.machine;
+        threaded.enable_guest_counter(1)?;
         threaded.enable_jit()?;
         let exchange = Exchange::default();
         let (_input, receive) = mpsc::sync_channel(1);
@@ -435,6 +440,8 @@ mod tests {
         assert!(!latest.running);
         assert_eq!(latest.pc, threaded.cpu.pc);
         assert_eq!(latest.stats.retired, threaded.stats.retired);
+        assert!(latest.guest_counter_enabled);
+        assert_eq!(latest.stats.guest_bytecodes, direct.stats.guest_bytecodes);
         Ok(())
     }
 

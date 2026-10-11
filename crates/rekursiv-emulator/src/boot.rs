@@ -154,6 +154,7 @@ fn load_smalltalk(
         let status = machine.objekt.service(service, false).response.status;
         ensure!(status == Status::Ok, "boot service failed: {status:?}");
     }
+    machine.enable_guest_counter(assembly.symbols["decoded"] as u16)?;
     Ok(Loaded {
         machine,
         symbols: assembly.symbols,

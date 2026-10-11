@@ -343,6 +343,7 @@ struct App<'a> {
     reported_at: Instant,
     reported_execution: Duration,
     reported_instructions: f64,
+    reported_bytecodes: u64,
     stopped: bool,
     waiting_since: Option<Instant>,
     timing: &'a mut WindowTiming,
@@ -376,6 +377,7 @@ impl<'a> App<'a> {
             reported_at: Instant::now(),
             reported_execution: Duration::ZERO,
             reported_instructions: 0.0,
+            reported_bytecodes: 0,
             stopped: false,
             waiting_since: None,
             timing,
@@ -465,10 +467,23 @@ impl<'a> App<'a> {
             } else {
                 0.0
             };
-            window.set_title(&format!(
-                "Rekursiv — {:.2} M microinstructions/s",
-                rate / 1_000_000.0
-            ));
+            let title = if snapshot.guest_counter_enabled {
+                let bytecodes = snapshot.stats.guest_bytecodes - self.reported_bytecodes;
+                let bytecode_rate = if seconds > 0.0 {
+                    bytecodes as f64 / seconds
+                } else {
+                    0.0
+                };
+                format!(
+                    "Rekursiv — {:.0} bytecodes/s · {:.2} M microinstructions/s",
+                    bytecode_rate,
+                    rate / 1_000_000.0
+                )
+            } else {
+                format!("Rekursiv — {:.2} M microinstructions/s", rate / 1_000_000.0)
+            };
+            window.set_title(&title);
+            self.reported_bytecodes = snapshot.stats.guest_bytecodes;
             self.reported_at = Instant::now();
             self.reported_execution = snapshot.execution_time;
             self.reported_instructions = instructions;

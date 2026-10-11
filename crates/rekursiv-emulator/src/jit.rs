@@ -26,10 +26,15 @@ mod resident;
 mod stack_fetch;
 pub(crate) use stack_fetch::StackFetchWrites;
 
-// Packed result: fault in bits 0..7, retired prefix in 8..23, OBJEKT
-// status in 48..55, and attempted object commands in 56..63. Codes 254
+// Packed result: fault in bits 0..7, retired prefix in 8..23, guest
+// dispatches in 24..31, OBJEKT status in 48..55, and attempted object
+// commands in 56..63. Codes 254
 // and 255 represent transfer fallback and a peripheral error respectively.
 // Blocks contain at most 32 instructions, so both counts fit their fields.
+const fn block_result(fault: u8, retired: u64, commands: u64, guest_bytecodes: u64) -> u64 {
+    fault as u64 | (retired << 8) | (guest_bytecodes << 24) | (commands << 56)
+}
+
 type RunBlock = unsafe extern "C" fn(
     *mut Processor,
     *mut ExternalDevice,
@@ -56,6 +61,7 @@ pub(crate) struct BlockPolicy {
 
 pub(crate) struct BlockResult {
     pub retired: u64,
+    pub guest_bytecodes: u64,
     pub fault: u8,
     pub error: Option<eyre::Report>,
     pub object_commands: u64,
@@ -179,6 +185,7 @@ impl Jit {
         self.stats.set(stats);
         Some(BlockResult {
             retired,
+            guest_bytecodes: (result >> 24) & 0xff,
             transfer,
             object_commands: result >> 56,
             object_status: (result as u8 == 4)

@@ -349,6 +349,14 @@ fn main() -> Result<()> {
         loaded.machine.stats.instructions_per_second(execution_time),
         loaded.machine.stats.instructions_per_second(elapsed),
     );
+    if loaded.machine.guest_counter_enabled() {
+        eprintln!(
+            "Guest VM: {} bytecodes dispatched; {:.0} bytecodes/s active ({:.0}/s elapsed)",
+            loaded.machine.stats.guest_bytecodes,
+            loaded.machine.stats.bytecodes_per_second(execution_time),
+            loaded.machine.stats.bytecodes_per_second(elapsed),
+        );
+    }
     if let Some(stats) = loaded.machine.jit_statistics() {
         eprintln!(
             "JIT execution: {} instructions in {} native blocks, {} single-word preparations, {} transfer fallbacks",

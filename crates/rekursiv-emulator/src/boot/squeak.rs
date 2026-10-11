@@ -93,6 +93,7 @@ pub fn squeak_source(
             "Squeak boot service failed: {status:?}"
         );
     }
+    machine.enable_guest_counter(assembly.symbols["decoded"] as u16)?;
     Ok(Loaded {
         machine,
         symbols: assembly.symbols,

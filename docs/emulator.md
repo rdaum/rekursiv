@@ -177,6 +177,25 @@ exclude image loading/conversion, JIT compilation, and final trace flush/frame e
 approximately once per second with the recent active execution rate. Headless runs with fixed memory
 and step counts provide repeatable workloads. Trace output affects throughput.
 
+Smalltalk and Squeak also report guest bytecodes/s in the window title and exit summary.
+The title shows the recent active rate; the exit summary shows total counts and both active and elapsed rates.
+A bytecode counts when the first control word at the guest's `decoded` boundary retires successfully.
+Operand bytes, collector instructions, and work inside primitives do not add bytecodes to this count.
+The count describes dispatches, not completed bytecodes or equal amounts of work across different bytecodes.
+
+The loader supplies the boundary address; the executor does not decode Smalltalk or Squeak opcodes.
+Native blocks encode the successful dispatch count in their existing return value.
+Accounting updates the total only for blocks that report a dispatch, without micro-PC polling or a per-instruction callback.
+Single-step and interpreter execution compare the configured address at successful mutator retirement.
+There is a small accounting cost; guest tracing is not required.
+
+A 500-million-step comparison against `6fca778` measured the counting cost on Cortex-X925 CPU 7.
+Five alternating Squeak pairs measured 72.92 million microinstructions/s without counting and 72.36 million/s with counting (−0.8%).
+Three Xerox pairs measured 64.12 million/s without counting and 64.37 million/s with counting (+0.4%).
+Run-to-run ranges overlap; these results do not establish zero overhead on every workload.
+All final processor counters and framebuffer hashes match their baselines.
+Repeated runs report 2,010,226 Squeak bytecodes and 2,477,743 Xerox bytecodes at that step budget.
+
 JIT startup reports its function count and compilation time separately.
 The exit report counts instructions retired in native blocks and individual native preparations.
 Preparations include attempts that later fault or enter collection, so they are not retirement counts.

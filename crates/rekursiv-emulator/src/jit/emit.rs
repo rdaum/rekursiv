@@ -19,6 +19,7 @@ pub(super) enum Mode {
         model: Value,
         command: usize,
         object_commands: u64,
+        guest_bytecodes: u64,
     },
 }
 pub(super) struct Emit<'a> {
@@ -110,10 +111,11 @@ impl Emit<'_> {
             Mode::Block {
                 retired,
                 object_commands,
+                guest_bytecodes,
                 ..
             } => self.b.ins().iconst(
                 I64,
-                ((retired << 8) | code as u64 | (object_commands << 56)) as i64,
+                super::block_result(code as u8, retired, object_commands, guest_bytecodes) as i64,
             ),
         };
         self.b.ins().return_(&[value]);

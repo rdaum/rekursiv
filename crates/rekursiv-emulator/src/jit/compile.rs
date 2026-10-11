@@ -12,7 +12,7 @@ use cranelift_module::{default_libcall_names, Linkage, Module};
 use std::collections::HashMap;
 
 impl Jit {
-    pub(crate) fn compile(image: &Image) -> Result<Self> {
+    pub(crate) fn compile(image: &Image, guest_dispatch_pc: Option<u16>) -> Result<Self> {
         let mut builder =
             JITBuilder::with_flags(&[("opt_level", "speed")], default_libcall_names())?;
         builder.symbol("rekursiv_jit_tick", tick as *const u8);
@@ -195,6 +195,7 @@ impl Jit {
                     model: params[4],
                     command: (&jit.commands[start]) as *const Command as usize,
                     object_commands: 0,
+                    guest_bytecodes: 0,
                 },
             };
             for (n, instruction) in code.iter().enumerate() {
@@ -206,12 +207,28 @@ impl Jit {
                     *command = (&jit.commands[start + n]) as *const Command as usize;
                 }
                 emit.instruction(&decode(instruction.unwrap()).unwrap());
+                // Encode the successful prefix in each exit constant. Native
+                // instructions need no PC comparison, callback, or increment.
+                if guest_dispatch_pc == Some((start + n) as u16) {
+                    if let Mode::Block {
+                        guest_bytecodes, ..
+                    } = &mut emit.mode
+                    {
+                        *guest_bytecodes += 1;
+                    }
+                }
             }
             let object_commands =
                 code.iter().flatten().filter(|i| i.object.is_some()).count() as u64;
+            let Mode::Block {
+                guest_bytecodes, ..
+            } = emit.mode
+            else {
+                unreachable!()
+            };
             let result = emit.b.ins().iconst(
                 I64,
-                ((code.len() as u64) << 8 | (object_commands << 56)) as i64,
+                block_result(0, code.len() as u64, object_commands, guest_bytecodes) as i64,
             );
             emit.b.ins().return_(&[result]);
             emit.b.seal_all_blocks();

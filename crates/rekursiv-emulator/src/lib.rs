@@ -40,6 +40,9 @@ pub enum Step {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Statistics {
     pub retired: u64,
+    /// Successful mutator retirements at the configured guest dispatch boundary.
+    /// Counts dispatched bytecodes, not completed methods or primitive work.
+    pub guest_bytecodes: u64,
     pub collector_retired: u64,
     pub collections: u64,
     pub object_commands: u64,
@@ -54,6 +57,15 @@ impl Statistics {
             0.0
         } else {
             (self.retired as f64 + self.collector_retired as f64) / elapsed.as_secs_f64()
+        }
+    }
+    /// Guest bytecodes dispatched per second, using the same time basis as the
+    /// microinstruction rate. Returns zero for a zero-length interval.
+    pub fn bytecodes_per_second(&self, elapsed: std::time::Duration) -> f64 {
+        if elapsed.is_zero() {
+            0.0
+        } else {
+            self.guest_bytecodes as f64 / elapsed.as_secs_f64()
         }
     }
 }
@@ -93,6 +105,7 @@ pub struct Machine {
     // execution entry points refresh them once, before borrowing cached code.
     // Collector decoding also checks its restricted instruction subset.
     code_dirty: bool,
+    guest_dispatch_pc: Option<u16>,
     scalar_code: Vec<Option<ScalarInstruction>>,
     recovery_code: Vec<Option<ScalarInstruction>>,
     jit: Option<jit::Jit>,
@@ -150,6 +163,7 @@ impl Machine {
             scalar_code,
             recovery_code,
             code_dirty: false,
+            guest_dispatch_pc: None,
             jit: None,
             cycle_estimate: None,
         })
@@ -184,10 +198,36 @@ impl Machine {
         }
         self.code_dirty = false;
     }
+    /// Count successful mutator retirements at a guest-defined dispatch boundary.
+    /// Configure before execution and JIT compilation. The loader supplies the
+    /// address; the executor has no knowledge of language opcodes or layouts.
+    pub fn enable_guest_counter(&mut self, pc: u16) -> Result<()> {
+        ensure!(
+            self.jit.is_none()
+                && self.stats.retired == 0
+                && self.stats.collector_retired == 0
+                && !self.recovering(),
+            "configure guest counting before execution and JIT compilation"
+        );
+        ensure!(
+            self.image
+                .code
+                .get(usize::from(pc))
+                .is_some_and(Option::is_some),
+            "guest dispatch boundary must name an installed control word"
+        );
+        self.guest_dispatch_pc = Some(pc);
+        Ok(())
+    }
+    /// Whether a loader configured a guest bytecode dispatch counter.
+    pub fn guest_counter_enabled(&self) -> bool {
+        self.guest_dispatch_pc.is_some()
+    }
+
     /// Compile the current control store. Modified or unsupported words keep
     /// using the interpreter. Repeating this call rebuilds the translation.
     pub fn enable_jit(&mut self) -> Result<usize> {
-        let compiled = jit::Jit::compile(&self.image)?;
+        let compiled = jit::Jit::compile(&self.image, self.guest_dispatch_pc)?;
         let functions = compiled.statistics().functions;
         self.jit = Some(compiled);
         Ok(functions)
@@ -311,6 +351,9 @@ impl Machine {
                         self.stats.collector_retired += result.retired;
                     } else {
                         self.stats.retired += result.retired;
+                        if result.guest_bytecodes != 0 {
+                            self.stats.guest_bytecodes += result.guest_bytecodes;
+                        }
                     }
                     self.stats.object_commands += result.object_commands;
                     self.estimate_local(result.retired);
@@ -526,11 +569,15 @@ impl Machine {
         } else {
             self.devices.tick_idle()?;
         }
+        let retired_pc = self.cpu.pc;
         next.commit(&mut self.cpu, &self.image, instruction);
         if self.recovering() {
             self.stats.collector_retired += 1;
         } else {
             self.stats.retired += 1;
+            if self.guest_dispatch_pc == Some(retired_pc) {
+                self.stats.guest_bytecodes += 1;
+            }
             self.retry_irq = None;
         }
         Ok(Step::Retired)
