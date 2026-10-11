@@ -42,9 +42,8 @@ scheduler_load:
     d=3, idx=Load
     mem=Read
     d=Object, ldvr, vr=3
-    read=Vr, vr=3
+    d=3, idx=Load, read=Vr, vr=3
     d=Object, page=Fetch
-    d=3, idx=Load
     mem=Read
     d=Object, ldvr, vr=4
     ra=0, s=Branch, brch=87, alu=Sub, cin=One, flags
@@ -118,9 +117,8 @@ scheduler_resume:
     d=31, r=Bus, rb=7, ldrb
     ra=7, d=Root, r=Bus, flags
     seq=ConditionalJump, cc=!Zero, brch=scheduler_chosen
-    read=Vr, vr=4
+    d=4, idx=Load, read=Vr, vr=4
     d=Object, page=Fetch
-    d=4, idx=Load
     mem=Read
     d=Object, ldsym, r=Bus, rb=3, ldrb, estk=Compact, compact=2
     d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bad_state
@@ -138,17 +136,15 @@ scheduler_resume:
 scheduler_enqueue:
     d=scheduler_result, r=Bus, rb=6, ldrb
 scheduler_sleep:
-    read=Vr, vr=5
+    d=4, idx=Load, read=Vr, vr=5
     d=Object, page=Fetch
-    d=4, idx=Load
     mem=Read
     d=Object, r=Bus, rb=2, ldrb
     ra=2, flags
     seq=ConditionalJump, cc=Zero, brch=bad_state
     seq=ConditionalJump, cc=Sign, brch=bad_state
-    read=Vr, vr=3
+    d=2, idx=Load, read=Vr, vr=3
     d=Object, page=Fetch
-    d=2, idx=Load
     mem=Read
     d=Object, ldvr, vr=7
     read=Vr, vr=7
@@ -165,9 +161,8 @@ scheduler_sleep:
 
 ; Tail-call queue helpers preserve R0, R1, R8/R9 and all caller numeric caches.
 queue_append:
-    read=Vr, vr=7
+    d=2, idx=Load, read=Vr, vr=7
     d=Object, page=Fetch
-    d=2, idx=Load
     mem=Read
     d=NIL, ldsym
     d=Object, seq=ConditionalJump, cc=Symbol, brch=queue_append_empty
@@ -187,44 +182,38 @@ queue_append_last:
     d=3, idx=Load
     read=Vr, vr=5
     d=Object, mem=Write
-    read=Vr, vr=5
+    d=2, idx=Load, read=Vr, vr=5
     d=Object, page=Fetch
-    d=2, idx=Load
     d=NIL, mem=Write
     d=5, idx=Load
     read=Vr, vr=7
     d=Object, mem=Write
     d=Register, ra=6, seq=Bus
 queue_remove:
-    read=Vr, vr=7
+    d=2, idx=Load, read=Vr, vr=7
     d=Object, page=Fetch
-    d=2, idx=Load
     mem=Read
     d=Object, ldvr, vr=5
-    read=Vr, vr=5
+    d=2, idx=Load, read=Vr, vr=5
     d=Object, page=Fetch
-    d=2, idx=Load
     mem=Read
     d=Object, ldsym
-    read=Vr, vr=7
+    d=2, idx=Load, read=Vr, vr=7
     d=Object, page=Fetch
-    d=2, idx=Load
     d=Symbol, mem=Write
     d=NIL, seq=ConditionalJump, cc=!Symbol, brch=queue_remove_link
     idx=Increment
     d=NIL, mem=Write
 queue_remove_link:
-    read=Vr, vr=5
+    d=2, idx=Load, read=Vr, vr=5
     d=Object, page=Fetch
-    d=2, idx=Load
     d=NIL, mem=Write
     d=5, idx=Load
     d=NIL, mem=Write
     d=Register, ra=6, seq=Bus
 scheduler_choose:
-    read=Vr, vr=3
+    d=2, idx=Load, read=Vr, vr=3
     d=Object, page=Fetch
-    d=2, idx=Load
     mem=Read
     d=Object, ldvr, vr=5
     read=Vr, vr=5
@@ -237,14 +226,12 @@ scheduler_choose_priority:
     ra=3, flags
     seq=ConditionalJump, cc=Zero, brch=scheduler_no_runnable
     read=Vr, vr=5
-    d=Object, page=Fetch
-    ra=3, s=Branch, brch=1, alu=Add, ldq
+    d=Object, page=Fetch, ra=3, s=Branch, brch=1, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=7
-    read=Vr, vr=7
+    d=2, idx=Load, read=Vr, vr=7
     d=Object, page=Fetch
-    d=2, idx=Load
     mem=Read
     d=NIL, ldsym
     d=Object, seq=ConditionalJump, cc=!Symbol, brch=scheduler_choose_found
@@ -296,24 +283,20 @@ check_process_switch:
     d=3, idx=Load
     mem=Read
     d=Object, ldvr, vr=3
-    read=Vr, vr=3
+    d=3, idx=Load, read=Vr, vr=3
     d=Object, page=Fetch
-    d=3, idx=Load
     mem=Read
     d=Object, ldvr, vr=4
-    read=Vr, vr=4
+    d=3, idx=Load, read=Vr, vr=4
     d=Object, page=Fetch
-    d=3, idx=Load
     read=Vr, vr=0
     d=Object, mem=Write
-    read=Vr, vr=3
+    d=3, idx=Load, read=Vr, vr=3
     d=Object, page=Fetch
-    d=3, idx=Load
     read=Vr, vr=7
     d=Object, mem=Write
-    read=Vr, vr=7
+    d=3, idx=Load, read=Vr, vr=7
     d=Object, page=Fetch
-    d=3, idx=Load
     mem=Read
     d=Object, ldvr, vr=0
     d=NIL, mem=Write

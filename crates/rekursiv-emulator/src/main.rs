@@ -19,6 +19,7 @@ fn main() -> Result<()> {
     let mut headless = false;
     let mut jit = true;
     let mut limit = None;
+    let mut bytecode_limit = None;
     let mut memory = None;
     let mut pager_entries = boot::DEFAULT_PAGER_ENTRIES;
     let mut trace = None;
@@ -90,6 +91,13 @@ fn main() -> Result<()> {
                         .parse::<u64>()?,
                 )
             }
+            "--bytecodes" => {
+                bytecode_limit = Some(
+                    args.next()
+                        .ok_or_else(|| eyre::eyre!("--bytecodes requires a count"))?
+                        .parse::<u64>()?,
+                );
+            }
             "--memory-words" => {
                 memory = Some(
                     args.next()
@@ -149,7 +157,7 @@ fn main() -> Result<()> {
                 )
             }
             "--help" | "-h" => {
-                println!("rekursiv-emulator [--microcode FILE | --smalltalk VirtualImage | --squeak Squeak1.1.image]\n  No program: run the interactive workstation microcode demo.\n  --headless          Run without a window (deterministic device clock)\n  --engine MODE       jit (default) or interpreter\n  --steps N           Stop after N steps (headless default 10000000; window unlimited)\n  --memory-words N    External RAM words (Smalltalk default 16777216; otherwise 131072)\n  --pager-entries N   Pager slots, power of two from 2 to 65536 (default 65536)\n  --estimate-cycles PROFILE  Estimate hardware cycles: sram or dram (example latencies)\n  --clock-mhz MHZ     Convert estimated cycles to time (default 100; does not pace execution)\n  --objekt-metrics   Report pager, transfer, allocation, and collector counters\n  --guest-trace FILE  Write bytecode and primitive boundaries\n  --trace FILE        Write retired micro-PCs and numeric state\n  --stop-at LABEL     Stop before the named microinstruction\n  --when Rn=VALUE     Stop only when this register also matches\n  --frame FILE        Save the last published display as a PPM\n  --frames N          Close after N presentation checks (smoke tests)\nClose the window to exit. Escape is delivered to the guest.");
+                println!("rekursiv-emulator [--microcode FILE | --smalltalk VirtualImage | --squeak Squeak1.1.image]\n  No program: run the interactive workstation microcode demo.\n  --headless          Run without a window (deterministic device clock)\n  --engine MODE       jit (default) or interpreter\n  --steps N           Stop after N steps (headless default 10000000; window unlimited)\n  --bytecodes N       Stop after exactly N guest dispatches (optional --steps cap)\n  --memory-words N    External RAM words (Smalltalk default 16777216; otherwise 131072)\n  --pager-entries N   Pager slots, power of two from 2 to 65536 (default 65536)\n  --estimate-cycles PROFILE  Estimate hardware cycles: sram or dram (example latencies)\n  --clock-mhz MHZ     Convert estimated cycles to time (default 100; does not pace execution)\n  --objekt-metrics   Report pager, transfer, allocation, and collector counters\n  --guest-trace FILE  Write bytecode and primitive boundaries\n  --trace FILE        Write retired micro-PCs and numeric state\n  --stop-at LABEL     Stop before the named microinstruction\n  --when Rn=VALUE     Stop only when this register also matches\n  --frame FILE        Save the last published display as a PPM\n  --frames N          Close after N presentation checks (smoke tests)\nClose the window to exit. Escape is delivered to the guest.");
                 return Ok(());
             }
             _ => bail!("unknown option {arg}; use --help"),
@@ -194,6 +202,10 @@ fn main() -> Result<()> {
         )?
     };
     loaded.machine.objekt_metrics_enabled = objekt_metrics;
+    ensure!(
+        bytecode_limit.is_none() || loaded.machine.guest_counter_enabled(),
+        "--bytecodes requires --smalltalk or --squeak"
+    );
     if let Some(config) = cycle_config {
         loaded.machine.enable_cycle_estimate(config)?;
     }
@@ -269,10 +281,15 @@ fn main() -> Result<()> {
         .map(std::fs::File::create)
         .transpose()?
         .map(std::io::BufWriter::new);
-    let limit = limit.unwrap_or(if headless { 10_000_000 } else { u64::MAX });
+    let limit = limit.unwrap_or(if headless && bytecode_limit.is_none() {
+        10_000_000
+    } else {
+        u64::MAX
+    });
     let mut steps = 0;
     let mut run = |machine: &mut rekursiv_emulator::Machine| -> Result<bool> {
         if steps >= limit
+            || bytecode_limit.is_some_and(|n| machine.stats.guest_bytecodes >= n)
             || (breakpoint == Some(machine.cpu.pc)
                 && when.is_none_or(|(register, value)| machine.cpu.rf[register] == value))
         {
@@ -281,7 +298,11 @@ fn main() -> Result<()> {
         if trace.is_none() && guest_trace.is_none() && breakpoint.is_none() {
             // Bound each batch so the window worker can service input and stop
             // requests promptly. Debugging keeps exact single-step observation.
-            steps += machine.run_steps((limit - steps).min(256))?;
+            // At most one dispatch retires per microinstruction. Restrict the
+            // tail batch to the remaining guest budget to stop exactly, without
+            // adding polling to native code or charging compilation to execution.
+            let remaining = bytecode_limit.map_or(u64::MAX, |n| n - machine.stats.guest_bytecodes);
+            steps += machine.run_steps((limit - steps).min(256).min(remaining))?;
             return Ok(!machine.cpu.halted && !machine.cpu.service);
         }
         if let Some(trace) = &mut guest_trace {

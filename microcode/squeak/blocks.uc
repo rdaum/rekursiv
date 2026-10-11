@@ -41,8 +41,7 @@ block_copy_home:
     d=Object, ldvr, vr=3
 block_copy_argument:
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym, r=Bus, rb=4, ldrb, estk=Compact, compact=2
@@ -131,8 +130,7 @@ block_copy_arguments:
     ra=2, flags
     seq=ConditionalJump, cc=!Zero, brch=block_array_argument
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, rb=1, alu=Sub, cin=One, ldq
+    d=Object, page=Fetch, ra=9, rb=1, alu=Sub, cin=One, ldq
     d=Q, r=Bus, s=Register, rb=7, alu=Add, ldq
     d=Q, r=Bus, s=Branch, brch=9, alu=Add, ldq
     d=Q, idx=Load
@@ -141,23 +139,20 @@ block_copy_arguments:
     seq=Jump, brch=block_store_argument
 block_array_argument:
     read=Vr, vr=3
-    d=Object, page=Fetch
-    ra=7, s=Branch, brch=3, alu=Add, ldq
+    d=Object, page=Fetch, ra=7, s=Branch, brch=3, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym
 block_store_argument:
     read=Vr, vr=5
-    d=Object, page=Fetch
-    ra=7, s=Branch, brch=9, alu=Add, ldq
+    d=Object, page=Fetch, ra=7, s=Branch, brch=9, alu=Add, ldq
     d=Q, idx=Load
     d=Symbol, mem=Write
     ra=7, s=Branch, brch=1, alu=Add, rb=7, ldrb
     seq=Jump, brch=block_copy_arguments
 block_activate:
-    read=Vr, vr=5
+    d=7, idx=Load, read=Vr, vr=5
     d=Object, page=Fetch
-    d=7, idx=Load
     mem=Read
     d=Object, ldsym
     d=4, idx=Load
@@ -190,8 +185,7 @@ cannot_return:
     d=Q, r=Bus, s=Branch, brch=2, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=bad_state
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=9, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=9, alu=Add, ldq
     d=Q, idx=Load
     read=Vr, vr=0
     d=Object, mem=Write
@@ -220,8 +214,7 @@ primitive_value_array:
     ra=4, flags
     seq=ConditionalJump, cc=Sign, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=3

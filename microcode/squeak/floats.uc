@@ -33,8 +33,7 @@ float_receiver_ready:
     ra=0, s=Branch, brch=51, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Sign, brch=float_unary
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym
@@ -179,8 +178,7 @@ float_signed_zero:
 
 float_scale_argument:
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym, r=Bus, rb=10, ldrb, estk=Compact, compact=2
@@ -192,8 +190,7 @@ float_scale_ready:
     ra=3, s=Bus, d=0x7fffffff, alu=And, rb=5, ldrb
     ra=2, rb=5, alu=Or, flags
     seq=ConditionalJump, cc=Zero, brch=float_allocate
-    ra=4, rb=10, alu=Add, ldq
-    d=Q, r=Bus, rb=4, ldrb
+    ra=10, rb=4, alu=Add, ldq, ldrb
     ra=3, s=Bus, d=0x800fffff, alu=And, rb=3, ldrb
     ra=4, s=Branch, brch=1023, alu=SubReverse, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=float_scale_infinity

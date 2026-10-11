@@ -8,11 +8,12 @@ pub const COLLECTOR_ENTRY: u16 = 8064;
 
 const SOURCES: &[&str] = &[
     include_str!("../../../../microcode/squeak/interpreter.uc"),
+    crate::interpreter::COMMON_SOURCE,
     include_str!("../../../../microcode/squeak/bytecodes.uc"),
     include_str!("../../../../microcode/squeak/sends.uc"),
     include_str!("../../../../microcode/squeak/blocks.uc"),
     include_str!("../../../../microcode/squeak/messages.uc"),
-    include_str!("../../../../microcode/squeak/primitives.uc"),
+    crate::interpreter::PRIMITIVES_SOURCE,
     include_str!("../../../../microcode/squeak/dispatch.uc"),
     include_str!("../../../../microcode/squeak/integers.uc"),
     include_str!("../../../../microcode/squeak/indexed.uc"),

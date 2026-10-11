@@ -57,8 +57,7 @@ bb_refresh_geometry:
     d=7, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=3, ldrb
-    ra=2, rb=3, alu=Add, ldq
-    d=Q, r=Bus, rb=3, ldrb
+    ra=2, rb=3, alu=Add, ldq, ldrb
     ra=2, rb=4, alu=MultiplyUnsigned
     alu=ProductLow, rb=9, ldrb
     ra=9, s=Branch, brch=27, alu=Rotate, rb=9, ldrb

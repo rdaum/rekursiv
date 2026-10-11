@@ -57,6 +57,37 @@ fn dispatch_counts_match_single_steps_at_every_batch_boundary() -> Result<()> {
 }
 
 #[test]
+fn conditional_traces_count_only_retired_paths() -> Result<()> {
+    // Both taken edges and fallthroughs occur; branches also update registers
+    // and flags simultaneously. Compare every possible observation boundary.
+    let source = "d=5, r=Bus, rb=1, ldrb\n\
+        loop: ra=1, s=Branch, brch=1, alu=Sub, cin=One, rb=1, ldrb, flags\n\
+        ra=2, s=Bus, d=1, alu=Add, rb=2, ldrb, seq=ConditionalJump, cc=Zero, brch=done\n\
+        ra=1, s=Branch, brch=2, alu=And, flags\n\
+        seq=ConditionalJump, cc=Zero, brch=loop\n\
+        d=17, r=Bus, rb=3, ldrb\n\
+        seq=Jump, brch=loop\n\
+        done: halt";
+    for pc in 0..7 {
+        for budget in [1, 2, 3, 7, 32, 256] {
+            let m = compare(source, pc, budget, 50)?;
+            assert!(m.cpu.halted);
+            assert_eq!(m.cpu.rf[2], 5);
+        }
+    }
+    // A fault beyond a fallthrough must retain the successful branch prefix.
+    for pc in 0..4 {
+        compare(
+            "ra=0, flags\nseq=ConditionalJump, cc=!Zero, brch=0\nd=7, r=Bus, ldrb\nmem=Read",
+            pc,
+            256,
+            1,
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
 fn faults_and_fetch_fallback_keep_only_the_successful_prefix() -> Result<()> {
     for source in [
         "d=7, r=Bus, ldrb\nd=8192, seq=Bus",

@@ -25,8 +25,7 @@ primitive_clock:
     ra=1, s=Branch, brch=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=4
@@ -45,23 +44,16 @@ clock_read_device:
     ; clock is the low 32 bits, including its specified unsigned rollover.
     ra=4, s=Bus, d=2177452800, alu=Add, rb=4, ldrb
 clock_store:
-    read=Vr, vr=4
+    d=2, idx=Load, read=Vr, vr=4
     d=Object, page=Fetch
-    d=2, idx=Load
     d=4, r=Bus, rb=3, ldrb
 clock_store_byte:
     ra=4, s=Branch, brch=255, alu=And, ldq
     d=Q, mem=Write
     ra=3, s=Branch, brch=1, alu=Sub, cin=One, rb=3, ldrb, flags
     seq=ConditionalJump, cc=Zero, brch=clock_result
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
+    ra=4, s=Branch, brch=24, alu=Rotate, rb=4, ldrb
+    ra=4, s=Bus, d=0x00ffffff, alu=And, rb=4, ldrb
     idx=Increment
     seq=Jump, brch=clock_store_byte
 clock_result:
@@ -85,8 +77,7 @@ primitive_timer:
     ra=1, s=Branch, brch=2, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=4
@@ -118,8 +109,7 @@ timer_read_byte:
     ra=2, shift=Left, rb=2, ldrb
     ra=2, shift=Left, rb=2, ldrb
     ra=2, shift=Left, rb=2, ldrb
-    ra=2, rb=4, alu=Or, ldq
-    d=Q, r=Bus, rb=2, ldrb
+    ra=4, rb=2, alu=Or, ldq, ldrb
     ra=3, s=Branch, brch=1, alu=Sub, cin=One, rb=3, ldrb, flags
     seq=ConditionalJump, cc=Zero, brch=timer_sample
     idx=Decrement

@@ -2,19 +2,20 @@
 
 These files form one program, assembled by `squeak::interpreter::assemble` in `rekursiv-smalltalk`.
 The loader supplies image-specific identities from the special-object array and the saved context.
-The processor executes ordinary LOGIK, NUMERIK and OBJEKT operations.
-Rust loads the image and observes execution; it does not implement Squeak primitives.
+The [shared core](../smalltalk-common/README.md) is concatenated with these profile files at
+assembly time. The processor executes ordinary LOGIK, NUMERIK and OBJEKT operations. Rust loads the
+image and observes execution; it does not implement Squeak primitives.
 
 | File | Responsibility |
 | --- | --- |
-| `interpreter.uc` | Context caches, field access, stack operations, branches and arithmetic fast paths |
+| `interpreter.uc`          | Layout constants, context caches, byte fetch, multiply overflow and integer range policy                                |
 | `bytecodes.uc` | Complete 256-entry NAM/map dispatch table |
-| `sends.uc` | Extended sends, stored-hash lookup, headers, quick returns, activation and return |
+| `sends.uc`                | Extended sends, stored-hash lookup, headers, quick returns and context construction                                     |
 | `blocks.uc` | Home contexts, block creation and evaluation, invalid returns |
 | `messages.uc` | Original two-field Message construction for `doesNotUnderstand:` |
 | `perform.uc` | Dynamic sends and argument-array expansion |
-| `dispatch.uc` | Squeak primitive numbers and explicit unsupported-operation stop |
-| `primitives.uc` | Identity and class results |
+| `dispatch.uc`             | Contiguous primitive jump table and explicit unsupported-operation stop                                                 |
+| `../smalltalk-common/`    | Shared dispatch, variables, stacks, branches, arithmetic kernels, argument transfer, returns and identity/class results |
 | `integers.uc` | Division, shifts, bit operations and Point creation |
 | `indexed.uc` | Indexed fields, Characters and unsigned 32-bit word conversion |
 | `storage.uc` | Allocation and the original identity-hash generator |

@@ -156,9 +156,8 @@ bb_forms_ready:
     d=1, esp=Bus
     estk=Read
     d=Estk, ldvr, vr=3
-    read=Vr, vr=3
+    d=2, idx=Load, read=Vr, vr=3
     d=Object, page=Fetch
-    d=2, idx=Load
     mem=Read
     d=Object, ldvr, vr=3
     d=0, r=Bus, rb=0, ldrb
@@ -253,8 +252,7 @@ bb_stage_row:
     d=6, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=2, ldrb
-    ra=2, rb=8, alu=Add, ldq
-    r=Q, rb=2, ldrb
+    ra=8, rb=2, alu=Add, ldq, ldrb
     d=15, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=3, ldrb
@@ -267,8 +265,7 @@ bb_stage_row:
     d=10, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=2, ldrb
-    ra=2, rb=8, alu=Add, ldq
-    r=Q, rb=2, ldrb
+    ra=8, rb=2, alu=Add, ldq, ldrb
     d=16, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=3, ldrb
@@ -317,14 +314,12 @@ bb_source_first:
     ra=11, s=Branch, brch=1, alu=Add, rb=11, ldrb
     d=bb_source_second, r=Bus, rb=7, ldrb, seq=Jump, brch=bb_source_word
 bb_source_second:
-    ra=12, rb=2, alu=Or, ldq
-    r=Q, rb=12, ldrb
+    ra=2, rb=12, alu=Or, ldq, ldrb
     ra=12, rb=13, alu=Rotate, ldq
     r=Q, s=Branch, brch=16, alu=Rotate, rb=12, ldrb
     ra=12, s=Bus, d=65535, alu=And, rb=12, ldrb
 bb_stage_mask:
-    ra=12, rb=14, alu=And, ldq
-    r=Q, rb=12, ldrb
+    ra=14, rb=12, alu=And, ldq, ldrb
     d=24, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=2, ldrb
@@ -415,9 +410,8 @@ bb_staged:
     d=1, esp=Bus
     estk=Read
     d=Estk, ldvr, vr=3
-    read=Vr, vr=3
+    d=2, idx=Load, read=Vr, vr=3
     d=Object, page=Fetch
-    d=2, idx=Load
     mem=Read
     d=Object, ldvr, vr=3
     d=21, esp=Bus
@@ -434,8 +428,7 @@ bb_merge_row:
     d=6, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=2, ldrb
-    ra=2, rb=8, alu=Add, ldq
-    r=Q, rb=2, ldrb
+    ra=8, rb=2, alu=Add, ldq, ldrb
     d=15, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=3, ldrb
@@ -555,8 +548,7 @@ bb_first_mask:
     d=26, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=6, ldrb
-    ra=5, rb=6, alu=And, ldq
-    r=Q, rb=5, ldrb
+    ra=6, rb=5, alu=And, ldq, ldrb
 bb_masked:
     ; D XOR ((new XOR D) AND writeMask) preserves untouched edge pixels.
     ra=4, rb=3, alu=Xor, ldq
@@ -703,8 +695,7 @@ bb_clip:
     ra=6, flags
     seq=ConditionalJump, cc=Zero, brch=bb_success
     seq=ConditionalJump, cc=Sign, brch=bb_success
-    ra=6, rb=5, alu=Add, ldq
-    r=Q, rb=6, ldrb
+    ra=5, rb=6, alu=Add, ldq, ldrb
     d=0, r=Bus, rb=12, ldrb
     ra=4, rb=13, ldrb
     ra=2, s=Branch, brch=0, alu=SubReverse, cin=One, rb=14, ldrb
@@ -749,10 +740,8 @@ bb_clip_finish:
     seq=ConditionalJump, cc=Zero, brch=bb_success
     seq=ConditionalJump, cc=Sign, brch=bb_success
     r=Q, rb=4, ldrb
-    ra=2, rb=12, alu=Add, ldq
-    r=Q, rb=2, ldrb
-    ra=3, rb=12, alu=Add, ldq
-    r=Q, rb=3, ldrb
+    ra=12, rb=2, alu=Add, ldq, ldrb
+    ra=12, rb=3, alu=Add, ldq, ldrb
     ra=0, s=Branch, brch=5, alu=Add, ldq
     d=Q, esp=Bus
     ra=2, estk=Alu

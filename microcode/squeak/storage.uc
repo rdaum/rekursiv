@@ -42,8 +42,7 @@ new_kind_ready:
     ra=10, rb=4, ldrb, seq=Jump, brch=new_allocate
 new_indexed_count:
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym
@@ -52,8 +51,7 @@ new_count_ready:
     ; Bound before adding fixed fields or computing the descriptor.
     ra=4, s=Bus, d=0xff000000, alu=And, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
-    ra=4, rb=10, alu=Add, ldq
-    d=Q, r=Bus, rb=4, ldrb
+    ra=10, rb=4, alu=Add, ldq, ldrb
 new_allocate:
     ; Current generic object size limit: 16777215 physical words, metadata included.
     ra=4, s=Bus, d=16777213, alu=SubReverse, cin=One, flags
@@ -147,9 +145,8 @@ primitive_hash:
     d=Estk, seq=ConditionalJump, cc=Symbol, brch=primitive_failed
     ra=1, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
-    read=Vr, vr=6
+    d=2, idx=Load, read=Vr, vr=6
     d=Object, page=Fetch
-    d=2, idx=Load
     mem=Read
     d=Object, r=Bus, s=Branch, brch=4095, alu=And, estk=Compact, compact=2
     d=Estk, ldvr, vr=5, seq=Jump, brch=send_result
@@ -173,8 +170,7 @@ primitive_new_method:
     ra=7, s=Branch, brch=12, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=3, ldsym, r=Bus, rb=7, ldrb, estk=Compact, compact=2

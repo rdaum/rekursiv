@@ -44,9 +44,8 @@ primitive_system_stop:
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=6
     d=Object, ldvr, vr=5
-    read=Vr, vr=0
+    d=3, idx=Load, read=Vr, vr=0
     d=Object, page=Fetch
-    d=3, idx=Load
     ra=8, estk=Compact, compact=2
     d=Estk, mem=Write
     idx=Increment

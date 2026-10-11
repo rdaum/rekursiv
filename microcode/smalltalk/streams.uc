@@ -27,9 +27,8 @@ stream_write_arity:
     ra=1, s=Branch, brch=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
 stream_fields:
-    read=Vr, vr=6
+    d=2, idx=Load, read=Vr, vr=6
     d=Object, page=Fetch
-    d=2, idx=Load
     mem=Read
     d=Object, ldvr, vr=4
     d=3, idx=Load
@@ -95,8 +94,7 @@ stream_length:
     d=Object, ldvr, vr=5, seq=Jump, brch=stream_advance
 stream_write:
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=5
@@ -118,14 +116,12 @@ stream_write:
     ra=6, s=Branch, brch=255, alu=SubReverse, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=primitive_failed
     read=Vr, vr=4
-    d=Object, page=Fetch
-    ra=2, s=Branch, brch=2, alu=Add, ldq
+    d=Object, page=Fetch, ra=2, s=Branch, brch=2, alu=Add, ldq
     d=Q, idx=Load
     d=Register, ra=6, mem=Write, seq=Jump, brch=stream_advance
 stream_store_pointer:
     read=Vr, vr=4
-    d=Object, page=Fetch
-    ra=2, s=Branch, brch=2, alu=Add, ldq
+    d=Object, page=Fetch, ra=2, s=Branch, brch=2, alu=Add, ldq
     d=Q, idx=Load
     read=Vr, vr=5
     d=Object, mem=Write

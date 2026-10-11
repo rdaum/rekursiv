@@ -52,8 +52,7 @@ primitive_semaphore_registration:
     ra=1, s=Branch, brch=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=3
@@ -87,8 +86,7 @@ primitive_timer:
     ra=1, s=Branch, brch=2, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym, r=Bus, rb=2, ldrb, estk=Compact, compact=2
@@ -144,8 +142,7 @@ primitive_interrupt_key:
     ra=1, s=Branch, brch=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym, r=Bus, rb=2, ldrb, estk=Compact, compact=2
@@ -202,8 +199,7 @@ primitive_low_space_threshold:
     ra=1, s=Branch, brch=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym

@@ -110,6 +110,7 @@ impl Jit {
                     nam,
                     map,
                     deferred_object: None,
+                    values: HashMap::new(),
                 };
                 emit.instruction(&decoded);
                 emit.b.seal_all_blocks();
@@ -121,7 +122,8 @@ impl Jit {
             };
             ids.push(Some((decoded.instruction, id)));
         }
-        // Basic blocks end at control flow or an architectural boundary. Each
+        // Traces follow conditional fallthrough, with a successful-prefix exit
+        // when the branch is taken. Other transfers end the trace. Each
         // suffix is an entry point because microcode can jump into a block.
         // Resident object operations may share a block. Machine joins older
         // replies before entry; run_block declines a block with a later barrier
@@ -152,7 +154,7 @@ impl Jit {
                     break;
                 }
                 code.push(*instruction);
-                if i.seq != Seq::Continue {
+                if !matches!(i.seq, Seq::Continue | Seq::ConditionalJump) {
                     break;
                 }
             }
@@ -186,6 +188,7 @@ impl Jit {
                 nam,
                 map,
                 deferred_object: None,
+                values: HashMap::new(),
                 mode: Mode::Block {
                     tick: tick_ref,
                     device: params[1],
@@ -216,6 +219,15 @@ impl Jit {
                     {
                         *guest_bytecodes += 1;
                     }
+                }
+                if instruction.unwrap().seq == Seq::ConditionalJump && n + 1 < code.len() {
+                    // The branch has retired, including its simultaneous
+                    // writes. A taken edge must return its exact successful
+                    // prefix, without executing or counting the fallthrough.
+                    if let Mode::Block { retired, .. } = &mut emit.mode {
+                        *retired = (n + 1) as u64;
+                    }
+                    emit.exit_unless_sequential((start + n + 1) as u16);
                 }
             }
             let object_commands =

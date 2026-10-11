@@ -170,9 +170,8 @@ bitmap_upload:
     ra=0, s=Branch, brch=20, alu=Add, rb=7, ldrb
     ra=7, d=0, io=Write
     ra=0, s=Branch, brch=28, alu=Add, rb=7, ldrb
-    read=Vr, vr=4
+    d=3, idx=Load, read=Vr, vr=4
     d=Object, page=Fetch
-    d=3, idx=Load
 bitmap_upload_word:
     mem=Read
     ra=7, d=Object, io=Write

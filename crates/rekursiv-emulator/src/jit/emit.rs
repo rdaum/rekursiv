@@ -5,6 +5,7 @@ use cranelift_codegen::ir::{condcodes::IntCC, types::*, InstBuilder, MemFlagsDat
 use cranelift_frontend::FunctionBuilder;
 use rekursiv_asm::processor::*;
 use rekursiv_model::processor::{Processor, CODE_WORDS};
+use std::collections::HashMap;
 use std::mem::offset_of;
 
 #[derive(Clone, Copy)]
@@ -33,6 +34,12 @@ pub(super) struct Emit<'a> {
     pub(super) nam: cranelift_codegen::ir::FuncRef,
     pub(super) map: cranelift_codegen::ir::FuncRef,
     pub(super) deferred_object: Option<Value>,
+    // Helpers receive Device, Model or Image, never Processor. Forward scalar
+    // CPU values across those calls explicitly: Cranelift cannot infer that
+    // the pointers are disjoint. Architectural stores still occur at EVERY
+    // retirement, so faults and trace exits expose the exact successful prefix.
+    // Dynamic stack-array stores cannot overlap these checked scalar offsets.
+    pub(super) values: HashMap<usize, Value>,
 }
 macro_rules! load {
     ($e:expr, $ty:expr, $field:ident) => {
@@ -54,11 +61,19 @@ impl Emit<'_> {
         self.b
             .ins()
             .store(MemFlagsData::trusted(), value, self.cpu, offset as i32);
+        self.values.insert(offset, value);
     }
     pub(super) fn load(&mut self, ty: Type, offset: usize) -> Value {
-        self.b
+        if let Some(&value) = self.values.get(&offset) {
+            debug_assert_eq!(self.b.func.dfg.value_type(value), ty);
+            return value;
+        }
+        let value = self
+            .b
             .ins()
-            .load(ty, MemFlagsData::trusted(), self.cpu, offset as i32)
+            .load(ty, MemFlagsData::trusted(), self.cpu, offset as i32);
+        self.values.insert(offset, value);
+        value
     }
     pub(super) fn wide(&mut self, value: Value) -> Value {
         self.b.ins().uextend(I64, value)
@@ -120,6 +135,14 @@ impl Emit<'_> {
         };
         self.b.ins().return_(&[value]);
         self.b.switch_to_block(good);
+    }
+    pub(super) fn exit_unless_sequential(&mut self, next: u16) {
+        let pc = load!(self, I16, pc);
+        let taken = self
+            .b
+            .ins()
+            .icmp_imm_s(IntCC::NotEqual, pc, i64::from(next));
+        self.reject(taken, 0);
     }
     pub(super) fn instruction(&mut self, decoded: &ScalarInstruction) {
         let i = decoded.instruction;

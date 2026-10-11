@@ -65,15 +65,13 @@ new_indexed_count:
     ra=7, flags
     seq=ConditionalJump, cc=Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym
     d=new_count_ready, r=Bus, rb=6, ldrb, seq=Jump, brch=positive_value
 new_count_ready:
-    ra=4, rb=10, alu=Add, ldq
-    d=Q, r=Bus, rb=4, ldrb
+    ra=10, rb=4, alu=Add, ldq, ldrb
 new_allocate:
     ra=4, s=Bus, d=0xffff0000, alu=And, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
@@ -132,8 +130,7 @@ primitive_new_method:
     ra=7, s=Bus, d=0x1000, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=3
@@ -189,8 +186,7 @@ primitive_become:
     d=Object, ldsym, r=Bus, estk=Compact, compact=2
     d=Estk, seq=ConditionalJump, cc=Symbol, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym, r=Bus, estk=Compact, compact=2

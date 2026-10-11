@@ -1,262 +1,262 @@
-; Squeak 1.1 primitive table, independent of the Xerox primitive numbers.
-; R0 primitive, R1 arity, VR6 receiver, VR7 method, R15 failure continuation.
-; Declared failures execute the guest method. Unimplemented required operations
-; stop with status 8 at primitive_unimplemented, retaining number and operands.
-dispatch_primitive:
-    ra=0, s=Branch, brch=103, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_scanner
-    ra=0, s=Branch, brch=65, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_stream
-    ra=0, s=Branch, brch=66, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_stream
-    ra=0, s=Branch, brch=67, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_stream
-    ra=0, s=Branch, brch=105, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_replace
-    ra=0, s=Branch, brch=145, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_fill
-    ra=0, s=Branch, brch=154, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_file_transfer
-    ra=0, s=Branch, brch=158, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_file_transfer
-    ra=0, s=Branch, brch=155, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_file_seek
-    ra=0, s=Branch, brch=121, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_path
-    ra=0, s=Branch, brch=142, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_path
-    ra=0, s=Branch, brch=161, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_directory_separator
-    ra=0, s=Branch, brch=153, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_file_open
-    ra=0, s=Branch, brch=150, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_file_control
-    ra=0, s=Branch, brch=151, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_file_control
-    ra=0, s=Branch, brch=152, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_file_control
-    ra=0, s=Branch, brch=157, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_file_control
-    ra=0, s=Branch, brch=112, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_free_bytes
-    ra=0, s=Branch, brch=130, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_free_bytes
-    ra=0, s=Branch, brch=131, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_free_bytes
-    ra=0, s=Branch, brch=125, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_low_space_threshold
-    ra=0, s=Branch, brch=96, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_bitblt
-    ra=0, s=Branch, brch=93, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_semaphore_registration
-    ra=0, s=Branch, brch=134, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_semaphore_registration
-    ra=0, s=Branch, brch=124, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_semaphore_registration
-    ra=0, s=Branch, brch=136, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_timer
-    ra=0, s=Branch, brch=133, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_interrupt_key
-    ra=0, s=Branch, brch=107, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_buttons
-    ra=0, s=Branch, brch=108, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_key
-    ra=0, s=Branch, brch=109, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_key
-    ra=0, s=Branch, brch=90, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_point_device
-    ra=0, s=Branch, brch=106, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_point_device
-    ra=0, s=Branch, brch=135, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_clock
-    ra=0, s=Branch, brch=137, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_clock
-    ra=0, s=Branch, brch=122, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=device_receiver_result
-    ra=0, s=Branch, brch=101, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_bitmap
-    ra=0, s=Branch, brch=102, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_bitmap
-    ra=0, s=Branch, brch=40, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=41, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=42, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=43, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=44, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=45, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=46, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=47, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=48, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=49, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=50, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=51, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=52, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=53, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=54, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_float
-    ra=0, s=Branch, brch=79, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_new_method
-    ra=0, s=Branch, brch=19, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Sign, brch=primitive_integer
-    ra=0, s=Branch, brch=60, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
-    ra=0, s=Branch, brch=61, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
-    ra=0, s=Branch, brch=62, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
-    ra=0, s=Branch, brch=63, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
-    ra=0, s=Branch, brch=64, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
-    ra=0, s=Branch, brch=68, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
-    ra=0, s=Branch, brch=69, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
-    ra=0, s=Branch, brch=73, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
-    ra=0, s=Branch, brch=74, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_indexed
-    ra=0, s=Branch, brch=70, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_new
-    ra=0, s=Branch, brch=71, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_new
-    ra=0, s=Branch, brch=75, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_hash
-    ra=0, s=Branch, brch=81, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_value
-    ra=0, s=Branch, brch=82, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_value_array
-    ra=0, s=Branch, brch=83, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_perform
-    ra=0, s=Branch, brch=84, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_perform
-    ra=0, s=Branch, brch=85, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_scheduler
-    ra=0, s=Branch, brch=86, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_scheduler
-    ra=0, s=Branch, brch=87, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_scheduler
-    ra=0, s=Branch, brch=88, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_scheduler
-    ra=0, s=Branch, brch=89, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_scheduler
-    ra=0, s=Branch, brch=110, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_identity
-    ra=0, s=Branch, brch=111, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_class
-    ra=0, s=Branch, brch=129, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_special_objects
-    ra=0, s=Branch, brch=20, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=21, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=22, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=23, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=24, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=25, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=26, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=27, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=28, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=29, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=30, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=31, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=32, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=33, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=34, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=35, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=36, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=37, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=38, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=39, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=72, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=76, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=80, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=91, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=92, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=94, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=98, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=99, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=100, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=115, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=116, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=117, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=118, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=119, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ; Reserved/disabled entries are explicit primitiveFail in the archived
-    ; initializePrimitiveTable. They must enter guest fallback, not stop the VM.
-    ra=0, s=Branch, brch=0, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=19, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=55, alu=Sub, cin=One, rb=2, ldrb
-    ra=2, s=Branch, brch=4, alu=SubReverse, cin=One, flags
-    seq=ConditionalJump, cc=Carry, brch=primitive_failed
-    ra=0, s=Branch, brch=120, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=123, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=126, alu=Sub, cin=One, rb=2, ldrb
-    ra=2, s=Branch, brch=1, alu=SubReverse, cin=One, flags
-    seq=ConditionalJump, cc=Carry, brch=primitive_failed
-    ra=0, s=Branch, brch=148, alu=Sub, cin=One, rb=2, ldrb
-    ra=2, s=Branch, brch=1, alu=SubReverse, cin=One, flags
-    seq=ConditionalJump, cc=Carry, brch=primitive_failed
-    ra=0, s=Branch, brch=163, alu=Sub, cin=One, rb=2, ldrb
-    ra=2, s=Branch, brch=5, alu=SubReverse, cin=One, flags
-    seq=ConditionalJump, cc=Carry, brch=primitive_failed
-    ra=0, s=Branch, brch=171, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=0, s=Branch, brch=179, alu=Sub, cin=One, rb=2, ldrb
-    ra=2, s=Branch, brch=70, alu=SubReverse, cin=One, flags
-    seq=ConditionalJump, cc=Carry, brch=primitive_failed
-    ra=0, s=Branch, brch=254, alu=Sub, cin=One, rb=2, ldrb
-    ra=2, s=Branch, brch=1, alu=SubReverse, cin=One, flags
-    seq=ConditionalJump, cc=Carry, brch=primitive_failed
+; Squeak primitive numbers. Reserved entries fail; unknown required
+; operations stop. Quick returns >=256 are handled before this table.
+primitive_table:
+    seq=Jump, brch=primitive_failed ; 0
+    seq=Jump, brch=primitive_integer ; 1
+    seq=Jump, brch=primitive_integer ; 2
+    seq=Jump, brch=primitive_integer ; 3
+    seq=Jump, brch=primitive_integer ; 4
+    seq=Jump, brch=primitive_integer ; 5
+    seq=Jump, brch=primitive_integer ; 6
+    seq=Jump, brch=primitive_integer ; 7
+    seq=Jump, brch=primitive_integer ; 8
+    seq=Jump, brch=primitive_integer ; 9
+    seq=Jump, brch=primitive_integer ; 10
+    seq=Jump, brch=primitive_integer ; 11
+    seq=Jump, brch=primitive_integer ; 12
+    seq=Jump, brch=primitive_integer ; 13
+    seq=Jump, brch=primitive_integer ; 14
+    seq=Jump, brch=primitive_integer ; 15
+    seq=Jump, brch=primitive_integer ; 16
+    seq=Jump, brch=primitive_integer ; 17
+    seq=Jump, brch=primitive_integer ; 18
+    seq=Jump, brch=primitive_failed ; 19
+    seq=Jump, brch=primitive_failed ; 20
+    seq=Jump, brch=primitive_failed ; 21
+    seq=Jump, brch=primitive_failed ; 22
+    seq=Jump, brch=primitive_failed ; 23
+    seq=Jump, brch=primitive_failed ; 24
+    seq=Jump, brch=primitive_failed ; 25
+    seq=Jump, brch=primitive_failed ; 26
+    seq=Jump, brch=primitive_failed ; 27
+    seq=Jump, brch=primitive_failed ; 28
+    seq=Jump, brch=primitive_failed ; 29
+    seq=Jump, brch=primitive_failed ; 30
+    seq=Jump, brch=primitive_failed ; 31
+    seq=Jump, brch=primitive_failed ; 32
+    seq=Jump, brch=primitive_failed ; 33
+    seq=Jump, brch=primitive_failed ; 34
+    seq=Jump, brch=primitive_failed ; 35
+    seq=Jump, brch=primitive_failed ; 36
+    seq=Jump, brch=primitive_failed ; 37
+    seq=Jump, brch=primitive_failed ; 38
+    seq=Jump, brch=primitive_failed ; 39
+    seq=Jump, brch=primitive_float ; 40
+    seq=Jump, brch=primitive_float ; 41
+    seq=Jump, brch=primitive_float ; 42
+    seq=Jump, brch=primitive_float ; 43
+    seq=Jump, brch=primitive_float ; 44
+    seq=Jump, brch=primitive_float ; 45
+    seq=Jump, brch=primitive_float ; 46
+    seq=Jump, brch=primitive_float ; 47
+    seq=Jump, brch=primitive_float ; 48
+    seq=Jump, brch=primitive_float ; 49
+    seq=Jump, brch=primitive_float ; 50
+    seq=Jump, brch=primitive_float ; 51
+    seq=Jump, brch=primitive_float ; 52
+    seq=Jump, brch=primitive_float ; 53
+    seq=Jump, brch=primitive_float ; 54
+    seq=Jump, brch=primitive_failed ; 55
+    seq=Jump, brch=primitive_failed ; 56
+    seq=Jump, brch=primitive_failed ; 57
+    seq=Jump, brch=primitive_failed ; 58
+    seq=Jump, brch=primitive_failed ; 59
+    seq=Jump, brch=primitive_indexed ; 60
+    seq=Jump, brch=primitive_indexed ; 61
+    seq=Jump, brch=primitive_indexed ; 62
+    seq=Jump, brch=primitive_indexed ; 63
+    seq=Jump, brch=primitive_indexed ; 64
+    seq=Jump, brch=primitive_stream ; 65
+    seq=Jump, brch=primitive_stream ; 66
+    seq=Jump, brch=primitive_stream ; 67
+    seq=Jump, brch=primitive_indexed ; 68
+    seq=Jump, brch=primitive_indexed ; 69
+    seq=Jump, brch=primitive_new ; 70
+    seq=Jump, brch=primitive_new ; 71
+    seq=Jump, brch=primitive_failed ; 72
+    seq=Jump, brch=primitive_indexed ; 73
+    seq=Jump, brch=primitive_indexed ; 74
+    seq=Jump, brch=primitive_hash ; 75
+    seq=Jump, brch=primitive_failed ; 76
+    seq=Jump, brch=primitive_unimplemented ; 77
+    seq=Jump, brch=primitive_unimplemented ; 78
+    seq=Jump, brch=primitive_new_method ; 79
+    seq=Jump, brch=primitive_failed ; 80
+    seq=Jump, brch=primitive_value ; 81
+    seq=Jump, brch=primitive_value_array ; 82
+    seq=Jump, brch=primitive_perform ; 83
+    seq=Jump, brch=primitive_perform ; 84
+    seq=Jump, brch=primitive_scheduler ; 85
+    seq=Jump, brch=primitive_scheduler ; 86
+    seq=Jump, brch=primitive_scheduler ; 87
+    seq=Jump, brch=primitive_scheduler ; 88
+    seq=Jump, brch=primitive_scheduler ; 89
+    seq=Jump, brch=primitive_point_device ; 90
+    seq=Jump, brch=primitive_failed ; 91
+    seq=Jump, brch=primitive_failed ; 92
+    seq=Jump, brch=primitive_semaphore_registration ; 93
+    seq=Jump, brch=primitive_failed ; 94
+    seq=Jump, brch=primitive_unimplemented ; 95
+    seq=Jump, brch=primitive_bitblt ; 96
+    seq=Jump, brch=primitive_unimplemented ; 97
+    seq=Jump, brch=primitive_failed ; 98
+    seq=Jump, brch=primitive_failed ; 99
+    seq=Jump, brch=primitive_failed ; 100
+    seq=Jump, brch=primitive_bitmap ; 101
+    seq=Jump, brch=primitive_bitmap ; 102
+    seq=Jump, brch=primitive_scanner ; 103
+    seq=Jump, brch=primitive_unimplemented ; 104
+    seq=Jump, brch=primitive_replace ; 105
+    seq=Jump, brch=primitive_point_device ; 106
+    seq=Jump, brch=primitive_buttons ; 107
+    seq=Jump, brch=primitive_key ; 108
+    seq=Jump, brch=primitive_key ; 109
+    seq=Jump, brch=primitive_identity ; 110
+    seq=Jump, brch=primitive_class ; 111
+    seq=Jump, brch=primitive_free_bytes ; 112
+    seq=Jump, brch=primitive_unimplemented ; 113
+    seq=Jump, brch=primitive_unimplemented ; 114
+    seq=Jump, brch=primitive_failed ; 115
+    seq=Jump, brch=primitive_failed ; 116
+    seq=Jump, brch=primitive_failed ; 117
+    seq=Jump, brch=primitive_failed ; 118
+    seq=Jump, brch=primitive_failed ; 119
+    seq=Jump, brch=primitive_failed ; 120
+    seq=Jump, brch=primitive_path ; 121
+    seq=Jump, brch=device_receiver_result ; 122
+    seq=Jump, brch=primitive_failed ; 123
+    seq=Jump, brch=primitive_semaphore_registration ; 124
+    seq=Jump, brch=primitive_low_space_threshold ; 125
+    seq=Jump, brch=primitive_failed ; 126
+    seq=Jump, brch=primitive_failed ; 127
+    seq=Jump, brch=primitive_unimplemented ; 128
+    seq=Jump, brch=primitive_special_objects ; 129
+    seq=Jump, brch=primitive_free_bytes ; 130
+    seq=Jump, brch=primitive_free_bytes ; 131
+    seq=Jump, brch=primitive_unimplemented ; 132
+    seq=Jump, brch=primitive_interrupt_key ; 133
+    seq=Jump, brch=primitive_semaphore_registration ; 134
+    seq=Jump, brch=primitive_clock ; 135
+    seq=Jump, brch=primitive_timer ; 136
+    seq=Jump, brch=primitive_clock ; 137
+    seq=Jump, brch=primitive_unimplemented ; 138
+    seq=Jump, brch=primitive_unimplemented ; 139
+    seq=Jump, brch=primitive_unimplemented ; 140
+    seq=Jump, brch=primitive_unimplemented ; 141
+    seq=Jump, brch=primitive_path ; 142
+    seq=Jump, brch=primitive_unimplemented ; 143
+    seq=Jump, brch=primitive_unimplemented ; 144
+    seq=Jump, brch=primitive_fill ; 145
+    seq=Jump, brch=primitive_unimplemented ; 146
+    seq=Jump, brch=primitive_unimplemented ; 147
+    seq=Jump, brch=primitive_failed ; 148
+    seq=Jump, brch=primitive_failed ; 149
+    seq=Jump, brch=primitive_file_control ; 150
+    seq=Jump, brch=primitive_file_control ; 151
+    seq=Jump, brch=primitive_file_control ; 152
+    seq=Jump, brch=primitive_file_open ; 153
+    seq=Jump, brch=primitive_file_transfer ; 154
+    seq=Jump, brch=primitive_file_seek ; 155
+    seq=Jump, brch=primitive_unimplemented ; 156
+    seq=Jump, brch=primitive_file_control ; 157
+    seq=Jump, brch=primitive_file_transfer ; 158
+    seq=Jump, brch=primitive_unimplemented ; 159
+    seq=Jump, brch=primitive_unimplemented ; 160
+    seq=Jump, brch=primitive_directory_separator ; 161
+    seq=Jump, brch=primitive_unimplemented ; 162
+    seq=Jump, brch=primitive_failed ; 163
+    seq=Jump, brch=primitive_failed ; 164
+    seq=Jump, brch=primitive_failed ; 165
+    seq=Jump, brch=primitive_failed ; 166
+    seq=Jump, brch=primitive_failed ; 167
+    seq=Jump, brch=primitive_failed ; 168
+    seq=Jump, brch=primitive_unimplemented ; 169
+    seq=Jump, brch=primitive_unimplemented ; 170
+    seq=Jump, brch=primitive_failed ; 171
+    seq=Jump, brch=primitive_unimplemented ; 172
+    seq=Jump, brch=primitive_unimplemented ; 173
+    seq=Jump, brch=primitive_unimplemented ; 174
+    seq=Jump, brch=primitive_unimplemented ; 175
+    seq=Jump, brch=primitive_unimplemented ; 176
+    seq=Jump, brch=primitive_unimplemented ; 177
+    seq=Jump, brch=primitive_unimplemented ; 178
+    seq=Jump, brch=primitive_failed ; 179
+    seq=Jump, brch=primitive_failed ; 180
+    seq=Jump, brch=primitive_failed ; 181
+    seq=Jump, brch=primitive_failed ; 182
+    seq=Jump, brch=primitive_failed ; 183
+    seq=Jump, brch=primitive_failed ; 184
+    seq=Jump, brch=primitive_failed ; 185
+    seq=Jump, brch=primitive_failed ; 186
+    seq=Jump, brch=primitive_failed ; 187
+    seq=Jump, brch=primitive_failed ; 188
+    seq=Jump, brch=primitive_failed ; 189
+    seq=Jump, brch=primitive_failed ; 190
+    seq=Jump, brch=primitive_failed ; 191
+    seq=Jump, brch=primitive_failed ; 192
+    seq=Jump, brch=primitive_failed ; 193
+    seq=Jump, brch=primitive_failed ; 194
+    seq=Jump, brch=primitive_failed ; 195
+    seq=Jump, brch=primitive_failed ; 196
+    seq=Jump, brch=primitive_failed ; 197
+    seq=Jump, brch=primitive_failed ; 198
+    seq=Jump, brch=primitive_failed ; 199
+    seq=Jump, brch=primitive_failed ; 200
+    seq=Jump, brch=primitive_failed ; 201
+    seq=Jump, brch=primitive_failed ; 202
+    seq=Jump, brch=primitive_failed ; 203
+    seq=Jump, brch=primitive_failed ; 204
+    seq=Jump, brch=primitive_failed ; 205
+    seq=Jump, brch=primitive_failed ; 206
+    seq=Jump, brch=primitive_failed ; 207
+    seq=Jump, brch=primitive_failed ; 208
+    seq=Jump, brch=primitive_failed ; 209
+    seq=Jump, brch=primitive_failed ; 210
+    seq=Jump, brch=primitive_failed ; 211
+    seq=Jump, brch=primitive_failed ; 212
+    seq=Jump, brch=primitive_failed ; 213
+    seq=Jump, brch=primitive_failed ; 214
+    seq=Jump, brch=primitive_failed ; 215
+    seq=Jump, brch=primitive_failed ; 216
+    seq=Jump, brch=primitive_failed ; 217
+    seq=Jump, brch=primitive_failed ; 218
+    seq=Jump, brch=primitive_failed ; 219
+    seq=Jump, brch=primitive_failed ; 220
+    seq=Jump, brch=primitive_failed ; 221
+    seq=Jump, brch=primitive_failed ; 222
+    seq=Jump, brch=primitive_failed ; 223
+    seq=Jump, brch=primitive_failed ; 224
+    seq=Jump, brch=primitive_failed ; 225
+    seq=Jump, brch=primitive_failed ; 226
+    seq=Jump, brch=primitive_failed ; 227
+    seq=Jump, brch=primitive_failed ; 228
+    seq=Jump, brch=primitive_failed ; 229
+    seq=Jump, brch=primitive_failed ; 230
+    seq=Jump, brch=primitive_failed ; 231
+    seq=Jump, brch=primitive_failed ; 232
+    seq=Jump, brch=primitive_failed ; 233
+    seq=Jump, brch=primitive_failed ; 234
+    seq=Jump, brch=primitive_failed ; 235
+    seq=Jump, brch=primitive_failed ; 236
+    seq=Jump, brch=primitive_failed ; 237
+    seq=Jump, brch=primitive_failed ; 238
+    seq=Jump, brch=primitive_failed ; 239
+    seq=Jump, brch=primitive_failed ; 240
+    seq=Jump, brch=primitive_failed ; 241
+    seq=Jump, brch=primitive_failed ; 242
+    seq=Jump, brch=primitive_failed ; 243
+    seq=Jump, brch=primitive_failed ; 244
+    seq=Jump, brch=primitive_failed ; 245
+    seq=Jump, brch=primitive_failed ; 246
+    seq=Jump, brch=primitive_failed ; 247
+    seq=Jump, brch=primitive_failed ; 248
+    seq=Jump, brch=primitive_failed ; 249
+    seq=Jump, brch=primitive_unimplemented ; 250
+    seq=Jump, brch=primitive_unimplemented ; 251
+    seq=Jump, brch=primitive_unimplemented ; 252
+    seq=Jump, brch=primitive_unimplemented ; 253
+    seq=Jump, brch=primitive_failed ; 254
+    seq=Jump, brch=primitive_failed ; 255
 primitive_unimplemented:
     d=8, r=Bus, rb=15, ldrb
     halt

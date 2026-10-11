@@ -83,8 +83,7 @@ identity_write_byte:
     ra=2, s=Branch, brch=24, alu=Rotate, rb=2, ldrb
     ra=2, s=Bus, d=0xffffff, alu=And, rb=2, ldrb
     ra=3, s=Branch, brch=24, alu=Rotate, rb=3, ldrb
-    ra=2, rb=3, alu=Or, ldq
-    d=Q, r=Bus, rb=2, ldrb
+    ra=3, rb=2, alu=Or, ldq, ldrb
     d=0, r=Bus, rb=3, ldrb
     ra=7, s=Branch, brch=1, alu=Add, rb=7, ldrb
     seq=Jump, brch=identity_write_byte
@@ -131,11 +130,9 @@ identity_read_byte:
     ra=2, s=Branch, brch=8, alu=Rotate, rb=2, ldrb
     ra=2, s=Branch, brch=255, alu=And, rb=5, ldrb
     ra=3, s=Branch, brch=8, alu=Rotate, rb=3, ldrb
-    ra=3, rb=5, alu=Or, ldq
-    d=Q, r=Bus, rb=3, ldrb
+    ra=5, rb=3, alu=Or, ldq, ldrb
     ra=2, s=Bus, d=0xffffff00, alu=And, rb=2, ldrb
-    ra=2, rb=4, alu=Or, ldq
-    d=Q, r=Bus, rb=2, ldrb
+    ra=4, rb=2, alu=Or, ldq, ldrb
     ra=7, s=Branch, brch=1, alu=Sub, cin=One, rb=7, ldrb
     ra=7, s=Branch, brch=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=identity_read_byte

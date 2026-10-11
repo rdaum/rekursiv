@@ -38,8 +38,7 @@ file_path_byte:
 
 file_image_name_store:
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=3
@@ -87,8 +86,7 @@ primitive_file_open:
     ra=1, s=Branch, brch=2, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym
@@ -236,8 +234,7 @@ primitive_file_control:
     ra=1, s=Branch, brch=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=3
@@ -275,8 +272,7 @@ primitive_file_seek:
     ra=1, s=Branch, brch=2, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym
@@ -284,8 +280,7 @@ primitive_file_seek:
 file_seek_position:
     ra=4, rb=10, ldrb
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=3
@@ -306,8 +301,7 @@ primitive_file_transfer:
     ra=1, s=Branch, brch=4, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym, r=Bus, rb=11, ldrb, estk=Compact, compact=2

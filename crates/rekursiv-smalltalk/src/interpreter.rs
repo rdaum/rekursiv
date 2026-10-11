@@ -6,7 +6,8 @@ pub const SOURCE: &str = include_str!("../../../microcode/smalltalk/interpreter.
 pub const SENDS_SOURCE: &str = include_str!("../../../microcode/smalltalk/sends.uc");
 pub const BLOCKS_SOURCE: &str = include_str!("../../../microcode/smalltalk/blocks.uc");
 pub const MESSAGES_SOURCE: &str = include_str!("../../../microcode/smalltalk/messages.uc");
-pub const PRIMITIVES_SOURCE: &str = include_str!("../../../microcode/smalltalk/primitives.uc");
+pub const PRIMITIVES_SOURCE: &str =
+    include_str!("../../../microcode/smalltalk-common/primitives.uc");
 pub const INTEGERS_SOURCE: &str = include_str!("../../../microcode/smalltalk/integers.uc");
 pub const INDEXED_SOURCE: &str = include_str!("../../../microcode/smalltalk/indexed.uc");
 pub const STORAGE_SOURCE: &str = include_str!("../../../microcode/smalltalk/storage.uc");
@@ -23,6 +24,27 @@ pub const STREAMS_SOURCE: &str = include_str!("../../../microcode/smalltalk/stre
 pub const FLOATS_SOURCE: &str = include_str!("../../../microcode/smalltalk/floats.uc");
 pub const IDENTITIES_SOURCE: &str = include_str!("../../../microcode/smalltalk/identities.uc");
 pub const BITBLT_SOURCE: &str = include_str!("../../../microcode/smalltalk/bitblt.uc");
+pub const COMMON_SOURCE: &str = concat!(
+    include_str!("../../../microcode/smalltalk-common/variables.uc"),
+    "\n",
+    include_str!("../../../microcode/smalltalk-common/returns.uc"),
+    "\n",
+    include_str!("../../../microcode/smalltalk-common/activation.uc"),
+    "\n",
+    include_str!("../../../microcode/smalltalk-common/boundary.uc"),
+    "\n",
+    include_str!("../../../microcode/smalltalk-common/stack.uc"),
+    "\n",
+    include_str!("../../../microcode/smalltalk-common/branches.uc"),
+    "\n",
+    include_str!("../../../microcode/smalltalk-common/compare.uc"),
+    "\n",
+    include_str!("../../../microcode/smalltalk-common/arithmetic.uc"),
+    "\n",
+    include_str!("../../../microcode/smalltalk-common/dispatch.uc"),
+    "\n",
+);
+pub const DISPATCH_SOURCE: &str = include_str!("../../../microcode/smalltalk/dispatch.uc");
 pub const COLLECTOR_ENTRY: u16 = 8064;
 
 /// Assemble a root activation whose context and object graph are already
@@ -34,7 +56,7 @@ pub fn assemble(active_context: Word) -> Result<text::Assembly> {
     }
     let assembly = text::assemble(
         &format!(
-            "{SOURCE}\n{SENDS_SOURCE}\n{BLOCKS_SOURCE}\n{MESSAGES_SOURCE}\n{PRIMITIVES_SOURCE}\n{INTEGERS_SOURCE}\n{INDEXED_SOURCE}\n{STORAGE_SOURCE}\n{PERFORM_SOURCE}\n{SCHEDULER_SOURCE}\n{EVENTS_SOURCE}\n{CLOCKS_SOURCE}\n{SYSTEM_SOURCE}\n{LOWSPACE_SOURCE}\n{INPUT_SOURCE}\n{BITMAPS_SOURCE}\n{DISK_SOURCE}\n{STREAMS_SOURCE}\n{FLOATS_SOURCE}\n{IDENTITIES_SOURCE}\n{BITBLT_SOURCE}"
+            "{SOURCE}\n{COMMON_SOURCE}\n{DISPATCH_SOURCE}\n{SENDS_SOURCE}\n{BLOCKS_SOURCE}\n{MESSAGES_SOURCE}\n{PRIMITIVES_SOURCE}\n{INTEGERS_SOURCE}\n{INDEXED_SOURCE}\n{STORAGE_SOURCE}\n{PERFORM_SOURCE}\n{SCHEDULER_SOURCE}\n{EVENTS_SOURCE}\n{CLOCKS_SOURCE}\n{SYSTEM_SOURCE}\n{LOWSPACE_SOURCE}\n{INPUT_SOURCE}\n{BITMAPS_SOURCE}\n{DISK_SOURCE}\n{STREAMS_SOURCE}\n{FLOATS_SOURCE}\n{IDENTITIES_SOURCE}\n{BITBLT_SOURCE}"
         ),
         0,
         &[("ACTIVE_CONTEXT", active_context.bits() as i64)],

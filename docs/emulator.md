@@ -156,6 +156,7 @@ does not read a live Form from the heap.
 | `--stop-at LABEL`   | Stop before an instruction at the named label                                     |
 | `--when Rn=VALUE`   | Add a register condition to `--stop-at`; decimal or `0x` hexadecimal              |
 | `--objekt-metrics`  | Collect and report detailed OBJEKT counters                                       |
+| `--bytecodes N`             | Stop after exactly N guest dispatches; optional `--steps` safety cap              |
 | `--estimate-cycles PROFILE` | Estimate hardware cycles with example `sram` or `dram` latencies             |
 | `--clock-mhz MHZ`   | Convert estimated cycles to time; default 100, requires `--estimate-cycles`       |
 | `--trace FILE`      | Record retired micro-PCs, collector mode, object result, and numeric registers    |
@@ -199,6 +200,90 @@ Repeated runs report 2,010,226 Squeak bytecodes and 2,477,743 Xerox bytecodes at
 JIT startup reports its function count and compilation time separately.
 The exit report counts instructions retired in native blocks and individual native preparations.
 Preparations include attempts that later fault or enter collection, so they are not retirement counts.
+
+### Compare microcode revisions
+
+Use equal guest-dispatch budgets when changing microcode. A fixed microinstruction budget would
+execute more guest work in the optimized version. `--bytecodes N` stops immediately after the Nth
+successful `decoded` retirement; `--steps` can supply a safety cap. Without an explicit step cap,
+the bytecode limit takes precedence over the usual headless default. It requires a Smalltalk or
+Squeak image.
+
+```sh
+python3 scripts/bench-guest.py --guest smalltalk \
+  --baseline-binary artifacts/dispatch-optimization/baseline-bytecodes \
+  --bytecodes 1000000 --runs 3 --cpu 7
+python3 scripts/bench-guest.py --guest squeak \
+  --baseline-binary artifacts/dispatch-optimization/baseline-bytecodes \
+  --bytecodes 1000000 --runs 1 --estimate-cycles sram
+```
+
+Both binaries must support `--bytecodes`. The optimization baseline is `79dd69a` with only that CLI
+stopping option backported, built in a separate checkout. The script alternates order, saves logs
+and frames, records binary/image hashes, and reports median native throughput and framebuffer
+agreement. With `--estimate-cycles sram|dram`, it also reports cycles per bytecode and estimated
+hardware speedup. Native execution rates with estimation enabled include observer cost and must not
+be compared with ordinary native rates.
+
+The shared [Smalltalk core](../microcode/smalltalk-common/README.md) replaces profile-specific
+copies of dispatch, variable access, stack operations, branches, arithmetic, returns and activation
+helpers. Each profile supplies layout constants and its own 256-entry primitive jump table. Tables
+live in the existing control store, leaving the bytecode NAM at 256 entries. Horizontal scheduling
+combines VR reads with index setup and Fetch with independent address calculations. Context
+initialization takes two loop words per slot instead of five; rotate/mask sequences replace repeated
+shifts. Context materialization and scheduler checks still occur at every bytecode boundary.
+
+At one million dispatches, with 16,777,216 RAM words and the default 65,536 pager entries, the
+hardware estimates are:
+
+| Guest      | Mutator words before → after | SRAM cycles/bytecode before → after | SRAM speedup | DRAM cycles/bytecode before → after | DRAM speedup |
+| ---------- | ---------------------------- | ----------------------------------- | ------------ | ----------------------------------- | ------------ |
+| Xerox V2   | 211,098,453 → 191,408,296    | 442.276 → 410.177                   | 1.078×       | 775.484 → 743.385                   | 1.043×       |
+| Squeak 1.1 | 302,647,526 → 278,027,528    | 573.023 → 536.161                   | 1.069×       | 982.681 → 945.818                   | 1.039×       |
+
+Cycle totals include collection: Squeak executes 14,658,506 collector instructions in both versions;
+Xerox executes none in this interval. Both profiles produce the same framebuffer hashes before and
+after. These are image-startup workloads, including drawing and primitive work, not steady-state
+bytecode microbenchmarks. Deterministic device time advances with microinstructions, so equal
+dispatch counts and matching frames alone do not establish equivalent guest execution. Guest traces
+and semantic/RTL regressions provide separate checks.
+
+These improvements do **not** achieve the 2× target. At a hypothetical 100 MHz, the SRAM estimates
+correspond to about 243,797 Xerox and 186,511 Squeak dispatches/s. They use the existing passive
+timing model's example memory latencies, exclude bootstrap, and are not measured board performance
+or evidence of attainable FPGA clock frequency. DRAM waits dilute the instruction savings. In the
+optimized Xerox SRAM run, object issue and blocking object waits still account for roughly 53% of
+cycles. Reducing transfers/handshakes and guest runtime work matters more for the next hardware pass
+than further host JIT tuning.
+
+The JIT separately follows conditional fallthroughs with exact successful-prefix exits and forwards
+scalar processor values across helper calls. Those changes improve host execution only; they do not
+contribute to the hardware cycle savings. Three alternating native pairs, pinned to CPU 7
+on an AMD Ryzen 9 7940HS with the same million-dispatch workloads and estimation disabled,
+measured these medians (loading and JIT compilation excluded):
+
+| Guest | Baseline dispatches/s | Optimized dispatches/s | Native speedup |
+| --- | ---: | ---: | ---: |
+| Xerox V2 | 237,811 | 268,999 | 1.131× |
+| Squeak 1.1 | 186,253 | 214,118 | 1.150× |
+
+Longer native traces increase one-time JIT compilation: the same runs measured median startup
+compilation of 2.326 → 4.193 seconds for Xerox and 2.359 → 4.484 seconds for Squeak.
+Short sessions can therefore take longer overall despite the improved active execution rate.
+
+Validation includes matching opcode/primitive histograms across the million-dispatch runs,
+identical guest traces through the first 1,000 dispatches for both images, the archived Xerox
+startup checkpoint and Squeak desktop/menu test, and native/interpreter/RTL comparisons for
+bytecodes, primitives, allocation, collection, graphics and memory stalls. All 90 selected Xerox
+send/primitive tests passed, including two rerun after rebuilding a stale Verilator cache.
+The timing suite also checks the estimator against RTL, including asynchronous overlap and GC.
+
+For a label/opcode/primitive work histogram without supplying any guest semantics:
+
+```sh
+cargo run --release -p rekursiv-emulator --example dispatch-profile -- \
+  smalltalk artifacts/st80/VirtualImage 1000000
+```
 
 ### Compare execution engines
 

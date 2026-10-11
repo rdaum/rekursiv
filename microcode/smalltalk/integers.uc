@@ -147,8 +147,7 @@ integer_shift_right_loop:
 ; Preserve both coordinates across allocation before writing their tagged fields.
 primitive_point:
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=3

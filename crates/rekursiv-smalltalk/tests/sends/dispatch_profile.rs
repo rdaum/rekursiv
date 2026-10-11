@@ -10,6 +10,12 @@ fn profile(
     assembly: &rekursiv_asm::text::Assembly,
 ) -> Result<(Machine, serde_json::Value)> {
     let pc = |name: &str| assembly.symbols[name] as u16;
+    // Older snapshots ended this helper at the first variable handler.
+    let fetch_end = assembly
+        .symbols
+        .get("fetch_byte_end")
+        .copied()
+        .unwrap_or(assembly.symbols["push_receiver_field"]) as u16;
     let mut phase = 5;
     let mut counts = [[0u64; 3]; 6];
     let mut opcodes = [0u64; 256];
@@ -35,7 +41,7 @@ fn profile(
             if address == pc("load_context") {
                 phase = 5;
             }
-            if (pc("cycle")..pc("push_receiver_field")).contains(&address) {
+            if [pc("cycle"), pc("decoded"), pc("fetch_byte")].contains(&address) {
                 phase = 4;
             }
             if address == pc("decoded") {
@@ -59,7 +65,7 @@ fn profile(
         }
         let dispatch = m.image().code[address as usize]
             .is_some_and(|i| i.seq == rekursiv_asm::processor::Seq::Dispatch);
-        let byte_return = (pc("fetch_byte")..pc("push_receiver_field")).contains(&address)
+        let byte_return = (pc("fetch_byte")..fetch_end).contains(&address)
             && m.image().code[address as usize]
                 .is_some_and(|i| i.seq == rekursiv_asm::processor::Seq::Bus);
         let before = [

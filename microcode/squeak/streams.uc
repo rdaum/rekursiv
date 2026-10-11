@@ -103,8 +103,7 @@ stream_length:
     d=Object, ldvr, vr=5, seq=Jump, brch=stream_advance
 stream_write:
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=5
@@ -128,14 +127,12 @@ stream_write:
     ra=6, s=Branch, brch=255, alu=SubReverse, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=primitive_failed
     read=Vr, vr=4
-    d=Object, page=Fetch
-    ra=2, s=Branch, brch=3, alu=Add, ldq
+    d=Object, page=Fetch, ra=2, s=Branch, brch=3, alu=Add, ldq
     d=Q, idx=Load
     d=Register, ra=6, mem=Write, seq=Jump, brch=stream_advance
 stream_store_pointer:
     read=Vr, vr=4
-    d=Object, page=Fetch
-    ra=2, s=Branch, brch=3, alu=Add, ldq
+    d=Object, page=Fetch, ra=2, s=Branch, brch=3, alu=Add, ldq
     d=Q, idx=Load
     read=Vr, vr=5
     d=Object, mem=Write
@@ -164,8 +161,7 @@ stream_numeric_valid:
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
 stream_numeric_store:
     read=Vr, vr=4
-    d=Object, page=Fetch
-    ra=2, s=Branch, brch=3, alu=Add, ldq
+    d=Object, page=Fetch, ra=2, s=Branch, brch=3, alu=Add, ldq
     d=Q, idx=Load
     d=Register, ra=4, mem=Write, seq=Jump, brch=stream_advance
 stream_numeric_result:

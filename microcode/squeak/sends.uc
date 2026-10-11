@@ -9,9 +9,8 @@
 send_literal:
     ra=13, s=Bus, d=15, alu=And, rb=4, ldrb
     ra=13, s=Branch, brch=208, alu=Sub, cin=One, shift=Right, rb=1, ldrb
-    ra=1, shift=Right, rb=1, ldrb
-    ra=1, shift=Right, rb=1, ldrb
-    ra=1, shift=Right, rb=1, ldrb
+    ra=1, s=Branch, brch=29, alu=Rotate, rb=1, ldrb
+    ra=1, s=Bus, d=0x1fffffff, alu=And, rb=1, ldrb
     d=0, r=Bus, rb=2, ldrb, seq=Jump, brch=send_selector
 send_single:
     ra=13, s=Branch, brch=133, alu=Sub, cin=One, flags
@@ -22,11 +21,8 @@ single_fetch:
     d=single_descriptor, r=Bus, rb=7, ldrb, seq=Jump, brch=fetch_byte
 single_descriptor:
     ra=0, s=Bus, d=31, alu=And, rb=4, ldrb
-    ra=0, shift=Right, rb=1, ldrb
-    ra=1, shift=Right, rb=1, ldrb
-    ra=1, shift=Right, rb=1, ldrb
-    ra=1, shift=Right, rb=1, ldrb
-    ra=1, shift=Right, rb=1, ldrb
+    ra=0, s=Branch, brch=27, alu=Rotate, rb=1, ldrb
+    ra=1, s=Bus, d=0x07ffffff, alu=And, rb=1, ldrb
     seq=Jump, brch=send_selector
 send_second:
     d=second_descriptor, r=Bus, rb=7, ldrb, seq=Jump, brch=fetch_byte
@@ -71,8 +67,7 @@ send_selector:
     seq=ConditionalJump, cc=Zero, brch=bad_state
     seq=ConditionalJump, cc=Sign, brch=bad_state
     read=Vr, vr=1
-    d=Object, page=Fetch
-    ra=4, s=Branch, brch=4, alu=Add, ldq
+    d=Object, page=Fetch, ra=4, s=Branch, brch=4, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=4
@@ -137,8 +132,7 @@ super_class:
     ra=10, flags
     seq=ConditionalJump, cc=Zero, brch=bad_state
     read=Vr, vr=1
-    d=Object, page=Fetch
-    ra=10, s=Branch, brch=3, alu=Add, ldq
+    d=Object, page=Fetch, ra=10, s=Branch, brch=3, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, page=Fetch
@@ -166,9 +160,8 @@ lookup_class:
     ra=3, rb=0, alu=And, flags
     seq=ConditionalJump, cc=!Zero, brch=bad_state
     ra=3, rb=5, ldrb
-    read=Vr, vr=4
+    d=2, idx=Load, read=Vr, vr=4
     d=Object, page=Fetch
-    d=2, idx=Load
     mem=Read
     d=Object, r=Bus, s=Branch, brch=4095, alu=And, ldq
     d=Q, r=Bus, s=Register, rb=0, alu=And, ldq
@@ -186,27 +179,23 @@ probe_selector:
     ra=5, s=Branch, brch=1, alu=Sub, cin=One, rb=5, ldrb, flags
     seq=ConditionalJump, cc=Zero, brch=superclass
     ra=4, s=Branch, brch=1, alu=Add, rb=4, ldrb
-    ra=4, rb=0, alu=And, ldq
-    d=Q, r=Bus, rb=4, ldrb, seq=Jump, brch=probe_selector
+    ra=0, rb=4, alu=And, ldq, ldrb, seq=Jump, brch=probe_selector
 superclass:
-    read=Vr, vr=3
+    d=3, idx=Load, read=Vr, vr=3
     d=Object, page=Fetch
-    d=3, idx=Load
     mem=Read
     d=Object, ldvr, vr=3, seq=Jump, brch=lookup_class
 method_found:
     d=4, idx=Load
     mem=Read
-    d=Object, page=Fetch
-    ra=4, s=Branch, brch=3, alu=Add, ldq
+    d=Object, page=Fetch, ra=4, s=Branch, brch=3, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=7
     ra=15, s=Branch, brch=perform_found, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=perform_found
-    read=Vr, vr=7
+    d=3, idx=Load, read=Vr, vr=7
     d=Object, page=Fetch
-    d=3, idx=Load
     mem=Read
     d=Object, r=Bus, rb=5, ldrb
     ; Header payload: primitive 0..8, literals 9..16, large frame 17,
@@ -253,9 +242,8 @@ quick_field:
 primitive_failed:
     d=Register, ra=15, seq=Bus
 primitive_method_failed:
-    read=Vr, vr=7
+    d=3, idx=Load, read=Vr, vr=7
     d=Object, page=Fetch
-    d=3, idx=Load
     mem=Read
     d=Object, r=Bus, rb=5, ldrb
     seq=Jump, brch=activate
@@ -277,13 +265,10 @@ context_size:
     seq=ConditionalJump, cc=Sign, brch=bad_state
     d=SPECIAL_10, page=Allocate, size=ra, ra=6, scan=1
     d=Object, ldvr, vr=5
-    d=3, r=Bus, rb=7, ldrb
+    d=3, r=Bus, rb=7, ldrb, idx=Load
 initialize_context:
-    d=Register, ra=7, idx=Load
-    d=NIL, mem=Write
-    ra=7, s=Branch, brch=1, alu=Add, rb=7, ldrb
-    ra=6, rb=7, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=!Sign, brch=initialize_context
+    d=NIL, mem=Write, idx=Increment, ra=6, rb=7, alu=Sub, cin=One, flags
+    ra=7, s=Bus, d=1, alu=Add, rb=7, ldrb, seq=ConditionalJump, cc=!Zero, brch=initialize_context
     d=1, idx=Load
     ra=6, s=Branch, brch=2, alu=Sub, cin=One, shift=Left, rb=0, ldrb
     ra=0, shift=Left, rb=0, ldrb
@@ -308,75 +293,4 @@ sends_hash_1:
     idx=Increment
     read=Vr, vr=7
     d=Object, mem=Write
-    d=0, r=Bus, rb=7, ldrb
-copy_argument:
-    read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, rb=1, alu=Sub, cin=One, ldq
-    d=Q, r=Bus, s=Register, rb=7, alu=Add, ldq
-    d=Q, r=Bus, s=Branch, brch=8, alu=Add, rb=6, ldrb
-    d=Register, ra=6, idx=Load
-    mem=Read
-    d=Object, ldsym
-    read=Vr, vr=5
-    d=Object, page=Fetch
-    ra=7, s=Branch, brch=8, alu=Add, ldq
-    d=Q, idx=Load
-    d=Symbol, mem=Write
-    read=Vr, vr=0
-    d=Object, page=Fetch
-    d=Register, ra=6, idx=Load
-    d=NIL, mem=Write
-    ra=7, s=Branch, brch=1, alu=Add, rb=7, ldrb
-    ra=1, rb=7, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=!Sign, brch=copy_argument
-    ra=9, rb=1, alu=Sub, cin=One, ldq
-    d=Q, r=Bus, s=Branch, brch=1, alu=Sub, cin=One, rb=9, ldrb
-    d=5, idx=Load
-    ra=9, estk=Compact, compact=2
-    d=Estk, mem=Write
-    read=Vr, vr=5
-    d=Object, ldvr, vr=0
-    d=0, r=Bus, rb=15, ldrb, seq=Jump, brch=load_context
-
-send_result:
-    read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=1, s=Branch, brch=1, alu=Add, rb=7, ldrb
-clear_send_operands:
-    ra=9, s=Branch, brch=8, alu=Add, ldq
-    d=Q, idx=Load
-    d=NIL, mem=Write
-    ra=9, s=Branch, brch=1, alu=Sub, cin=One, rb=9, ldrb
-    ra=7, s=Branch, brch=1, alu=Sub, cin=One, rb=7, ldrb, flags
-    seq=ConditionalJump, cc=!Zero, brch=clear_send_operands
-    d=16, r=Bus, rb=15, ldrb
-    d=5, idx=Load
-    ra=9, estk=Compact, compact=2
-    d=Estk, mem=Write
-    seq=Jump, brch=load_context
-
-return_sender:
-    d=Object, ldvr, vr=7
-    read=Vr, vr=7
-    d=Object, page=Fetch
-    d=4, idx=Load
-    mem=Read
-    d=NIL, ldsym
-    d=Object, seq=ConditionalJump, cc=Symbol, brch=cannot_return
-    read=Vr, vr=0
-    d=Object, page=Fetch
-    d=3, idx=Load
-    d=NIL, mem=Write
-    idx=Increment
-    d=NIL, mem=Write
-    read=Vr, vr=7
-    d=Object, ldvr, vr=0
-    d=16, r=Bus, rb=15, ldrb, seq=Jump, brch=load_context
-resume_result:
-    read=Vr, vr=5
-    d=Object, ldsym, seq=Jump, brch=push
-recursive_not_understood:
-    d=6, r=Bus, rb=15, ldrb, seq=Jump, brch=save_context
-argument_mismatch:
-    d=7, r=Bus, rb=15, ldrb, seq=Jump, brch=save_context
+    d=0, r=Bus, rb=7, ldrb, seq=Jump, brch=copy_argument

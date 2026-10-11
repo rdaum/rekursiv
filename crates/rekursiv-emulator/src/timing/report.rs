@@ -59,6 +59,14 @@ impl Estimate {
             }
         )
         .unwrap();
+        if stats.guest_bytecodes != 0 && total != 0 {
+            writeln!(out,
+                "  guest: {} bytecodes; {:.3} cycles/bytecode; {:.0} bytecodes/s at {clock_mhz:.3} MHz",
+                stats.guest_bytecodes,
+                total as f64 / stats.guest_bytecodes as f64,
+                clock_mhz * 1e6 * stats.guest_bytecodes as f64 / total as f64,
+            ).unwrap();
+        }
         writeln!(out, "  additive cycles: execute {}, object issue {}, blocking object wait {}, async join/wait {}, numeric wait {}, device wait {}, GC maintenance wait {}", c.execute, c.object_issue, c.object_wait, c.async_wait, c.numeric_wait, c.device_wait, c.maintenance_wait).unwrap();
         writeln!(
             out,

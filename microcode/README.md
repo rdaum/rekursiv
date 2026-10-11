@@ -44,7 +44,8 @@ cargo run --release --locked -p rekursiv-emulator
 cargo run --release --locked -p rekursiv-emulator -- --headless --steps 100000
 ```
 
-All 21 files under `smalltalk/` assemble together through
+The profile files under `smalltalk/` and the shared core under `smalltalk-common/` assemble together
+through
 [`rekursiv_smalltalk::interpreter::assemble`](../crates/rekursiv-smalltalk/src/interpreter.rs). They
 share one label namespace and the `NIL`, `FALSE`, `TRUE` constants. The loader supplies
 `ACTIVE_CONTEXT`, loads the converted graph while halted, configures compact code 2 as SmallInteger,
@@ -57,7 +58,7 @@ collector. A single primitive file cannot be run with `--microcode` independentl
 Each executable line is one 256-bit horizontal microinstruction. Commas describe simultaneous
 controls, not a sequence of statements. Labels and directives consume no instruction slots. Comments
 begin with `;`, `#`, or `//`. The assembler has no include or macro facility; the Rust loader
-concatenates Smalltalk sources.
+concatenates profile and shared sources, with `.equ` layout constants selecting the guest layout.
 
 | Idiom                                                         | Meaning and dependency                                                                      |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -96,15 +97,16 @@ recovery rules.
 
 ## Smalltalk source map
 
-Primitive numbers are guest method metadata. They are dispatched by `sends.uc`, not interpreted by
-devices. Bytecode numbers are a different namespace. All ordinary primitive results use VR5 and
-`send_result` unless the module documents activation, dynamic sending, or stopping instead.
+Primitive numbers are guest method metadata. Their profile tables in `dispatch.uc` use the shared
+constant-time dispatcher, rather than being interpreted by devices. Bytecode numbers are a different
+namespace. All ordinary primitive results use VR5 and `send_result` unless the module documents
+activation, dynamic sending, or stopping instead.
 
 | Module                                     | Entries and responsibility                                                                                                              |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| [interpreter.uc](smalltalk/interpreter.uc) | `start`, `load_context`, `cycle`; byte fetch, variables, evaluation stack, branches, integer fast paths, returns, NAM/CSMAP tables.     |
-| [sends.uc](smalltalk/sends.uc)             | `send_prepare`, `lookup_class`, `activate`, `send_result`, `return_sender`; method lookup, primitive dispatch, contexts and resumption. |
-| [primitives.uc](smalltalk/primitives.uc)   | 110 identity, 111 class; shared `primitive_true`/`primitive_false` exits.                                                               |
+| [interpreter.uc](smalltalk/interpreter.uc)             | `start`, `load_context`; byte fetch, numeric range policy, layout constants and NAM/CSMAP tables.                   |
+| [sends.uc](smalltalk/sends.uc)                         | `send_prepare`, `lookup_class`, `activate`; method lookup, header decoding and context construction.                |
+| [common primitives.uc](smalltalk-common/primitives.uc) | 110 identity, 111 class; shared `primitive_true`/`primitive_false` exits.                                           |
 | [integers.uc](smalltalk/integers.uc)       | 1–18 arithmetic, comparisons, division variants, bit operations, shifts and Point construction.                                         |
 | [floats.uc](smalltalk/floats.uc)           | 40–54 Float conversion, binary32 arithmetic/comparison, truncation, fraction, exponent and scaling.                                     |
 | [indexed.uc](smalltalk/indexed.uc)         | 60–64 indexed/String access and size, 68–69 method header/literals, 73–74 instance fields; unsigned 16-bit helpers.                     |
@@ -128,6 +130,11 @@ Unsupported primitive numbers execute their original guest method body. This inc
 transfer primitive 128; snapshot target registration does not implement saving an image. The
 [primitive inventory](../docs/smalltalk-primitives.md) distinguishes implemented operations from
 guest fallback and records the coverage of original-image tests.
+
+The [shared core](smalltalk-common/README.md) supplies boundary/bytecode dispatch, variable access,
+stacks, branches, arithmetic dispatch/comparisons, argument transfer, returns, and identity/class
+primitives for both Xerox and Squeak. Their primitive tables and numeric ranges remain
+profile-specific. The shared routines use ordinary control words and the same RTL instruction set.
 
 ## Values and physical layouts
 

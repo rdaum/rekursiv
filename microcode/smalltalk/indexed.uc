@@ -96,8 +96,7 @@ indexed_length_ready:
     ; Save fixed count in R11 while the positive-integer helper uses R7.
     ra=7, rb=11, ldrb
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, rb=10, alu=Sub, cin=One, ldq
+    d=Object, page=Fetch, ra=9, rb=10, alu=Sub, cin=One, ldq
     d=Q, r=Bus, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
@@ -106,8 +105,7 @@ indexed_length_ready:
 indexed_index_ready:
     ra=4, flags
     seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=4, rb=11, alu=Add, ldq
-    d=Q, r=Bus, rb=4, ldrb
+    ra=11, rb=4, alu=Add, ldq, ldrb
     ra=3, rb=4, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=primitive_failed
     ; Version 2 CompiledMethod headers are immutable after newMethod:header:.
@@ -124,9 +122,8 @@ indexed_translate:
     ; CompiledMethod bytecodes retain guest byte offsets. The reserved prefix
     ; has no byte view in this port: literals can contain 37-bit identities.
     ; objectAt: reads headers/literals; objectAt:put: replaces only literals.
-    read=Vr, vr=6
+    d=2, idx=Load, read=Vr, vr=6
     d=Object, page=Fetch
-    d=2, idx=Load
     mem=Read
     d=Object, r=Bus, s=Branch, brch=63, alu=And, rb=7, ldrb
     ra=7, shift=Left, rb=6, ldrb
@@ -167,8 +164,7 @@ indexed_size:
 ; Do not write receiver storage until all type, index, and value checks finish.
 indexed_write:
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=3
@@ -284,13 +280,7 @@ positive_allocate:
     ra=4, s=Branch, brch=255, alu=And, ldq
     d=Q, mem=Write
     idx=Increment
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
-    ra=4, shift=Right, rb=4, ldrb
+    ra=4, s=Branch, brch=24, alu=Rotate, rb=4, ldrb
+    ra=4, s=Bus, d=0x00ffffff, alu=And, rb=4, ldrb
     d=Register, ra=4, mem=Write
     seq=Jump, brch=send_result

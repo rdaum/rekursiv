@@ -50,6 +50,11 @@
 .equ NIL = 0xa000000001
 .equ FALSE = 0xa000000002
 .equ TRUE = 0xa000000003
+.equ FIELD_BASE = 2
+.equ TEMP_ROTATE = 25
+.equ TEMP_MASK = 31
+.equ CTX_STACK = 7
+.equ CTX_IP = 3
 .entry start
 .root 26, ACTIVE_CONTEXT
 .root 27, NIL ; input semaphore
@@ -64,10 +69,9 @@ start:
 load_context:
     read=Vr, vr=0
     d=Object, page=Fetch
-    read=Size
+    d=3, idx=Load, read=Size
     d=Object, r=Bus, s=Branch, brch=7, alu=Sub, cin=One, rb=14, ldrb, flags
     seq=ConditionalJump, cc=Sign, brch=bad_state
-    d=3, idx=Load
     mem=Read
     d=Object, ldsym, r=Bus, rb=8, ldrb, estk=Compact, compact=2
     d=Estk, seq=ConditionalJump, cc=!Symbol, brch=bad_state
@@ -79,17 +83,14 @@ load_context:
 ; VR3 is the home MethodContext. Its method and receiver supply block caches
 ; as well as method caches. Descriptor length is guest bytes, not RAM words.
 context_home_ready:
-    read=Vr, vr=3
+    d=5, idx=Load, read=Vr, vr=3
     d=Object, page=Fetch
-    d=5, idx=Load
-    mem=Read
+    d=2, mem=Read, idx=Step
     d=Object, ldvr, vr=1
-    d=7, idx=Load
     mem=Read
     d=Object, ldvr, vr=2
-    read=Vr, vr=1
+    d=1, idx=Load, read=Vr, vr=1
     d=Object, page=Fetch
-    d=1, idx=Load
     mem=Read
     d=Object, r=Bus, s=Branch, brch=3, alu=And, rb=0, ldrb
     ra=0, s=Branch, brch=3, alu=Sub, cin=One, flags
@@ -120,38 +121,7 @@ context_stack_floor:
     seq=ConditionalJump, cc=Zero, brch=resume_result
     seq=Jump, brch=boundary
 
-; IP/SP materialization is also used on terminal paths. The writes use compact
-; SmallIntegers. Descriptor word one remains raw and is never a guest field.
-boundary:
-    ; Release completed-op scratch roots after their values reach guest fields.
-    d=0, ldvr, vr=3
-    d=0, ldvr, vr=4
-    d=0, ldvr, vr=5
-    d=0, ldvr, vr=6
-    d=0, ldvr, vr=7, r=Bus, rb=15, ldrb
-save_context:
-    read=Vr, vr=0
-    d=Object, page=Fetch
-    ; IDX and bus consumers use old operands. Write the old compact IP at
-    ; component 3 while advancing IDX and constructing the compact SP.
-    ; The final write computes the stop condition only after successful I/O.
-    d=3, idx=Load, ra=8, estk=Compact, compact=2
-    d=Estk, mem=Write, idx=Increment, ra=9, estk=Compact, compact=2
-    d=Estk, mem=Write, ra=15, flags
-    seq=ConditionalJump, cc=!Zero, brch=stopped
-    seq=Jump, brch=check_process_switch
-; Tests observe this boundary without changing machine state or supplying work.
-cycle:
-    d=decoded, r=Bus, rb=7, ldrb, seq=Jump, brch=fetch_byte
-decoded:
-    ; Register write and APC both consume the fetched byte in old R0.
-    d=Register, ra=0, rb=13, ldrb, apc=Bus
-    fetch=Nam
-    fetch=Map
-    seq=Dispatch
-
-; Return byte in r0. Conversion places each byte in a raw component. The
-; physical component is guest IP - literal count; guest offsets stay unchanged.
+; Return a byte in R0 through R7. Physical component is IP - literal count.
 fetch_byte:
     ra=10, shift=Left, rb=0, ldrb
     ra=0, s=Branch, brch=3, alu=Add, rb=0, ldrb
@@ -169,311 +139,8 @@ fetch_byte:
     ; literal supplies zero: 0 + R8 + carry increments IP during the return.
     d=Register, ra=7, r=Branch, brch=0, s=Register, rb=8, alu=Add, cin=One, ldrb, seq=Bus
 
-; These four push families share generic field access. Kind 3 dereferences
-; the literal Association's value (guest field 1).
-push_receiver_field:
-    ra=13, s=Bus, d=15, alu=And, rb=1, ldrb
-    d=0, r=Bus, rb=2, ldrb
-    seq=Jump, brch=push_variable
-push_temporary:
-    ra=13, s=Bus, d=15, alu=And, rb=1, ldrb
-    d=1, r=Bus, rb=2, ldrb
-    seq=Jump, brch=push_variable
-push_literal:
-    ra=13, s=Bus, d=31, alu=And, rb=1, ldrb
-    d=2, r=Bus, rb=2, ldrb
-    seq=Jump, brch=push_variable
-push_association:
-    ra=13, s=Bus, d=31, alu=And, rb=1, ldrb
-    d=3, r=Bus, rb=2, ldrb
-push_variable:
-    d=0, r=Bus, rb=3, ldrb
-    seq=Jump, brch=variable
-store_receiver:
-    ra=13, s=Bus, d=7, alu=And, rb=1, ldrb
-    d=0, r=Bus, rb=2, ldrb
-    d=2, r=Bus, rb=3, ldrb
-    seq=Jump, brch=variable
-store_temporary:
-    ra=13, s=Bus, d=7, alu=And, rb=1, ldrb
-    d=1, r=Bus, rb=2, ldrb
-    d=2, r=Bus, rb=3, ldrb
-    seq=Jump, brch=variable
-; Opcodes 128/129/130 become mode 0 push / 1 store / 2 store-and-pop.
-; The extension byte supplies kind in bits 6..7 and zero-based index in 0..5.
-extended:
-    ra=13, s=Branch, brch=128, alu=Sub, cin=One, rb=3, ldrb
-    d=extended_decoded, r=Bus, rb=7, ldrb, seq=Jump, brch=fetch_byte
-extended_decoded:
-    ra=0, s=Bus, d=63, alu=And, rb=1, ldrb
-    ra=0, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-; R2 kind: 0 receiver, 1 home temporary, 2 literal, 3 literal Association.
-; Resolve and root a writable target in VR3; literals themselves are read-only.
-variable:
-    ra=2, flags
-    seq=ConditionalJump, cc=Zero, brch=receiver_target
-    ra=2, s=Branch, brch=1, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=temporary_target
-    ra=10, rb=1, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=bad_state
-    seq=ConditionalJump, cc=Sign, brch=bad_state
-    read=Vr, vr=1
-    d=Object, page=Fetch
-    ra=1, s=Branch, brch=3, alu=Add, ldq
-    d=Q, idx=Load
-    mem=Read
-    ra=2, s=Branch, brch=2, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=!Zero, brch=association_target
-    ra=3, flags
-    seq=ConditionalJump, cc=!Zero, brch=bad_state
-    d=Object, ldsym, seq=Jump, brch=push
-association_target:
-    d=Object, ldvr, vr=3
-    read=Vr, vr=3
-    d=Object, page=Fetch
-    d=3, idx=Load
-    seq=Jump, brch=access_variable
-receiver_target:
-    read=Vr, vr=2
-    d=Object, ldvr, vr=3
-    read=Vr, vr=3
-    d=Object, page=Fetch
-    ra=1, s=Branch, brch=2, alu=Add, ldq
-    d=Q, idx=Load
-    seq=Jump, brch=access_variable
-temporary_target:
-    d=temporary_home_ready, r=Bus, rb=6, ldrb, seq=Jump, brch=context_home
-temporary_home_ready:
-    ; Read the home method's temporary count. R12 is the evaluation-stack floor,
-    ; which is zero inside a block and therefore cannot validate this access.
-    read=Vr, vr=1
-    d=Object, page=Fetch
-    d=2, idx=Load
-    mem=Read
-    d=Object, r=Bus, shift=Right, rb=0, ldrb
-    ra=0, shift=Right, rb=0, ldrb
-    ra=0, shift=Right, rb=0, ldrb
-    ra=0, shift=Right, rb=0, ldrb
-    ra=0, shift=Right, rb=0, ldrb
-    ra=0, shift=Right, rb=0, ldrb
-    ra=0, shift=Right, rb=0, ldrb
-    ra=0, s=Branch, brch=31, alu=And, rb=0, ldrb
-    ra=0, rb=1, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=bad_state
-    seq=ConditionalJump, cc=Sign, brch=bad_state
-    read=Vr, vr=3
-    d=Object, page=Fetch
-    ra=1, s=Branch, brch=8, alu=Add, ldq
-    d=Q, idx=Load
-access_variable:
-    ra=3, flags
-    seq=ConditionalJump, cc=!Zero, brch=write_variable
-    mem=Read
-    d=Object, ldsym, seq=Jump, brch=push
-; peek selects the caller, so preserve the target index in R1 first. VR3
-; keeps the target alive and VR4 keeps the value alive while refetching it.
-write_variable:
-    read=Index
-    d=Object, r=Bus, rb=1, ldrb
-    d=write_value, r=Bus, rb=6, ldrb, seq=Jump, brch=peek
-write_value:
-    d=Symbol, ldvr, vr=4
-    read=Vr, vr=3
-    d=Object, page=Fetch
-    d=Register, ra=1, idx=Load
-    read=Vr, vr=4
-    d=Object, mem=Write
-    ra=3, s=Branch, brch=2, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=pop
-    seq=Jump, brch=boundary
+fetch_byte_end:
 
-push_receiver:
-    read=Vr, vr=2
-    d=Object, ldsym, seq=Jump, brch=push
-push_true:
-    d=TRUE, ldsym, seq=Jump, brch=push
-push_false:
-    d=FALSE, ldsym, seq=Jump, brch=push
-push_nil:
-    d=NIL, ldsym, seq=Jump, brch=push
-push_integer:
-    ra=13, s=Branch, brch=117, alu=Sub, cin=One, estk=Compact, compact=2
-    d=Estk, ldsym, seq=Jump, brch=push
-push_context:
-    read=Vr, vr=0
-    d=Object, ldsym, seq=Jump, brch=push
-duplicate:
-    d=push, r=Bus, rb=6, ldrb, seq=Jump, brch=peek
-
-; Peek preserves SP and returns its tagged value in SYMBOL. Push consumes
-; SYMBOL. Pop clears the dead slot before reducing SP, keeping tracing precise.
-peek:
-    ra=9, rb=12, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=bad_state
-    seq=ConditionalJump, cc=Sign, brch=bad_state
-    read=Vr, vr=0
-    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
-    d=Q, idx=Load
-    mem=Read
-    d=Object, ldsym
-    d=Register, ra=6, seq=Bus
-push:
-    ra=14, rb=9, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=bad_state
-    seq=ConditionalJump, cc=Sign, brch=bad_state
-    ra=9, s=Branch, brch=1, alu=Add, rb=9, ldrb, read=Vr, vr=0
-    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
-    d=Q, idx=Load
-    d=Symbol, mem=Write, seq=Jump, brch=boundary
-pop:
-    d=pop_value, r=Bus, rb=6, ldrb, seq=Jump, brch=peek
-pop_value:
-    d=NIL, mem=Write, ra=9, s=Branch, brch=1, alu=Sub, cin=One, rb=9, ldrb
-    seq=Jump, brch=boundary
-
-; Keep the result rooted in VR5 before reading or refilling the sender.
-; A nil sender terminates the diagnostic root; sends.uc handles other returns.
-return_receiver:
-    read=Vr, vr=2
-    d=Object, ldsym, seq=Jump, brch=return_value
-return_true:
-    d=TRUE, ldsym, seq=Jump, brch=return_value
-return_false:
-    d=FALSE, ldsym, seq=Jump, brch=return_value
-return_nil:
-    d=NIL, ldsym, seq=Jump, brch=return_value
-return_top:
-return_block:
-    d=return_pop, r=Bus, rb=6, ldrb, seq=Jump, brch=peek
-return_pop:
-    ; Keep the value in SYMBOL while removing it from the outgoing stack.
-    d=NIL, mem=Write
-    ra=9, s=Branch, brch=1, alu=Sub, cin=One, rb=9, ldrb
-return_value:
-    d=Symbol, ldvr, vr=5
-    ra=13, s=Branch, brch=125, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=return_local
-    d=return_home_ready, r=Bus, rb=6, ldrb, seq=Jump, brch=context_home
-return_home_ready:
-    read=Vr, vr=3
-    d=Object, page=Fetch
-    seq=Jump, brch=return_target
-return_local:
-    read=Vr, vr=0
-    d=Object, page=Fetch
-; Selected object is the home method for nonlocal returns, active context
-; for bytecode 125. Component 2 supplies sender/caller; validate before unlinking.
-return_target:
-    d=2, idx=Load
-    mem=Read
-    d=NIL, ldsym
-    d=Object, seq=ConditionalJump, cc=!Symbol, brch=return_sender
-    ; Only the boot activation has a diagnostic nil-sender return. Escaped
-    ; blocks and manipulated sender chains send cannotReturn: on the machine.
-    read=Vr, vr=0
-    d=ACTIVE_CONTEXT, ldsym
-    d=Object, seq=ConditionalJump, cc=!Symbol, brch=cannot_return
-    d=1, r=Bus, rb=15, ldrb, seq=Jump, brch=save_context
-
-; Short offsets are (opcode & 7)+1. Long unconditional offsets are
-; ((opcode & 7)-4)*256+extension, allowing backward branches. Conditional long
-; offsets are (opcode & 3)*256+extension; all are relative to advanced IP.
-short_jump:
-    ra=13, s=Bus, d=7, alu=And, rb=1, ldrb
-    ra=1, s=Branch, brch=1, alu=Add, rb=1, ldrb
-    seq=Jump, brch=apply_jump
-short_conditional:
-    ra=13, s=Bus, d=7, alu=And, rb=1, ldrb
-    ra=1, s=Branch, brch=1, alu=Add, rb=1, ldrb
-    seq=Jump, brch=conditional
-long_jump:
-    d=long_decoded, r=Bus, rb=7, ldrb, seq=Jump, brch=fetch_byte
-long_decoded:
-    ra=13, s=Bus, d=7, alu=And, rb=1, ldrb
-    ra=1, s=Branch, brch=4, alu=Sub, cin=One, rb=1, ldrb
-    seq=Jump, brch=scale_offset
-long_conditional:
-    d=long_cond_decoded, r=Bus, rb=7, ldrb, seq=Jump, brch=fetch_byte
-long_cond_decoded:
-    ra=13, s=Bus, d=3, alu=And, rb=1, ldrb
-scale_offset:
-    ra=1, shift=Left, rb=1, ldrb
-    ra=1, shift=Left, rb=1, ldrb
-    ra=1, shift=Left, rb=1, ldrb
-    ra=1, shift=Left, rb=1, ldrb
-    ra=1, shift=Left, rb=1, ldrb
-    ra=1, shift=Left, rb=1, ldrb
-    ra=1, shift=Left, rb=1, ldrb
-    ra=1, shift=Left, rb=1, ldrb
-    ra=1, rb=0, alu=Add, ldq
-    d=Q, r=Bus, rb=1, ldrb
-    ra=13, s=Branch, brch=168, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Sign, brch=apply_jump
-; peek leaves selected caller/top slot intact. Only full TRUE/FALSE identities
-; are accepted. A non-Boolean sends mustBeBoolean (identity 26) without popping.
-conditional:
-    d=condition_value, r=Bus, rb=6, ldrb, seq=Jump, brch=peek
-condition_value:
-    d=TRUE, seq=ConditionalJump, cc=Symbol, brch=condition_true
-    d=FALSE, seq=ConditionalJump, cc=!Symbol, brch=boolean_failure
-    ra=13, s=Branch, brch=168, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Sign, brch=take_conditional
-    ra=13, s=Branch, brch=172, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=!Sign, brch=take_conditional
-    seq=Jump, brch=skip_conditional
-condition_true:
-    ra=13, s=Branch, brch=168, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Sign, brch=skip_conditional
-    ra=13, s=Branch, brch=172, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Sign, brch=take_conditional
-skip_conditional:
-    d=0, r=Bus, rb=1, ldrb
-take_conditional:
-    d=NIL, mem=Write
-    ra=9, s=Branch, brch=1, alu=Sub, cin=One, rb=9, ldrb
-apply_jump:
-    ra=8, rb=1, alu=Add, ldq
-    d=Q, r=Bus, rb=8, ldrb
-    seq=Jump, brch=boundary
-
-; Arithmetic fast paths never discard arguments until type/range checks pass.
-; Reconstructing and comparing the complete compact word checks the tag, not
-; just its payload. A reference with a small identity cannot pass this check.
-arithmetic:
-    ra=9, rb=12, alu=Sub, cin=One, ldq
-    d=Q, r=Bus, s=Branch, brch=2, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Sign, brch=bad_state
-    d=arithmetic_argument, r=Bus, rb=6, ldrb, seq=Jump, brch=peek
-arithmetic_argument:
-    d=Symbol, r=Bus, rb=5, ldrb, estk=Compact, compact=2
-    d=Estk, seq=ConditionalJump, cc=!Symbol, brch=primitive_failure
-    idx=Decrement
-    mem=Read
-    d=Object, ldsym, r=Bus, rb=4, ldrb, estk=Compact, compact=2
-    d=Estk, seq=ConditionalJump, cc=!Symbol, brch=primitive_failure
-    ra=13, flags
-    seq=ConditionalJump, cc=Zero, brch=integer_extended
-    ra=13, s=Branch, brch=176, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=add
-    ra=13, s=Branch, brch=177, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=subtract
-    ra=13, s=Branch, brch=184, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Sign, brch=compare
-    seq=ConditionalJump, cc=Zero, brch=multiply
-    ra=13, s=Branch, brch=190, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=bit_and
-    seq=Jump, brch=bit_or
-add:
-    ra=4, rb=5, alu=Add, ldq
-    seq=Jump, brch=integer_result
-subtract:
-    ra=4, rb=5, alu=Sub, cin=One, ldq
-    seq=Jump, brch=integer_result
 multiply:
     ra=4, rb=5, alu=MultiplySigned
     alu=ProductLow, ldq
@@ -491,54 +158,6 @@ integer_result:
     seq=ConditionalJump, cc=CorrectedSign, brch=primitive_failure
     ra=4, estk=Compact, compact=2
     d=Estk, ldsym, seq=Jump, brch=arithmetic_result
-compare:
-    ra=13, s=Branch, brch=178, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=less
-    ra=13, s=Branch, brch=179, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=greater
-    ra=13, s=Branch, brch=180, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=less_equal
-    ra=13, s=Branch, brch=181, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=greater_equal
-    ra=13, s=Branch, brch=182, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=equal
-    ra=4, rb=5, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=!Zero, brch=true_result
-    seq=Jump, brch=false_result
-less:
-    ra=4, rb=5, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=CorrectedSign, brch=true_result
-    seq=Jump, brch=false_result
-greater:
-    ra=4, rb=5, alu=SubReverse, cin=One, flags
-    seq=ConditionalJump, cc=CorrectedSign, brch=true_result
-    seq=Jump, brch=false_result
-less_equal:
-    ra=4, rb=5, alu=SubReverse, cin=One, flags
-    seq=ConditionalJump, cc=!CorrectedSign, brch=true_result
-    seq=Jump, brch=false_result
-greater_equal:
-    ra=4, rb=5, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=!CorrectedSign, brch=true_result
-    seq=Jump, brch=false_result
-equal:
-    ra=4, rb=5, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=true_result
-false_result:
-    d=FALSE, ldsym, seq=Jump, brch=arithmetic_result
-true_result:
-    d=TRUE, ldsym
-; With R15=0 this is a bytecode fast path: arithmetic left IDX on receiver,
-; so replace it and clear the argument. Otherwise use the general primitive
-; result path to refetch caller state and consume exactly R1 arguments.
-arithmetic_result:
-    ra=15, flags
-    seq=ConditionalJump, cc=!Zero, brch=primitive_arithmetic_result
-    d=Symbol, mem=Write
-    idx=Increment
-    d=NIL, mem=Write
-    ra=9, s=Branch, brch=1, alu=Sub, cin=One, rb=9, ldrb
-    seq=Jump, brch=boundary
 unsupported:
     d=2, r=Bus, rb=15, ldrb, seq=Jump, brch=save_context
 primitive_arithmetic_result:

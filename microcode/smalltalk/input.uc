@@ -63,8 +63,7 @@ input_argument:
     ra=1, s=Branch, brch=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=3
@@ -418,8 +417,7 @@ primitive_input_word:
     idx=Increment
     mem=Read
     d=Object, r=Bus, s=Branch, brch=14, alu=Rotate, rb=3, ldrb
-    ra=2, rb=3, alu=Or, ldq
-    d=Q, r=Bus, rb=2, ldrb
+    ra=3, rb=2, alu=Or, ldq, ldrb
     d=0xc200000000, mem=Write
     ra=4, s=Branch, brch=1, alu=Sub, cin=One, rb=4, ldrb
     d=4, idx=Load

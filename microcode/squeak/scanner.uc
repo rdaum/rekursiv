@@ -49,8 +49,7 @@ primitive_scanner:
     d=20, r=Bus, rb=14, ldrb
     ra=14, d=Object, ldroot
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym
@@ -144,9 +143,8 @@ scanner_arguments:
     ra=14, d=Root, seq=ConditionalJump, cc=Symbol, brch=scanner_failed
     d=19, r=Bus, rb=14, ldrb
     ra=14, d=Root, ldsym
-    read=Vr, vr=6
+    d=20, idx=Load, read=Vr, vr=6
     d=Object, page=Fetch
-    d=20, idx=Load
     mem=Read
     d=Object, seq=ConditionalJump, cc=!Symbol, brch=scanner_failed
     d=23, r=Bus, rb=14, ldrb
@@ -154,9 +152,8 @@ scanner_arguments:
     ra=2, flags
     seq=ConditionalJump, cc=Zero, brch=scanner_validate_run
     ; Optional scanner failures retain the original BitBlt fallback behavior.
-    read=Vr, vr=6
+    d=6, idx=Load, read=Vr, vr=6
     d=Object, page=Fetch
-    d=6, idx=Load
     mem=Read
     d=Object, ldsym, r=Bus, rb=2, ldrb, estk=Compact, compact=2
     d=Estk, seq=ConditionalJump, cc=!Symbol, brch=scanner_failed
@@ -188,9 +185,8 @@ scanner_bitmap_valid:
 scanner_bitmap_invalid:
     d=scanner_failed, r=Bus, rb=12, ldrb
 scanner_restore_probe:
-    read=Vr, vr=6
+    d=9, idx=Load, read=Vr, vr=6
     d=Object, page=Fetch
-    d=9, idx=Load
     d=24, r=Bus, rb=14, ldrb
     ra=14, d=Root, mem=Write
     d=11, idx=Load
@@ -210,17 +206,15 @@ scanner_restart:
     d=16, r=Bus, rb=14, ldrb
     ra=14, d=Root, r=Bus, rb=9, ldrb
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=3, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=3, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, r=Bus, rb=2, ldrb
     ra=2, ldq
     d=24, r=Bus, rb=14, ldrb
     ra=14, d=Q, ldroot
-    read=Vr, vr=6
+    d=7, idx=Load, read=Vr, vr=6
     d=Object, page=Fetch
-    d=7, idx=Load
     mem=Read
     d=Object, r=Bus, rb=4, ldrb
     ra=4, ldq
@@ -280,9 +274,8 @@ scanner_character:
     ra=11, flags
     seq=ConditionalJump, cc=Zero, brch=scanner_margin
     ; Match fallback state even when this glyph crosses the right margin.
-    read=Vr, vr=6
+    d=11, idx=Load, read=Vr, vr=6
     d=Object, page=Fetch
-    d=11, idx=Load
     ra=6, estk=Compact, compact=2
     d=Estk, mem=Write
     d=9, idx=Load
@@ -318,9 +311,8 @@ scanner_advance:
     ra=14, d=Root, r=Bus, rb=11, ldrb
     ra=11, flags
     seq=ConditionalJump, cc=Zero, brch=scanner_next
-    read=Vr, vr=6
+    d=7, idx=Load, read=Vr, vr=6
     d=Object, page=Fetch
-    d=7, idx=Load
     ra=4, estk=Compact, compact=2
     d=Estk, mem=Write
 scanner_next:
@@ -347,9 +339,8 @@ scanner_stop:
     seq=ConditionalJump, cc=Zero, brch=scanner_execute_run
     d=24, r=Bus, rb=14, ldrb
     ra=14, d=Root, r=Bus, rb=2, ldrb
-    read=Vr, vr=6
+    d=18, idx=Load, read=Vr, vr=6
     d=Object, page=Fetch
-    d=18, idx=Load
     ra=2, estk=Compact, compact=2
     d=Estk, mem=Write
     d=19, r=Bus, rb=14, ldrb

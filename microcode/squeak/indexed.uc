@@ -82,8 +82,7 @@ indexed_length_ready:
     seq=ConditionalJump, cc=Zero, brch=indexed_size
     ra=7, rb=11, ldrb
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, rb=10, alu=Sub, cin=One, ldq
+    d=Object, page=Fetch, ra=9, rb=10, alu=Sub, cin=One, ldq
     d=Q, r=Bus, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
@@ -94,8 +93,7 @@ indexed_index_ready:
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     ra=4, flags
     seq=ConditionalJump, cc=Zero, brch=primitive_failed
-    ra=4, rb=11, alu=Add, ldq
-    d=Q, r=Bus, rb=4, ldrb
+    ra=11, rb=4, alu=Add, ldq, ldrb
     ra=3, rb=4, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=primitive_failed
     ra=0, s=Branch, brch=69, alu=Sub, cin=One, flags
@@ -106,9 +104,8 @@ indexed_translate:
     ra=4, s=Branch, brch=2, alu=Add, rb=11, ldrb
     ra=2, s=Branch, brch=3, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=indexed_access
-    read=Vr, vr=6
+    d=3, idx=Load, read=Vr, vr=6
     d=Object, page=Fetch
-    d=3, idx=Load
     mem=Read
     d=Object, r=Bus, rb=7, ldrb
     ra=7, s=Branch, brch=23, alu=Rotate, rb=7, ldrb
@@ -151,8 +148,7 @@ indexed_size:
     d=Q, r=Bus, rb=4, ldrb, seq=Jump, brch=positive_result
 indexed_write:
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=8, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=3

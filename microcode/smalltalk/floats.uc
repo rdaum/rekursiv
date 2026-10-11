@@ -49,8 +49,7 @@ float_receiver_ready:
     ra=0, s=Branch, brch=51, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Sign, brch=float_unary
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym
@@ -164,8 +163,7 @@ float_fraction_zero:
     d=0, r=Bus, rb=2, ldrb, seq=Jump, brch=float_allocate
 float_scale_argument:
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym, r=Bus, rb=3, ldrb, estk=Compact, compact=2
@@ -173,8 +171,7 @@ float_scale_argument:
     ra=5, flags
     seq=ConditionalJump, cc=Zero, brch=float_allocate
     ; SmallInteger scale cannot overflow this signed exponent calculation.
-    ra=4, rb=3, alu=Add, ldq
-    d=Q, r=Bus, rb=4, ldrb
+    ra=3, rb=4, alu=Add, ldq, ldrb
     ra=4, s=Branch, brch=127, alu=SubReverse, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=primitive_failed
     ra=4, s=Bus, d=0xffffff82, alu=Sub, cin=One, flags
@@ -184,8 +181,7 @@ float_scale_argument:
     ra=5, s=Bus, d=0x7fffff, alu=And, rb=5, ldrb
     ra=4, rb=5, alu=Or, ldq
     d=Q, r=Bus, rb=2, ldrb
-    ra=2, rb=10, alu=Or, ldq
-    d=Q, r=Bus, rb=2, ldrb, seq=Jump, brch=float_allocate
+    ra=10, rb=2, alu=Or, ldq, ldrb, seq=Jump, brch=float_allocate
 float_scale_subnormal:
     ra=4, s=Bus, d=0xffffff6a, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=float_scale_zero
@@ -215,8 +211,7 @@ float_load:
     idx=Increment
     mem=Read
     d=Object, r=Bus, rb=5, ldrb
-    ra=4, rb=5, alu=Or, ldq
-    d=Q, r=Bus, rb=4, ldrb
+    ra=5, rb=4, alu=Or, ldq, ldrb
     ; The guest primitive domain is finite Float values. Hardware still supports
     ; all IEEE special values for other runtimes and direct numeric programs.
     ra=4, s=Bus, d=0x7f800000, alu=And, rb=5, ldrb

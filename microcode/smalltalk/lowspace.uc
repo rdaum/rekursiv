@@ -32,8 +32,7 @@ primitive_low_space:
     ra=1, s=Branch, brch=3, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=5, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=5, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=3
@@ -146,11 +145,9 @@ unsigned40_byte:
     ra=2, s=Branch, brch=8, alu=Rotate, rb=2, ldrb
     ra=2, s=Branch, brch=255, alu=And, rb=5, ldrb
     ra=3, s=Branch, brch=8, alu=Rotate, rb=3, ldrb
-    ra=3, rb=5, alu=Or, ldq
-    d=Q, r=Bus, rb=3, ldrb
+    ra=5, rb=3, alu=Or, ldq, ldrb
     ra=2, s=Bus, d=0xffffff00, alu=And, rb=2, ldrb
-    ra=2, rb=4, alu=Or, ldq
-    d=Q, r=Bus, rb=2, ldrb
+    ra=4, rb=2, alu=Or, ldq, ldrb
     ra=7, s=Branch, brch=1, alu=Sub, cin=One, rb=7, ldrb
     ra=7, s=Branch, brch=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=unsigned40_byte
@@ -166,9 +163,8 @@ low_space_recheck:
     d=NIL, ldsym, r=Branch, brch=30, rb=7, ldrb
     ra=7, d=Root, seq=ConditionalJump, cc=Symbol, brch=check_device_events
     ra=7, d=Root, ldvr, vr=5
-    read=Vr, vr=5
+    d=3, idx=Load, read=Vr, vr=5
     d=Object, page=Fetch
-    d=3, idx=Load
     ; Read the three tagged chunks through the old OBJ register: a local
     ; destination consumes the previous reply while OBJEKT reads the next.
     ; Memory reads use old IDX, so increment can accompany each read.

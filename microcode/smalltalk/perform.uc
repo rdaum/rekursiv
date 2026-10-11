@@ -33,8 +33,7 @@ perform_array_check:
     ra=1, s=Branch, brch=2, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=3
@@ -61,8 +60,7 @@ perform_save:
     d=2, sp=Bus
     d=0, esp=Bus
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, rb=1, alu=Sub, cin=One, ldq
+    d=Object, page=Fetch, ra=9, rb=1, alu=Sub, cin=One, ldq
     d=Q, r=Bus, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
@@ -73,23 +71,11 @@ perform_save:
 ; Lookup found VR7 without invoking it. Decode arity even for quick and
 ; extended methods; on mismatch the original primitive stack is still intact.
 perform_found:
-    read=Vr, vr=7
+    d=2, idx=Load, read=Vr, vr=7
     d=Object, page=Fetch
-    d=2, idx=Load
     mem=Read
     d=Object, r=Bus, rb=5, ldrb
-    ra=5, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
+    ra=5, s=Branch, brch=20, alu=Rotate, rb=2, ldrb
     ra=2, s=Branch, brch=7, alu=And, rb=2, ldrb
     ra=2, s=Branch, brch=5, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=perform_arity
@@ -103,14 +89,7 @@ perform_extended:
     ra=4, s=Branch, brch=1, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
-    d=Object, r=Bus, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
-    ra=2, shift=Right, rb=2, ldrb
+    d=Object, r=Bus, s=Branch, brch=24, alu=Rotate, rb=2, ldrb
     ra=2, s=Branch, brch=31, alu=And, rb=2, ldrb
 perform_arity:
     ra=2, rb=11, alu=Sub, cin=One, flags
@@ -126,8 +105,7 @@ perform_copy:
     ra=12, s=Branch, brch=84, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=perform_array_element
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, rb=1, alu=Sub, cin=One, ldq
+    d=Object, page=Fetch, ra=9, rb=1, alu=Sub, cin=One, ldq
     d=Q, r=Bus, s=Register, rb=7, alu=Add, ldq
     d=Q, r=Bus, s=Branch, brch=9, alu=Add, ldq
     d=Q, idx=Load
@@ -145,8 +123,7 @@ perform_array_element:
     d=Object, ldsym
 perform_store_element:
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, rb=1, alu=Sub, cin=One, ldq
+    d=Object, page=Fetch, ra=9, rb=1, alu=Sub, cin=One, ldq
     d=Q, r=Bus, s=Register, rb=7, alu=Add, ldq
     d=Q, r=Bus, s=Branch, brch=8, alu=Add, ldq
     d=Q, idx=Load

@@ -190,8 +190,7 @@ bitmap_pair:
     ra=13, s=Branch, brch=1, alu=Sub, cin=One, rb=13, ldrb, flags
     seq=ConditionalJump, cc=!Zero, brch=bitmap_write_word
 bitmap_last_word:
-    ra=4, rb=14, alu=And, ldq
-    d=Q, r=Bus, rb=4, ldrb
+    ra=14, rb=4, alu=And, ldq, ldrb
 bitmap_write_word:
     ra=0, s=Branch, brch=28, alu=Add, rb=7, ldrb
     ra=4, ldq

@@ -25,16 +25,14 @@ message_copy_arguments:
     ra=1, rb=7, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=message_allocate
     read=Vr, vr=0
-    d=Object, page=Fetch
-    ra=9, rb=1, alu=Sub, cin=One, ldq
+    d=Object, page=Fetch, ra=9, rb=1, alu=Sub, cin=One, ldq
     d=Q, r=Bus, s=Register, rb=7, alu=Add, ldq
     d=Q, r=Bus, s=Branch, brch=9, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym
     read=Vr, vr=7
-    d=Object, page=Fetch
-    ra=7, s=Branch, brch=3, alu=Add, ldq
+    d=Object, page=Fetch, ra=7, s=Branch, brch=3, alu=Add, ldq
     d=Q, idx=Load
     d=Symbol, mem=Write
     ra=7, s=Branch, brch=1, alu=Add, rb=7, ldrb

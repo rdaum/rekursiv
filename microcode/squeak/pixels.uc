@@ -11,8 +11,7 @@ bb_row:
     d=6, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=2, ldrb
-    ra=2, rb=8, alu=Add, ldq
-    d=Q, r=Bus, rb=2, ldrb
+    ra=8, rb=2, alu=Add, ldq, ldrb
     d=24, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=3, ldrb
@@ -44,10 +43,8 @@ bb_pixel:
     d=15, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=5, ldrb
-    ra=2, rb=9, alu=Add, ldq
-    d=Q, r=Bus, rb=2, ldrb
-    ra=3, rb=8, alu=Add, ldq
-    d=Q, r=Bus, rb=3, ldrb
+    ra=9, rb=2, alu=Add, ldq, ldrb
+    ra=8, rb=3, alu=Add, ldq, ldrb
     d=bb_destination_pixel, r=Bus, rb=6, ldrb, seq=Jump, brch=bb_address
 bb_destination_pixel:
     d=30, esp=Bus
@@ -78,10 +75,8 @@ bb_pixel_operands:
     d=16, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=5, ldrb
-    ra=2, rb=9, alu=Add, ldq
-    d=Q, r=Bus, rb=2, ldrb
-    ra=3, rb=8, alu=Add, ldq
-    d=Q, r=Bus, rb=3, ldrb
+    ra=9, rb=2, alu=Add, ldq, ldrb
+    ra=8, rb=3, alu=Add, ldq, ldrb
     d=bb_source_pixel, r=Bus, rb=6, ldrb, seq=Jump, brch=bb_address
 bb_source_pixel:
     read=Vr, vr=4

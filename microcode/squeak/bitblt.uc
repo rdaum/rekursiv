@@ -366,8 +366,7 @@ bb_clip:
     ra=6, flags
     seq=ConditionalJump, cc=Zero, brch=bb_success
     seq=ConditionalJump, cc=Sign, brch=bb_success
-    ra=6, rb=5, alu=Add, ldq
-    r=Q, rb=6, ldrb
+    ra=5, rb=6, alu=Add, ldq, ldrb
     d=0, r=Bus, rb=12, ldrb
     ra=4, rb=13, ldrb
     ra=2, s=Branch, brch=0, alu=SubReverse, cin=One, rb=14, ldrb
@@ -412,10 +411,8 @@ bb_clip_finish:
     seq=ConditionalJump, cc=Zero, brch=bb_success
     seq=ConditionalJump, cc=Sign, brch=bb_success
     r=Q, rb=4, ldrb
-    ra=2, rb=12, alu=Add, ldq
-    r=Q, rb=2, ldrb
-    ra=3, rb=12, alu=Add, ldq
-    r=Q, rb=3, ldrb
+    ra=12, rb=2, alu=Add, ldq, ldrb
+    ra=12, rb=3, alu=Add, ldq, ldrb
     ra=0, s=Branch, brch=5, alu=Add, ldq
     d=Q, esp=Bus
     ra=2, estk=Alu
