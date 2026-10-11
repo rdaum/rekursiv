@@ -38,6 +38,7 @@ mod model;
 mod pager;
 mod recovery;
 mod service;
+mod slot;
 mod state;
 mod transfer;
 
@@ -48,6 +49,7 @@ pub mod store;
 
 pub use effects::{MemoryEffect, Outcome};
 pub use model::Model;
+pub use slot::Slot;
 pub use state::{PreparedAccess, State};
 
 #[cfg(test)]

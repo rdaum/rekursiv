@@ -46,6 +46,7 @@ pub struct Timing {
 /// External counted event source. This device has no access to guest memory.
 /// Tests schedule notifications by device clock tick, independent of CPU state.
 #[derive(Default)]
+#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub struct Events {
     pub counts: [u32; 4],
     pub schedule: BTreeMap<u64, u32>,
@@ -103,6 +104,15 @@ pub struct Device {
     held: Option<Request>,
     wait: u32,
 }
+// Schedules use the pre-edge counter. Ignore stale keys, but do not cross a
+// live scheduled edge or counter overflow.
+fn scheduled_idle_budget<T>(schedule: &BTreeMap<u64, T>, ticks: u64) -> u64 {
+    schedule
+        .range(ticks..)
+        .next()
+        .map_or(u64::MAX - ticks, |(&next, _)| next - ticks)
+}
+
 impl Device {
     pub fn workstation(utc_seconds: u64, ticks_per_ms: u64) -> Self {
         // Workstation power-on behavior: the visible cursor follows the
@@ -294,6 +304,58 @@ impl Device {
         self.advance()
     }
 
+    /// Number of idle edges that can be advanced without processing an event,
+    /// handshake, clock rollover, pointer sample, or possible device error.
+    /// This is deliberately conservative. Recheck after any external mutation.
+    pub fn idle_budget(&self) -> u64 {
+        if self.pending.is_some() || self.held.is_some() {
+            return 0;
+        }
+        let mut budget = u64::MAX;
+        if let Some(clocks) = &self.clocks {
+            budget = budget.min(clocks.idle_budget());
+        }
+        if let Some(pointer) = &self.pointer {
+            if self.input.is_some() && self.clocks.is_none() {
+                return 0;
+            }
+            budget = budget.min(pointer.idle_budget(self.input.is_some()));
+        }
+        if let Some(input) = &self.input {
+            if self.events.is_none() {
+                return 0;
+            }
+            budget = budget.min(scheduled_idle_budget(&input.schedule, input.ticks));
+        }
+        if let Some(events) = &self.events {
+            budget = budget.min(scheduled_idle_budget(&events.schedule, events.ticks));
+        }
+        budget
+    }
+
+    /// Advance a successful prefix covered by `idle_budget`, preserving the
+    /// exact counters exposed by individual idle ticks. No device mutation may
+    /// occur between obtaining that budget and advancing the covered prefix.
+    pub fn advance_idle(&mut self, ticks: u64) {
+        debug_assert!(ticks <= self.idle_budget());
+        if ticks == 0 {
+            return;
+        }
+        self.wait = 0;
+        if let Some(clocks) = &mut self.clocks {
+            clocks.advance_idle(ticks);
+        }
+        if let Some(pointer) = &mut self.pointer {
+            pointer.ticks += ticks;
+        }
+        if let Some(input) = &mut self.input {
+            input.ticks += ticks;
+        }
+        if let Some(events) = &mut self.events {
+            events.ticks += ticks;
+        }
+    }
+
     /// Advance an instruction boundary without a device transaction. Pending
     /// handshakes retain the checked tick path; ordinary idle ticks only update
     /// clocks and external arrivals, in the same order as `tick(None, false)`.
@@ -372,6 +434,94 @@ mod tests {
         events.acknowledge(15);
         assert_eq!(events.status(), 0);
         assert_eq!(events.acknowledgements, [3, 2, 0, 0]);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::*;
+
+    fn device(divider: u64) -> Device {
+        let mut d = Device::workstation(123, divider);
+        d.clocks.as_mut().unwrap().deadline = Some(3);
+        d.events
+            .as_mut()
+            .unwrap()
+            .schedule
+            .extend([(0, 1), (7, 4), (64, 8)]);
+        d.pointer.as_mut().unwrap().sample_interval_ms = 2;
+        d.pointer
+            .as_mut()
+            .unwrap()
+            .schedule
+            .extend([(2, (17, 23)), (19, (19, 29))]);
+        d.input.as_mut().unwrap().schedule.insert(
+            11,
+            vec![InputPacket {
+                kind: InputKind::KeyDown,
+                timestamp_ms: 13,
+                value: 73,
+                extra: 0,
+            }],
+        );
+        d
+    }
+
+    #[test]
+    fn quiet_prefixes_match_every_device_latch_and_scheduled_edge() -> Result<()> {
+        for divider in [1, 2, 17, 1000] {
+            let mut scalar = device(divider);
+            let mut batched = device(divider);
+            let mut ticks = 0;
+            while ticks < 2000 {
+                let count = batched.idle_budget().min(31).min(2000 - ticks);
+                if count == 0 {
+                    scalar.tick_idle()?;
+                    batched.tick_idle()?;
+                    ticks += 1;
+                } else {
+                    for _ in 0..count {
+                        scalar.tick_idle()?;
+                    }
+                    batched.advance_idle(count);
+                    ticks += count;
+                }
+                assert_eq!(scalar.clocks, batched.clocks);
+                assert_eq!(scalar.events, batched.events);
+                assert_eq!(scalar.pointer, batched.pointer);
+                assert_eq!(scalar.input, batched.input);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn quiet_budget_excludes_errors_and_pending_handshakes() -> Result<()> {
+        let mut d = device(1000);
+        d.events.as_mut().unwrap().counts[0] = u32::MAX;
+        assert_eq!(d.idle_budget(), 0);
+        assert!(d.tick_idle().is_err());
+        let mut d = Device::default();
+        assert_eq!(d.idle_budget(), u64::MAX);
+        d.timing.memory_latency = 5;
+        d.tick(
+            Some(Request {
+                address: 16,
+                write: true,
+                data: 7,
+            }),
+            false,
+        )?;
+        assert_eq!(d.idle_budget(), 0);
+        d.tick(None, true)?;
+        assert_eq!(d.idle_budget(), 0);
+        let mut d = device(1000);
+        d.events = None;
+        assert_eq!(d.idle_budget(), 0);
+        d.events = Some(Events::default());
+        d.clocks = None;
+        assert_eq!(d.idle_budget(), 0);
         Ok(())
     }
 }

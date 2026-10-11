@@ -473,3 +473,164 @@ fn resident_blocks_and_fetch_fallback_preserve_each_committed_prefix() -> Result
     }
     Ok(())
 }
+
+#[test]
+fn native_objekt_registers_match_model_at_signed_limits_and_combined_controls() -> Result<()> {
+    use rekursiv_asm::{Command, Index, Read, Register, INDEX_MAX, INDEX_MIN};
+    let indices = [
+        Index::None,
+        Index::Load,
+        Index::Clear,
+        Index::One,
+        Index::Two,
+        Index::Increment,
+        Index::Decrement,
+        Index::Step,
+        Index::FromReg,
+    ];
+    let registers = [
+        Register::None,
+        Register::Load,
+        Register::Increment,
+        Register::Decrement,
+        Register::FromIndex,
+    ];
+    let reads = [Read::None, Read::Vr, Read::Index, Read::IndexReg];
+    let limits = [INDEX_MIN - 1, INDEX_MIN, -1, 0, 1, INDEX_MAX, INDEX_MAX + 1];
+    for n in 0..180 {
+        let command = Command {
+            index: indices[n % indices.len()],
+            register: registers[n % registers.len()],
+            read: reads[n % reads.len()],
+            load_vr: n % 2 == 0,
+            vr: (n % 8) as u8,
+            ..Command::default()
+        };
+        let instruction = Instruction {
+            object: Some(command),
+            bus: Bus::Symbol,
+            ..Instruction::default()
+        };
+        let image = Image::program(&[instruction, Instruction::halt()]);
+        let mut compiled = Machine::new(image.clone(), 0, 16, 512)?;
+        compiled.enable_jit()?;
+        for (i, index) in limits.into_iter().enumerate() {
+            let mut interpreted = Machine::new(image.clone(), 0, 16, 512)?;
+            interpreted.objekt.state.index = index;
+            interpreted.objekt.state.index_reg = limits[(i + n) % limits.len()];
+            interpreted.objekt.state.vr.fill(Word::signed(-19));
+            interpreted.objekt.maintenance = i == 3;
+            interpreted.cpu.symbol =
+                Word::index(limits[(i + 1) % limits.len()].clamp(INDEX_MIN, INDEX_MAX))?.bits();
+            compiled.cpu = interpreted.cpu.clone();
+            compiled.objekt = interpreted.objekt.clone();
+            compiled.stats = interpreted.stats;
+            compiled.fault = None;
+            let before = compiled.jit_statistics().unwrap().block_calls;
+            let expected = interpreted.run_steps(1);
+            let actual = compiled.run_steps(1);
+            assert_eq!(
+                actual.is_err(),
+                expected.is_err(),
+                "command {command:?}, index {index}"
+            );
+            assert_eq!(compiled.cpu, interpreted.cpu);
+            assert_eq!(compiled.objekt, interpreted.objekt);
+            assert_eq!(compiled.stats, interpreted.stats);
+            assert_eq!(compiled.fault, interpreted.fault);
+            assert_eq!(compiled.jit_statistics().unwrap().block_calls, before + 1);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn tick_elision_rechecks_peripherals_between_batches() -> Result<()> {
+    let source = "d=17, r=Bus, rb=1, ldrb\nseq=Jump, brch=0";
+    let mut expected = boot::microcode_with_pager(source, 512, 16)?.machine;
+    let mut actual = boot::microcode_with_pager(source, 512, 16)?.machine;
+    actual.enable_jit()?;
+    for installed in [false, true, false, true] {
+        for m in [&mut actual, &mut expected] {
+            m.devices = if installed {
+                rekursiv_emulator::presentation::workstation(0, 2)
+            } else {
+                rekursiv_devices::Device::default()
+            };
+        }
+        expected.run_steps(19)?;
+        actual.run_steps(19)?;
+        assert_eq!(expected.cpu, actual.cpu);
+        assert_eq!(expected.stats, actual.stats);
+        compare_devices(&expected, &actual);
+    }
+    Ok(())
+}
+
+#[test]
+fn linked_microcode_branches_preserve_budgets_and_invalidate_noncontiguous_sources() -> Result<()> {
+    let source = "seq=Jump, brch=8\nhalt\nhalt\nhalt\nhalt\nhalt\nhalt\nhalt\nra=0, rb=0, alu=Add, s=Branch, brch=1, ldrb\nd=0xfffffffff7, seq=Relative";
+    let mut expected = boot::microcode_with_pager(source, 512, 16)?.machine;
+    let mut actual = boot::microcode_with_pager(source, 512, 16)?.machine;
+    actual.enable_jit()?;
+    for budget in [32, 1, 7, 64, 3] {
+        expected.run_steps(budget)?;
+        actual.run_steps(budget)?;
+        assert_eq!(actual.cpu, expected.cpu);
+        assert_eq!(actual.stats, expected.stats);
+        if budget == 32 {
+            assert_eq!(actual.jit_statistics().unwrap().block_calls, 1);
+            assert_eq!(actual.jit_statistics().unwrap().block_instructions, 32);
+        }
+    }
+    // PC 8 is a dependency of the native entry at zero, although it is not
+    // contiguous with that entry. A changed target must invalidate the region.
+    for m in [&mut actual, &mut expected] {
+        m.cpu.pc = 0;
+        m.image_mut().code[8].as_mut().unwrap().branch = 7;
+    }
+    let before = actual.jit_statistics().unwrap().block_instructions;
+    expected.run_steps(32)?;
+    actual.run_steps(32)?;
+    assert_eq!(actual.cpu, expected.cpu);
+    assert_eq!(actual.stats, expected.stats);
+    assert_eq!(actual.jit_statistics().unwrap().block_instructions, before);
+    Ok(())
+}
+
+#[test]
+fn quiet_devices_advance_only_the_prefix_before_an_object_fault() -> Result<()> {
+    let source = "d=17, r=Bus, rb=1, ldrb\nidx=One\nmem=Read\nhalt";
+    let mut expected = boot::microcode_with_pager(source, 512, 16)?.machine;
+    let mut actual = boot::microcode_with_pager(source, 512, 16)?.machine;
+    for m in [&mut expected, &mut actual] {
+        m.devices.events = Some(rekursiv_devices::Events::default());
+        m.devices.clocks = Some(rekursiv_devices::Clocks::new(0, 0, 1000));
+    }
+    actual.enable_jit()?;
+    assert!(expected.run_steps(32).is_err());
+    assert!(actual.run_steps(32).is_err());
+    assert_eq!(actual.cpu, expected.cpu);
+    assert_eq!(actual.stats, expected.stats);
+    assert_eq!(actual.objekt, expected.objekt);
+    assert_eq!(actual.fault, expected.fault);
+    compare_devices(&actual, &expected);
+    assert_eq!(actual.devices.events.as_ref().unwrap().ticks, 2);
+    Ok(())
+}
+
+#[test]
+fn dynamic_relative_branch_exits_with_materialized_registers() -> Result<()> {
+    // The relative displacement comes from D, not the branch field. A dynamic
+    // source cannot be linked using the immediate template or branch argument.
+    let source = "d=3, r=Bus, rb=1, ldrb\nd=Register, ra=1, seq=Relative, brch=0\nhalt\nhalt\nd=73, r=Bus, rb=2, ldrb\nhalt";
+    let mut expected = boot::microcode_with_pager(source, 512, 16)?.machine;
+    let mut actual = boot::microcode_with_pager(source, 512, 16)?.machine;
+    actual.enable_jit()?;
+    expected.run_steps(32)?;
+    actual.run_steps(32)?;
+    assert_eq!(actual.cpu, expected.cpu);
+    assert_eq!(actual.stats, expected.stats);
+    assert_eq!(actual.cpu.rf[2], 73);
+    Ok(())
+}

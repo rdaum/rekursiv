@@ -279,10 +279,11 @@ fn stack_fetch_preparations_match_the_oracle_for_valid_and_invalid_state() -> Re
     for (n, target) in image.map.iter_mut().enumerate() {
         *target = Some((n * 3) as u16);
     }
-    let jit = Jit::compile(&image, None)?;
+    let mut jit = Jit::compile(&image, None)?;
     // Live table changes must not require retranslation.
     image.nam[1] = None;
     image.map[1] = None;
+    jit.invalidate_changed(&image);
     let mut successes = 0;
     let mut faults = [0; 7];
     for pc in 0..512 {

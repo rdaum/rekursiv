@@ -2,8 +2,9 @@
 //!
 //! Single-word translations prepare a small write set for the executor's
 //! object-command and retirement path. Native blocks commit local instructions
-//! and resident object commands, including stack and fetch controls, with a
-//! peripheral tick at each boundary. Transfers, devices, and floating-point
+//! and resident object commands, including stack and fetch controls. Static
+//! branches are linked within bounded regions; CPU registers are materialized
+//! at exits. Quiet device edges are batched within a conservative event budget. Transfers, devices, and floating-point
 //! words use the general executor. Collector local words use validated scalar
 //! paths; its maintenance operations still execute microinstruction by microinstruction.
 //! This translates microcode, not Smalltalk bytecodes.
@@ -22,6 +23,7 @@ use std::cell::Cell;
 mod compile;
 mod emit;
 mod emit_stack;
+mod native_objekt;
 mod resident;
 mod stack_fetch;
 pub(crate) use stack_fetch::StackFetchWrites;
@@ -39,8 +41,10 @@ type RunBlock = unsafe extern "C" fn(
     *mut Processor,
     *mut ExternalDevice,
     *mut Option<eyre::Report>,
-    *const Image,
+    *const Tables,
     *mut rekursiv_model::Model,
+    u8,
+    *const native_objekt::MemoryView,
 ) -> u64;
 // Only dispatch data is hot. Keeping source snapshots here inflated each
 // lookup to 40 bytes; the compact record fits four entries in a cache line.
@@ -81,9 +85,9 @@ extern "C" fn tick(device: &mut ExternalDevice, error: &mut Option<eyre::Report>
     }
 }
 
-type Prepare = unsafe extern "C" fn(*const Processor, *mut ScalarWrites, u8, *const Image) -> u8;
+type Prepare = unsafe extern "C" fn(*const Processor, *mut ScalarWrites, u8, *const Tables) -> u8;
 type PrepareStackFetch =
-    unsafe extern "C" fn(*const Processor, *mut StackFetchWrites, u8, *const Image) -> u8;
+    unsafe extern "C" fn(*const Processor, *mut StackFetchWrites, u8, *const Tables) -> u8;
 enum Preparation {
     Scalar(Prepare),
     StackFetch(PrepareStackFetch),
@@ -105,15 +109,31 @@ pub struct JitStatistics {
     pub transfer_fallbacks: u64,
 }
 
+// Flatten optional microcode tables for checked native loads. The source Image
+// stays authoritative; Machine refreshes these after every image_mut borrow.
+// Separate validity preserves the full 64-bit NAM value domain.
+#[repr(C)]
+struct NamWord {
+    value: u64,
+    valid: u64,
+}
+#[repr(C)]
+struct Tables {
+    nam: *const NamWord,
+    nam_len: usize,
+    map: *const u32,
+    map_len: usize,
+}
+
 pub(crate) struct Jit {
     // Option permits consuming the module in Drop to release executable pages.
     module: Option<JITModule>,
+    nam: Vec<NamWord>,
+    map: Vec<u32>,
     entries: Vec<Option<Entry>>,
     blocks: Vec<Block>,
-    block_sources: Vec<Vec<Option<Instruction>>>,
+    block_sources: Vec<Vec<(usize, Instruction)>>,
     stats: Cell<JitStatistics>,
-    // Stable addresses embedded in native code; never mutate these templates.
-    commands: Box<[Command]>,
 }
 impl Drop for Jit {
     fn drop(&mut self) {
@@ -125,11 +145,35 @@ impl Drop for Jit {
     }
 }
 impl Jit {
+    fn refresh_tables(&mut self, image: &Image) {
+        self.nam = image
+            .nam
+            .iter()
+            .map(|v| NamWord {
+                value: v.unwrap_or(0),
+                valid: u64::from(v.is_some()),
+            })
+            .collect();
+        self.map = image
+            .map
+            .iter()
+            .map(|v| v.map_or(1 << 16, u32::from))
+            .collect();
+    }
+    fn tables(&self) -> Tables {
+        Tables {
+            nam: self.nam.as_ptr(),
+            nam_len: self.nam.len(),
+            map: self.map.as_ptr(),
+            map_len: self.map.len(),
+        }
+    }
     // Called once after a mutable image borrow, before any execution resumes.
-    // Blocks can start before an edited word: inspect their entire source range.
+    // Regions may follow noncontiguous branches: inspect every source dependency.
     // Missing/shortened stores also invalidate translations. Unchanged tables
     // retain compiled code and its statistics; invalid entries use the interpreter.
     pub(crate) fn invalidate_changed(&mut self, image: &Image) {
+        self.refresh_tables(image);
         for (pc, entry) in self.entries.iter_mut().enumerate() {
             if entry
                 .as_ref()
@@ -138,9 +182,11 @@ impl Jit {
                 *entry = None;
             }
         }
-        for (pc, (block, source)) in self.blocks.iter_mut().zip(&self.block_sources).enumerate() {
+        for (block, source) in self.blocks.iter_mut().zip(&self.block_sources) {
             if block.run.is_some()
-                && image.code.get(pc..pc + source.len()) != Some(source.as_slice())
+                && source
+                    .iter()
+                    .any(|(pc, instruction)| image.code.get(*pc) != Some(&Some(*instruction)))
             {
                 block.run = None;
             }
@@ -155,7 +201,7 @@ impl Jit {
         &self,
         cpu: &mut Processor,
         devices: &mut ExternalDevice,
-        image: &Image,
+        _image: &Image,
         budget: u64,
         objekt: &mut rekursiv_model::Model,
         policy: BlockPolicy,
@@ -163,7 +209,9 @@ impl Jit {
         let pc = cpu.pc as usize;
         let block = self.blocks.get(pc)?;
         let run = block.run?;
-        if u64::from(block.length) > budget
+        if objekt.entries.len() < 2
+            || !objekt.entries.len().is_power_of_two()
+            || u64::from(block.length) > budget
             || cpu.roots.is_none()
             || (block.object && !policy.allow_object)
             || (block.barrier && policy.pending_object)
@@ -173,12 +221,27 @@ impl Jit {
         }
         let mut error = None;
         // SAFETY: Machine invalidates changed code before execution. Fields are accessed
-        // with build-local offsets, and the five pointed-to objects are live
+        // with build-local offsets, and the pointed-to objects are live
         // and disjoint throughout this synchronous call.
-        let result = unsafe { run(cpu, devices, &mut error, image, objekt) };
+        let tickless = u8::from(devices.idle_budget() >= u64::from(block.length));
+        let view = native_objekt::MemoryView::new(objekt);
+        let result = unsafe {
+            run(
+                cpu,
+                devices,
+                &mut error,
+                &self.tables(),
+                objekt,
+                tickless,
+                &view,
+            )
+        };
         let mut stats = self.stats.get();
         stats.block_calls += 1;
         let retired = (result >> 8) & 0xffff;
+        if tickless != 0 {
+            devices.advance_idle(retired);
+        }
         stats.block_instructions += retired;
         let transfer = result as u8 == resident::TRANSFER;
         stats.transfer_fallbacks += u64::from(transfer);
@@ -203,7 +266,7 @@ impl Jit {
         &self,
         cpu: &Processor,
         irq: bool,
-        image: &Image,
+        _image: &Image,
         out: &mut NativeWrites,
     ) -> Option<Result<Option<Command>, u8>> {
         let entry = self.entries.get(cpu.pc as usize)?.as_ref()?;
@@ -217,7 +280,7 @@ impl Jit {
                     unreachable!()
                 };
                 // SAFETY: build-local C ABI with live, disjoint inputs/output.
-                let fault = unsafe { prepare(cpu, writes, u8::from(irq), image) };
+                let fault = unsafe { prepare(cpu, writes, u8::from(irq), &self.tables()) };
                 if fault != 0 {
                     return Some(Err(fault));
                 }
@@ -229,7 +292,7 @@ impl Jit {
                     unreachable!()
                 };
                 // SAFETY: the expanded output matches this translation's ABI.
-                let fault = unsafe { prepare(cpu, writes, u8::from(irq), image) };
+                let fault = unsafe { prepare(cpu, writes, u8::from(irq), &self.tables()) };
                 if fault != 0 {
                     return Some(Err(fault));
                 }

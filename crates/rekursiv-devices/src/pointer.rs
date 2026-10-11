@@ -14,6 +14,7 @@ pub(super) enum Effect {
 }
 
 #[derive(Default)]
+#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub struct Pointer {
     pub mouse: (i32, i32),
     pub cursor: (i32, i32),
@@ -58,6 +59,14 @@ impl Pointer {
             }
             Effect::Interval(value) => self.sample_interval_ms = value,
         }
+    }
+    pub(super) fn idle_budget(&self, sampling: bool) -> u64 {
+        // First sampling initializes latches even when the mouse is stationary.
+        // A changed position may publish a packet and must take the normal edge.
+        if sampling && self.sampled != Some(self.mouse) {
+            return 0;
+        }
+        super::scheduled_idle_budget(&self.schedule, self.ticks)
     }
     pub(super) fn tick(&mut self, clock: Option<&Clocks>) -> Option<InputPacket> {
         if let Some(position) = self.schedule.remove(&self.ticks) {

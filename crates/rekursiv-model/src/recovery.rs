@@ -89,7 +89,7 @@ impl Model {
                 work.push(self.state.prepared.reference);
             }
             work.extend(self.classes.iter().flatten().copied());
-            if let Some(e) = self.state.selected {
+            if let Some(e) = self.state.selected.get() {
                 work.extend([e.reference, e.class]);
             }
             while let Some(word) = work.pop() {
@@ -125,7 +125,7 @@ impl Model {
                 .map(|e| e.size)
                 .sum(),
         };
-        self.entries.fill(None);
+        self.entries.fill(None.into());
         let mut base = 0;
         for mut e in resident {
             if !live.contains(&e.reference.identity()?) {
@@ -136,13 +136,13 @@ impl Model {
             e.base = base & (ADDRESS_LIMIT - 1);
             base += e.size;
             let slot = self.slot(e.reference);
-            self.entries[slot] = Some(e);
+            self.entries[slot] = Some(e).into();
             if self
                 .state
                 .selected
                 .is_some_and(|s| s.reference == e.reference)
             {
-                self.state.selected = Some(e);
+                self.state.selected = Some(e).into();
             }
         }
         // The halted service recovery utility republishes mappings with
@@ -188,7 +188,7 @@ mod tests {
             ..base
         };
         model.service(Service::Install(object), false);
-        model.state.selected = Some(object);
+        model.state.selected = Some(object).into();
         let before = model.clone();
         assert_eq!(
             model.recover(RecoveryMode::Collect, &Roots::default()),

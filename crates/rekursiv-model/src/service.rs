@@ -75,14 +75,14 @@ impl Model {
                     self.body_cursor = self.body_cursor.max(e.base + e.size);
                     let slot = self.slot(e.reference);
                     self.invalidate_prepared_slot(slot);
-                    self.entries[slot] = Some(e);
+                    self.entries[slot] = Some(e).into();
                     self.persistent_roots[slot] = !e.new;
                     if self
                         .state
                         .selected
                         .is_some_and(|old| old.reference == e.reference)
                     {
-                        self.state.selected = Some(e);
+                        self.state.selected = Some(e).into();
                     }
                 }
                 Service::Invalidate(r) => {
@@ -92,19 +92,19 @@ impl Model {
                         return Err(Status::NotResident);
                     }
                     self.invalidate_prepared_slot(slot);
-                    self.entries[slot] = None;
+                    self.entries[slot] = None.into();
                 }
                 Service::CompactClass { code, class } => {
                     if code > 3 || !class.is_reference() {
                         return Err(Status::BadValue);
                     }
-                    self.classes[code as usize] = Some(class);
-                    if let Some(mut e) = self.state.selected {
+                    self.classes[code as usize] = Some(class).into();
+                    if let Some(mut e) = self.state.selected.get() {
                         if e.reference.is_compact()
                             && ((e.reference.bits() >> 32) & 63) == code as u64
                         {
                             e.class = class;
-                            self.state.selected = Some(e);
+                            self.state.selected = Some(e).into();
                         }
                     }
                 }

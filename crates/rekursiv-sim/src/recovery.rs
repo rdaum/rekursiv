@@ -76,7 +76,7 @@ impl Harness<'_> {
         if state.prepared.status == Status::Ok {
             root_words.push(state.prepared.reference);
         }
-        if let Some(e) = state.selected {
+        if let Some(e) = state.selected.get() {
             root_words.extend([e.reference, e.class]);
         }
         for code in 0..4 {

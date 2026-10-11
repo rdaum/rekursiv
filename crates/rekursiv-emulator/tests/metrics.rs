@@ -40,7 +40,7 @@ fn collisions_count_completed_victims_and_actual_word_traffic() -> Result<()> {
     m.objekt.store.records.insert(1, record(1, 3));
     m.objekt.store.records.insert(17, record(17, 2));
     m.objekt.next_identity = 33;
-    m.objekt.classes[2] = Some(Word::reference(100, true)?);
+    m.objekt.classes[2] = Some(Word::reference(100, true)?).into();
     while m.step()? != Step::Halted {}
     let s = m.stats.objekt;
     assert_eq!(

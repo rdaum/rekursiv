@@ -137,10 +137,10 @@ impl Model {
                 &mut out,
             )?;
             for (slot, entry) in self.entries.iter_mut().enumerate() {
-                if let Some(e) = entry {
+                if let Some(e) = entry.get() {
                     self.persistent_roots[slot] |= edges.contains(&e.reference);
                     if keys.contains(&e.reference) {
-                        *entry = None;
+                        *entry = None.into();
                     }
                 }
             }
@@ -149,7 +149,7 @@ impl Model {
                 .selected
                 .is_some_and(|e| keys.contains(&e.reference))
             {
-                self.state.selected = None;
+                self.state.selected = None.into();
             }
             if keys.contains(&self.state.prepared.reference)
                 && self.state.prepared.status == Status::Ok

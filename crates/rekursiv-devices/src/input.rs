@@ -24,6 +24,7 @@ pub(super) enum Effect {
     Pop,
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub struct Input {
     pub schedule: BTreeMap<u64, Vec<InputPacket>>,
     pub ticks: u64,

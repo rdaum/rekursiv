@@ -79,25 +79,3 @@ impl StackFetchWrites {
         }
     }
 }
-
-// These ABI adapters read Rust's Option-backed tables without assuming an
-// enum or Vec memory layout in generated code. They do no instruction decode,
-// dispatch, or mutation. The JIT extracts fields and updates CPU state itself.
-// SAFETY: generated callers supply a live, aligned eight-byte output slot.
-pub(super) unsafe extern "C" fn read_nam(image: &Image, index: u32, word: *mut u64) -> u8 {
-    match image.nam.get(index as usize).copied().flatten() {
-        Some(value) => {
-            unsafe { word.write(value) };
-            0
-        }
-        None => 5,
-    }
-}
-pub(super) extern "C" fn read_map(image: &Image, opcode: usize) -> u32 {
-    image
-        .map
-        .get(opcode)
-        .copied()
-        .flatten()
-        .map_or(1 << 16, u32::from)
-}

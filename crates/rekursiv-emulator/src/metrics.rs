@@ -82,7 +82,7 @@ impl Observation {
         };
         let lookup = key.map(|key| match key {
             Ok(r) if r.is_reference() => {
-                match model.entries[r.bits() as usize & (model.entries.len() - 1)] {
+                match model.entries[r.bits() as usize & (model.entries.len() - 1)].get() {
                     Some(e) if e.reference == r => Lookup::Hit,
                     Some(_) => Lookup::Collision,
                     None => Lookup::Empty,
@@ -102,7 +102,7 @@ impl Observation {
         };
         Self {
             lookup,
-            victim: slot.and_then(|s| model.entries[s]),
+            victim: slot.and_then(|s| model.entries[s].get()),
         }
     }
 }

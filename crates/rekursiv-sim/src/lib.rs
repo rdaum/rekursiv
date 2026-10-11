@@ -617,7 +617,7 @@ impl<'a> Harness<'a> {
             vr,
             index: Word::from_bits(self.rtl.dbg_idx_o)?.as_index(),
             index_reg: Word::from_bits(self.rtl.dbg_reg_o)?.as_index(),
-            selected,
+            selected: selected.into(),
             prepared: rekursiv_model::PreparedAccess {
                 reference: Word::from_bits(self.rtl.dbg_prepared_ref_o)?,
                 index: Word::from_bits(self.rtl.dbg_prepared_index_o)?.as_index(),
@@ -640,7 +640,7 @@ impl<'a> Harness<'a> {
                 None
             };
             ensure!(
-                class == self.oracle.classes[code],
+                class == self.oracle.classes[code].get(),
                 "compact root mapping differs"
             );
         }
@@ -685,7 +685,7 @@ impl<'a> Harness<'a> {
                 None
             };
             ensure!(
-                &actual == expected,
+                actual == expected.get(),
                 "pager slot {i}: RTL {actual:?} != model {expected:?}"
             );
         }

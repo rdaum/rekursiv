@@ -36,7 +36,7 @@ impl Model {
             work.push(self.state.prepared.reference);
         }
         work.extend(self.classes.iter().flatten().copied());
-        if let Some(e) = self.state.selected {
+        if let Some(e) = self.state.selected.get() {
             work.extend([e.reference, e.class]);
         }
         for e in self.entries.iter().flatten() {
@@ -82,24 +82,24 @@ impl Model {
         let mut candidate = self.clone();
         let mut cursor = destination;
         for entry in &mut candidate.entries {
-            let Some(mut e) = *entry else {
+            let Some(mut e) = entry.get() else {
                 continue;
             };
             if !retained.contains(&e.reference.bits()) {
-                *entry = None;
+                *entry = None.into();
                 continue;
             }
             candidate.memory[cursor as usize..(cursor + e.size) as usize]
                 .copy_from_slice(&self.memory[e.base as usize..(e.base + e.size) as usize]);
             e.base = cursor;
             cursor += e.size;
-            *entry = Some(e);
+            *entry = Some(e).into();
             if candidate
                 .state
                 .selected
                 .is_some_and(|s| s.reference == e.reference)
             {
-                candidate.state.selected = Some(e);
+                candidate.state.selected = Some(e).into();
             }
         }
         candidate.body_cursor = cursor;

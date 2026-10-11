@@ -50,7 +50,7 @@ impl RecoveryState {
         }
     }
     fn entry(&self, model: &Model) -> Option<Entry> {
-        model.entries[self.selected]
+        model.entries[self.selected].get()
     }
     pub fn execute(&mut self, op: Recovery, data: Word, model: &mut Model) -> Result<Word, Status> {
         if (!self.initialized && op != Recovery::Begin) || self.committed {
@@ -80,7 +80,7 @@ impl RecoveryState {
                 }
                 self.selected = n as usize;
                 self.copied = None;
-                if let Some(e) = model.entries[self.selected] {
+                if let Some(e) = model.entries[self.selected].get() {
                     let persistent = (e.modified && !e.new)
                         || (e.new && model.persistent_roots[self.selected])
                         || (model.state.prepared.status == Status::Ok
@@ -165,7 +165,7 @@ impl RecoveryState {
                             .selected
                             .is_some_and(|s| s.reference == e.reference)
                         {
-                            model.state.selected = Some(*e);
+                            model.state.selected = Some(*e).into();
                         }
                     } else {
                         if entry.is_some_and(|e| {
@@ -174,9 +174,9 @@ impl RecoveryState {
                                 .selected
                                 .is_some_and(|s| s.reference == e.reference)
                         }) {
-                            model.state.selected = None;
+                            model.state.selected = None.into();
                         }
-                        *entry = None;
+                        *entry = None.into();
                     }
                 }
                 model.relocate_prepared();

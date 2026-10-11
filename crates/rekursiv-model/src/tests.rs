@@ -317,7 +317,7 @@ fn combined_prepared_write_stages_registers_and_forwards_only_matching_selection
             // ProbeVr consumes the old VR. Forward write metadata if it selected
             // A, but never replace a simultaneous selection of B with A.
             assert_eq!(
-                model.state.selected,
+                model.state.selected.get(),
                 Some(if select_written_object { written } else { b })
             );
         }

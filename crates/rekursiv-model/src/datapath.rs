@@ -154,9 +154,9 @@ impl Model {
                         e.representation = c.data;
                     }
                     let slot = self.slot(e.reference);
-                    self.entries[slot] = Some(e);
+                    self.entries[slot] = Some(e).into();
                     if selection
-                        .or(before.selected)
+                        .or(before.selected.get())
                         .is_some_and(|selected| selected.reference == e.reference)
                     {
                         selection = Some(e);
@@ -170,7 +170,7 @@ impl Model {
         self.state.index = idx;
         self.state.index_reg = reg;
         if let Some(selected) = selection {
-            self.state.selected = Some(selected);
+            self.state.selected = Some(selected).into();
         }
         if let Some(prepared) = prepared {
             self.state.prepared = prepared;

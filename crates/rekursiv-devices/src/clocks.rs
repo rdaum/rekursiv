@@ -11,6 +11,7 @@ pub(super) enum Effect {
     Command(bool),
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 pub struct Clocks {
     pub utc_seconds: u64,
     pub monotonic_ms: u64,
@@ -88,6 +89,21 @@ impl Clocks {
             }
         }
         false
+    }
+    // Stop before a millisecond edge or an already-due timer. A conservative
+    // budget avoids moving pointer sampling or timer delivery across an edge.
+    pub(super) fn idle_budget(&self) -> u64 {
+        if self
+            .deadline
+            .is_some_and(|deadline| self.monotonic_ms >= deadline)
+        {
+            0
+        } else {
+            self.cycles_per_ms - self.phase - 1
+        }
+    }
+    pub(super) fn advance_idle(&mut self, ticks: u64) {
+        self.phase += ticks;
     }
     pub(super) fn tick(&mut self) -> bool {
         self.phase += 1;

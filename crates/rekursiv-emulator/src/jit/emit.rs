@@ -13,12 +13,12 @@ pub(super) enum Mode {
     Prepare,
     Block {
         tick: cranelift_codegen::ir::FuncRef,
+        tickless: Value,
         device: Value,
         error: Value,
         retired: u64,
-        object: cranelift_codegen::ir::FuncRef,
         model: Value,
-        command: usize,
+        memory_view: Value,
         object_commands: u64,
         guest_bytecodes: u64,
     },
@@ -29,17 +29,16 @@ pub(super) struct Emit<'a> {
     pub(super) out: Value,
     pub(super) irq: Value,
     pub(super) mode: Mode,
-    pub(super) image: Value,
+    pub(super) tables: Value,
     pub(super) pointer: Type,
-    pub(super) nam: cranelift_codegen::ir::FuncRef,
-    pub(super) map: cranelift_codegen::ir::FuncRef,
     pub(super) deferred_object: Option<Value>,
     // Helpers receive Device, Model or Image, never Processor. Forward scalar
     // CPU values across those calls explicitly: Cranelift cannot infer that
-    // the pointers are disjoint. Architectural stores still occur at EVERY
-    // retirement, so faults and trace exits expose the exact successful prefix.
+    // the pointers are disjoint. Exit stores materialize the exact successful
+    // prefix on faults and trace exits; intermediate values remain in SSA.
     // Dynamic stack-array stores cannot overlap these checked scalar offsets.
     pub(super) values: HashMap<usize, Value>,
+    pub(super) dirty: std::collections::BTreeSet<usize>,
 }
 macro_rules! load {
     ($e:expr, $ty:expr, $field:ident) => {
@@ -58,10 +57,20 @@ macro_rules! store {
 }
 impl Emit<'_> {
     pub(super) fn cpu_store(&mut self, offset: usize, value: Value) {
-        self.b
-            .ins()
-            .store(MemFlagsData::trusted(), value, self.cpu, offset as i32);
         self.values.insert(offset, value);
+        self.dirty.insert(offset);
+    }
+    // Helpers never observe Processor. Materialize the successful prefix only
+    // at native exits; do not clear the compile-time set on a side-exit branch.
+    pub(super) fn flush_cpu(&mut self) {
+        for &offset in &self.dirty {
+            self.b.ins().store(
+                MemFlagsData::trusted(),
+                self.values[&offset],
+                self.cpu,
+                offset as i32,
+            );
+        }
     }
     pub(super) fn load(&mut self, ty: Type, offset: usize) -> Value {
         if let Some(&value) = self.values.get(&offset) {
@@ -133,6 +142,7 @@ impl Emit<'_> {
                 super::block_result(code as u8, retired, object_commands, guest_bytecodes) as i64,
             ),
         };
+        self.flush_cpu();
         self.b.ins().return_(&[value]);
         self.b.switch_to_block(good);
     }
@@ -360,17 +370,24 @@ impl Emit<'_> {
         };
         if let Mode::Block {
             tick,
+            tickless,
             device,
             error,
             ..
         } = self.mode
         {
-            if i.object.is_some() {
-                self.resident(d);
+            if let Some(command) = i.object {
+                self.resident(d, command);
             }
+            let ticking = self.b.create_block();
+            let ticked = self.b.create_block();
+            self.b.ins().brif(tickless, ticked, &[], ticking, &[]);
+            self.b.switch_to_block(ticking);
             let call = self.b.ins().call(tick, &[device, error]);
             let failed = self.b.inst_results(call)[0];
             self.reject(failed, 255);
+            self.b.ins().jump(ticked, &[]);
+            self.b.switch_to_block(ticked);
             self.publish_object();
             // Validation and the device tick succeeded. Publish simultaneous
             // local destinations using the already evaluated OLD operands.

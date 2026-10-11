@@ -54,10 +54,16 @@ fn main() -> Result<()> {
     caller.push(124);
     f.start(&caller, vec![int(n), selector], vec![]);
     let mut m = boot::squeak_source(&f.image, 16_777_216, 65_536)?.machine;
-    m.enable_jit()?;
+    let compilation = Instant::now();
+    let functions = m.enable_jit()?;
+    eprintln!(
+        "JIT: {functions} native functions compiled in {:.3} s",
+        compilation.elapsed().as_secs_f64()
+    );
     let start = Instant::now();
     m.run_steps(repetitions as u64 * 200_000_000)?;
     let elapsed = start.elapsed().as_secs_f64();
+    eprintln!("JIT execution: {:?}", m.jit_statistics().unwrap());
     ensure!(
         m.cpu.halted && !m.cpu.service && m.cpu.rf[15] == 1,
         "did not finish: pc={} status={}",

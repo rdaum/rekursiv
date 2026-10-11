@@ -7,6 +7,7 @@ pub const INDEX_MIN: i64 = -(1 << 39);
 pub const INDEX_MAX: i64 = (1 << 39) - 1;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(transparent)]
 pub struct Word(u64);
 impl Word {
     pub const NIL: Self = Self(3 << 38);
@@ -349,7 +350,7 @@ impl Ports {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Entry {
     pub reference: Word,
     pub class: Word,

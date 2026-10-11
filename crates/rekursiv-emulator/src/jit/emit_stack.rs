@@ -5,9 +5,7 @@ use super::{
     emit::Emit,
     stack_fetch::{expanded, StackFetchWrites},
 };
-use cranelift_codegen::ir::{
-    condcodes::IntCC, types::*, InstBuilder, MemFlagsData, StackSlotData, StackSlotKind, Value,
-};
+use cranelift_codegen::ir::{condcodes::IntCC, types::*, InstBuilder, MemFlagsData, Value};
 use rekursiv_asm::processor::*;
 use rekursiv_model::processor::{Processor, STACK_WORDS};
 use std::mem::offset_of;
@@ -27,6 +25,34 @@ pub(super) struct StackFetchValues {
     cstk_index: Value,
 }
 impl Emit<'_> {
+    fn table_address(
+        &mut self,
+        index: Value,
+        pointer_offset: usize,
+        length_offset: usize,
+        shift: i64,
+    ) -> Value {
+        let length = self.b.ins().load(
+            self.pointer,
+            MemFlagsData::trusted(),
+            self.tables,
+            length_offset as i32,
+        );
+        let bad = self
+            .b
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, index, length);
+        self.reject(bad, 5);
+        let base = self.b.ins().load(
+            self.pointer,
+            MemFlagsData::trusted(),
+            self.tables,
+            pointer_offset as i32,
+        );
+        let offset = self.b.ins().ishl_imm_s(index, shift);
+        self.b.ins().iadd(base, offset)
+    }
+
     fn stack_bounds(&mut self, value: Value) {
         let bad =
             self.b
@@ -140,16 +166,31 @@ impl Emit<'_> {
         }
         let old_opcode = self.load(self.pointer, offset_of!(Processor, opcode));
         let (opcode, namarg) = if matches!(i.fetch, Fetch::Nam | Fetch::Both) {
-            let slot = self.b.create_sized_stack_slot(StackSlotData::new(
-                StackSlotKind::ExplicitSlot,
-                8,
-                3,
-            ));
-            let output = self.b.ins().stack_addr(self.pointer, slot, 0);
-            let call = self.b.ins().call(self.nam, &[self.image, old_apc, output]);
-            let failed = self.b.inst_results(call)[0];
-            self.reject(failed, 5);
-            let word = self.b.ins().stack_load(self.pointer, I64, slot, 0);
+            let index = if self.pointer == I64 {
+                self.b.ins().uextend(I64, old_apc)
+            } else {
+                old_apc
+            };
+            let address = self.table_address(
+                index,
+                offset_of!(super::Tables, nam),
+                offset_of!(super::Tables, nam_len),
+                4,
+            );
+            let valid = self.b.ins().load(
+                I64,
+                MemFlagsData::trusted(),
+                address,
+                offset_of!(super::NamWord, valid) as i32,
+            );
+            let missing = self.b.ins().icmp_imm_s(IntCC::Equal, valid, 0);
+            self.reject(missing, 5);
+            let word = self.b.ins().load(
+                I64,
+                MemFlagsData::trusted(),
+                address,
+                offset_of!(super::NamWord, value) as i32,
+            );
             let opcode = self.b.ins().ushr_imm_s(word, 30);
             let opcode = if self.pointer == I32 {
                 self.b.ins().ireduce(I32, opcode)
@@ -163,8 +204,13 @@ impl Emit<'_> {
         };
         let ucar = if matches!(i.fetch, Fetch::Map | Fetch::Both) {
             // Both reads the old opcode. Its NAM result is visible next time.
-            let call = self.b.ins().call(self.map, &[self.image, old_opcode]);
-            let value = self.b.inst_results(call)[0];
+            let address = self.table_address(
+                old_opcode,
+                offset_of!(super::Tables, map),
+                offset_of!(super::Tables, map_len),
+                2,
+            );
+            let value = self.b.ins().load(I32, MemFlagsData::trusted(), address, 0);
             let bad = self
                 .b
                 .ins()

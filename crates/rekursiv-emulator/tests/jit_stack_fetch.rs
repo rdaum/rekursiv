@@ -190,3 +190,106 @@ fn compact_stack_fault_retains_only_earlier_block_retirements() -> Result<()> {
     assert_eq!(b.jit_statistics().unwrap().block_instructions, 1);
     Ok(())
 }
+
+#[test]
+fn native_nam_tables_preserve_all_value_bits_before_a_later_map_fault() -> Result<()> {
+    let mut image = Image::program(&[
+        Instruction {
+            fetch: Fetch::Nam,
+            ..Instruction::default()
+        },
+        Instruction {
+            fetch: Fetch::Map,
+            ..Instruction::default()
+        },
+    ]);
+    image.nam = vec![Some(u64::MAX)];
+    let mut expected = Machine::new(image.clone(), 0, 16, 512)?;
+    let mut actual = Machine::new(image, 0, 16, 512)?;
+    actual.enable_jit()?;
+    assert!(expected.run_steps(2).is_err());
+    assert!(actual.run_steps(2).is_err());
+    assert_eq!(actual.cpu, expected.cpu);
+    assert_eq!(actual.stats, expected.stats);
+    assert_eq!(actual.fault, expected.fault);
+    assert_eq!(actual.cpu.opcode, (u64::MAX >> 30) as usize);
+    assert_eq!(actual.cpu.namarg, (1 << 30) - 1);
+    Ok(())
+}
+
+#[test]
+fn generated_objekt_register_controls_match_hdl_with_backpressure() -> Result<()> {
+    use rekursiv_asm::{Command, Index, Read, Register};
+    let commands = [
+        Command {
+            data: Word::signed(-19),
+            load_vr: true,
+            vr: 3,
+            ..Command::default()
+        },
+        Command {
+            data: Word::raw(73)?,
+            load_vr: true,
+            vr: 3,
+            read: Read::Vr,
+            ..Command::default()
+        },
+        Command {
+            data: Word::index(-1)?,
+            index: Index::Load,
+            register: Register::FromIndex,
+            ..Command::default()
+        },
+        Command {
+            index: Index::Increment,
+            register: Register::FromIndex,
+            read: Read::Index,
+            ..Command::default()
+        },
+        Command {
+            index: Index::FromReg,
+            register: Register::Increment,
+            read: Read::IndexReg,
+            ..Command::default()
+        },
+        Command {
+            read: Read::Vr,
+            vr: 3,
+            ..Command::default()
+        },
+    ];
+    let mut code: Vec<_> = commands
+        .into_iter()
+        .map(|c| Instruction {
+            data: c.data,
+            object: Some(c),
+            ..Instruction::default()
+        })
+        .collect();
+    code.push(Instruction::halt());
+    let image = Image::program(&code);
+    let mut native = Machine::new(image.clone(), 0, 16, 512)?;
+    native.enable_jit()?;
+    native.run_steps(32)?;
+    let rt = rekursiv_sim::runtime()?;
+    let mut h = Harness::new(
+        &rt,
+        Timing {
+            request_delay: 3,
+            memory_latency: 7,
+            response_stall: 5,
+        },
+        None,
+    )?;
+    h.load_processor(&image)?;
+    h.start_processor(0)?;
+    let mut oracle = Processor::default();
+    h.run_processor(&image, &mut oracle, 2000)?;
+    assert_eq!(native.cpu, oracle);
+    assert_eq!(native.objekt, h.oracle);
+    assert_eq!(
+        native.jit_statistics().unwrap().block_instructions,
+        commands.len() as u64
+    );
+    Ok(())
+}

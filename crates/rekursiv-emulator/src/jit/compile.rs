@@ -16,21 +16,16 @@ impl Jit {
         let mut builder =
             JITBuilder::with_flags(&[("opt_level", "speed")], default_libcall_names())?;
         builder.symbol("rekursiv_jit_tick", tick as *const u8);
-        builder.symbol("rekursiv_jit_resident", resident::execute as *const u8);
-        builder.symbol("rekursiv_jit_nam", stack_fetch::read_nam as *const u8);
-        builder.symbol("rekursiv_jit_map", stack_fetch::read_map as *const u8);
         let mut jit = Self {
             module: Some(JITModule::new(builder)),
+            nam: Vec::new(),
+            map: Vec::new(),
             entries: Vec::new(),
             blocks: Vec::new(),
             block_sources: Vec::new(),
             stats: Cell::default(),
-            commands: image
-                .code
-                .iter()
-                .map(|i| i.and_then(|i| i.object).unwrap_or_default())
-                .collect(),
         };
+        jit.refresh_tables(image);
         let module = jit.module.as_mut().unwrap();
         let mut context = module.make_context();
         let mut frontend = FunctionBuilderContext::new();
@@ -50,31 +45,6 @@ impl Jit {
         tick_signature.returns.push(AbiParam::new(I8));
         let tick_id =
             module.declare_function("rekursiv_jit_tick", Linkage::Import, &tick_signature)?;
-        let mut object_signature = module.make_signature();
-        object_signature.params.extend([
-            AbiParam::new(pointer),
-            AbiParam::new(pointer),
-            AbiParam::new(I64),
-        ]);
-        object_signature.returns.push(AbiParam::new(I64));
-        let object_id =
-            module.declare_function("rekursiv_jit_resident", Linkage::Import, &object_signature)?;
-        let mut nam_signature = module.make_signature();
-        nam_signature.params.extend([
-            AbiParam::new(pointer),
-            AbiParam::new(I32),
-            AbiParam::new(pointer),
-        ]);
-        nam_signature.returns.push(AbiParam::new(I8));
-        let nam_id =
-            module.declare_function("rekursiv_jit_nam", Linkage::Import, &nam_signature)?;
-        let mut map_signature = module.make_signature();
-        map_signature
-            .params
-            .extend([AbiParam::new(pointer), AbiParam::new(pointer)]);
-        map_signature.returns.push(AbiParam::new(I32));
-        let map_id =
-            module.declare_function("rekursiv_jit_map", Linkage::Import, &map_signature)?;
         let mut unique = HashMap::new();
         let mut ids = Vec::with_capacity(image.code.len());
         for instruction in &image.code {
@@ -92,8 +62,6 @@ impl Jit {
                     &signature,
                 )?;
                 context.func.signature = signature.clone();
-                let nam = module.declare_func_in_func(nam_id, &mut context.func);
-                let map = module.declare_func_in_func(map_id, &mut context.func);
                 let mut b = FunctionBuilder::new(&mut context.func, &mut frontend);
                 let entry = b.create_block();
                 b.append_block_params_for_function_params(entry);
@@ -105,12 +73,11 @@ impl Jit {
                     out: params[1],
                     irq: params[2],
                     mode: Mode::Prepare,
-                    image: params[3],
+                    tables: params[3],
                     pointer,
-                    nam,
-                    map,
                     deferred_object: None,
                     values: HashMap::new(),
+                    dirty: std::collections::BTreeSet::new(),
                 };
                 emit.instruction(&decoded);
                 emit.b.seal_all_blocks();
@@ -123,8 +90,9 @@ impl Jit {
             ids.push(Some((decoded.instruction, id)));
         }
         // Traces follow conditional fallthrough, with a successful-prefix exit
-        // when the branch is taken. Other transfers end the trace. Each
-        // suffix is an entry point because microcode can jump into a block.
+        // when the branch is taken. Static jumps and immediate relative branches
+        // remain inside the region; dynamic transfers end it. Every installed
+        // statically known control-flow entry gets a region.
         // Resident object operations may share a block. Machine joins older
         // replies before entry; run_block declines a block with a later barrier
         // while a reply is pending, preserving intervening local retirements.
@@ -137,27 +105,67 @@ impl Jit {
         block_signature
             .params
             .extend([AbiParam::new(pointer), AbiParam::new(pointer)]);
+        block_signature.params.push(AbiParam::new(I8));
+        block_signature.params.push(AbiParam::new(pointer));
         block_signature.returns.push(AbiParam::new(I64));
-        let mut block_ids = Vec::new();
-        for start in 0..image.code.len() {
-            let mut code = Vec::new();
-            for instruction in image.code[start..].iter().take(32) {
-                let Some(i) = *instruction else { break };
-                if decode(i).is_none()
-                    || i.object
-                        .is_some_and(|c| !resident::eligible(c) || i.object_async)
-                    || i.halt
-                    || i.seq == Seq::Service
-                    || i.condition == Condition::Interrupt
-                    || i.allocation_dynamic
-                {
-                    break;
-                }
-                code.push(*instruction);
-                if !matches!(i.seq, Seq::Continue | Seq::ConditionalJump) {
-                    break;
+        // Compile real control-flow entries rather than every overlapping suffix.
+        // Unknown computed entries retain individual preparations until reaching
+        // a compiled entry. Closing the set over region ends avoids fallback at
+        // the arbitrary 32-word limit.
+        let mut leaders = std::collections::BTreeSet::from([0usize]);
+        leaders.extend(image.collector_entry.map(usize::from));
+        leaders.extend(guest_dispatch_pc.map(usize::from));
+        leaders.extend(image.map.iter().flatten().map(|&pc| pc as usize));
+        for (pc, instruction) in image.code.iter().enumerate() {
+            let Some(i) = instruction else { continue };
+            if pc == 0 || image.code[pc - 1].is_none() {
+                leaders.insert(pc);
+            }
+            if i.seq != Seq::Continue
+                || decode(*i).is_none()
+                || i.halt
+                || i.condition == Condition::Interrupt
+                || i.allocation_dynamic
+                || i.object
+                    .is_some_and(|c| !resident::eligible(c) || i.object_async)
+            {
+                leaders.insert(pc + 1);
+            }
+            if i.mark {
+                leaders.insert(pc);
+            }
+            if let Some(target) = static_target(pc, *i) {
+                leaders.insert(target);
+            }
+        }
+        let mut pending: Vec<_> = leaders.iter().copied().collect();
+        let mut regions = HashMap::new();
+        while let Some(start) = pending.pop() {
+            if start >= image.code.len() {
+                continue;
+            }
+            let code = region(image, start);
+            if code.len() == 32 {
+                let &(pc, i) = code.last().unwrap();
+                let next = if matches!(
+                    i.seq,
+                    Seq::Continue | Seq::ConditionalJump | Seq::ConditionalRelative
+                ) {
+                    Some(pc + 1)
+                } else {
+                    static_target(pc, i)
+                };
+                if let Some(next) = next {
+                    if leaders.insert(next) {
+                        pending.push(next);
+                    }
                 }
             }
+            regions.insert(start, code);
+        }
+        let mut block_ids = Vec::new();
+        for start in 0..image.code.len() {
+            let code = regions.remove(&start).unwrap_or_default();
             if code.is_empty() {
                 block_ids.push(None);
                 continue;
@@ -169,9 +177,6 @@ impl Jit {
             )?;
             context.func.signature = block_signature.clone();
             let tick_ref = module.declare_func_in_func(tick_id, &mut context.func);
-            let object_ref = module.declare_func_in_func(object_id, &mut context.func);
-            let nam = module.declare_func_in_func(nam_id, &mut context.func);
-            let map = module.declare_func_in_func(map_id, &mut context.func);
             let mut b = FunctionBuilder::new(&mut context.func, &mut frontend);
             let entry = b.create_block();
             b.append_block_params_for_function_params(entry);
@@ -183,36 +188,31 @@ impl Jit {
                 cpu: params[0],
                 out: params[0],
                 irq,
-                image: params[3],
+                tables: params[3],
                 pointer,
-                nam,
-                map,
                 deferred_object: None,
                 values: HashMap::new(),
+                dirty: std::collections::BTreeSet::new(),
                 mode: Mode::Block {
                     tick: tick_ref,
+                    tickless: params[5],
                     device: params[1],
                     error: params[2],
                     retired: 0,
-                    object: object_ref,
                     model: params[4],
-                    command: (&jit.commands[start]) as *const Command as usize,
+                    memory_view: params[6],
                     object_commands: 0,
                     guest_bytecodes: 0,
                 },
             };
-            for (n, instruction) in code.iter().enumerate() {
-                if let Mode::Block {
-                    retired, command, ..
-                } = &mut emit.mode
-                {
+            for (n, &(pc, instruction)) in code.iter().enumerate() {
+                if let Mode::Block { retired, .. } = &mut emit.mode {
                     *retired = n as u64;
-                    *command = (&jit.commands[start + n]) as *const Command as usize;
                 }
-                emit.instruction(&decode(instruction.unwrap()).unwrap());
+                emit.instruction(&decode(instruction).unwrap());
                 // Encode the successful prefix in each exit constant. Native
                 // instructions need no PC comparison, callback, or increment.
-                if guest_dispatch_pc == Some((start + n) as u16) {
+                if guest_dispatch_pc == Some(pc as u16) {
                     if let Mode::Block {
                         guest_bytecodes, ..
                     } = &mut emit.mode
@@ -220,18 +220,21 @@ impl Jit {
                         *guest_bytecodes += 1;
                     }
                 }
-                if instruction.unwrap().seq == Seq::ConditionalJump && n + 1 < code.len() {
+                if matches!(
+                    instruction.seq,
+                    Seq::ConditionalJump | Seq::ConditionalRelative
+                ) && n + 1 < code.len()
+                {
                     // The branch has retired, including its simultaneous
                     // writes. A taken edge must return its exact successful
                     // prefix, without executing or counting the fallthrough.
                     if let Mode::Block { retired, .. } = &mut emit.mode {
                         *retired = (n + 1) as u64;
                     }
-                    emit.exit_unless_sequential((start + n + 1) as u16);
+                    emit.exit_unless_sequential(code[n + 1].0 as u16);
                 }
             }
-            let object_commands =
-                code.iter().flatten().filter(|i| i.object.is_some()).count() as u64;
+            let object_commands = code.iter().filter(|(_, i)| i.object.is_some()).count() as u64;
             let Mode::Block {
                 guest_bytecodes, ..
             } = emit.mode
@@ -242,6 +245,7 @@ impl Jit {
                 I64,
                 block_result(0, code.len() as u64, object_commands, guest_bytecodes) as i64,
             );
+            emit.flush_cpu();
             emit.b.ins().return_(&[result]);
             emit.b.seal_all_blocks();
             emit.b.finalize(module.target_config());
@@ -280,12 +284,11 @@ impl Jit {
                 let run = unsafe {
                     std::mem::transmute::<*const u8, RunBlock>(module.get_finalized_function(id))
                 };
-                let object = source.iter().flatten().any(|i| i.object.is_some());
-                let barrier = source.iter().flatten().any(|i| i.object_barrier());
+                let object = source.iter().any(|(_, i)| i.object.is_some());
+                let barrier = source.iter().any(|(_, i)| i.object_barrier());
                 let recovery_safe = source
                     .iter()
-                    .flatten()
-                    .all(|i| crate::scalar::ScalarInstruction::decode_recovery(*i).is_some());
+                    .all(|(_, i)| crate::scalar::ScalarInstruction::decode_recovery(*i).is_some());
                 (
                     Block {
                         run: Some(run),
@@ -302,4 +305,55 @@ impl Jit {
             unique.len() + jit.blocks.iter().filter(|b| b.run.is_some()).count();
         Ok(jit)
     }
+}
+
+fn region(image: &Image, start: usize) -> Vec<(usize, Instruction)> {
+    let mut code = Vec::new();
+    let mut pc = start;
+    for _ in 0..32 {
+        let Some(Some(i)) = image.code.get(pc).copied() else {
+            break;
+        };
+        if decode(i).is_none()
+            || i.object
+                .is_some_and(|c| !resident::eligible(c) || i.object_async)
+            || i.halt
+            || i.seq == Seq::Service
+            || i.condition == Condition::Interrupt
+            || i.allocation_dynamic
+        {
+            break;
+        }
+        code.push((pc, i));
+        // Follow statically known branches inside the native region.
+        // Keep a finite unrolled prefix even for a microcode loop.
+        pc = match i.seq {
+            Seq::Jump => i.branch as usize,
+            Seq::Relative if i.bus == Bus::Immediate => {
+                let next = pc as i64 + i.data.as_index();
+                if !(0..rekursiv_model::processor::CODE_WORDS as i64).contains(&next) {
+                    break;
+                }
+                next as usize
+            }
+            Seq::Continue | Seq::ConditionalJump | Seq::ConditionalRelative => pc + 1,
+            _ => break,
+        };
+    }
+
+    code
+}
+
+fn static_target(pc: usize, i: Instruction) -> Option<usize> {
+    let target = match i.seq {
+        Seq::Jump | Seq::ConditionalJump | Seq::TwoWay => i.branch as i64,
+        Seq::Relative | Seq::ConditionalRelative if i.bus == Bus::Immediate => {
+            pc as i64 + i.data.as_index()
+        }
+        Seq::Bus | Seq::ConditionalBus if i.bus == Bus::Immediate => i.data.bits() as i64,
+        _ => return None,
+    };
+    (0..rekursiv_model::processor::CODE_WORDS as i64)
+        .contains(&target)
+        .then_some(target as usize)
 }

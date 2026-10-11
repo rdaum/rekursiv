@@ -11,10 +11,16 @@ Synthesis and timing analysis must establish the achievable FPGA clock frequency
 
 The CLI uses a [Cranelift](https://docs.wasmtime.dev/api/cranelift_jit/index.html) JIT by default.
 It translates arithmetic, flag calculations, branches, stack controls, fetch controls, and validation checks into native code.
-Native blocks execute up to 32 instructions per call, including resident OBJEKT commands.
-Each instruction retains its device tick, retirement boundary, and fault checks.
+Native regions execute up to 32 instructions per call, including resident OBJEKT commands.
+They follow static jumps and immediate relative branches, retaining register values in SSA
+until a region exit. Conditional exits and faults materialize exactly the successful prefix;
+dynamic transfers, interrupts and unsupported operations return to the executor.
 
-Resident object instructions call the existing OBJEKT model from native blocks.
+OBJEKT virtual-register and signed-index operations, resident probes, metadata reads and RAM
+accesses are generated directly, including combined controls, overflow checks, prepared-access
+validation and NEW/MOD updates. They access the authoritative model through build-local offsets
+and fresh borrowed RAM/pager pointers. Optional metadata has an explicit valid-bit/payload host
+layout; this changes no architectural state or pager policy.
 A Fetch miss stops the block before command issue; the general executor handles refill and collection.
 Allocation and asynchronous commands use native preparation followed by the general executor.
 OBJEKT metrics and cycle estimates use the general command path to retain complete accounting.
@@ -29,10 +35,17 @@ Compact-value construction and stack bounds remain checked before retirement.
 `Fetch::Both` fetches a new NAM word while mapping the old opcode.
 The sequencer also uses the old dispatch target.
 
-Fetch reads live NAM and opcode-map entries through small Rust ABI adapters.
-These adapters handle optional table slots without assumptions about Rust enum layouts.
-Native code extracts the fields and updates fetch state.
-Replacing or resizing either table takes effect on the next access without JIT recompilation.
+Fetch uses checked native NAM and opcode-map loads. JIT-owned flat tables retain explicit
+validity without depending on Rust's `Option` layout or sacrificing any NAM value bits.
+Every mutable image borrow refreshes these tables before execution; replacing or resizing
+either source table takes effect on the next access without JIT recompilation.
+
+Device edges are preserved, but quiet edges can be advanced in a batch. Before entering a
+native region, the device model computes a conservative budget ending before a scheduled
+arrival, clock rollover, due timer, pointer sample, handshake, or possible device error.
+If the complete region fits, it omits per-instruction device calls and advances counters by
+only the successfully retired prefix. Otherwise it retains individual ticks. Empty peripherals
+have an unlimited quiet budget. Device changes between execution batches are rechecked.
 
 Floating-point, device, and root-access instructions use the checked interpreter.
 Collector local instructions use validated scalar decoding or native blocks.
@@ -45,11 +58,15 @@ The control store remains writable through `Machine::image_mut()`.
 `Machine::image()` supplies read access without invalidation.
 A mutable image borrow marks the instruction caches dirty before it exposes the image.
 Before the next `step` or `run_steps`, the executor refreshes scalar decoding and invalidates changed native translations.
-This check includes every block that overlaps a changed or removed word.
+This check includes every region whose source dependencies include a changed or removed word,
+including noncontiguous branch targets.
 Unchanged translations remain available, including after NAM/map-only edits.
 Changed words use the interpreter until a library caller recompiles the image.
 Execution performs no repeated source comparisons between edits.
 JIT code belongs to the machine and is freed when the machine drops or disables the JIT.
+Regions are compiled at known control-flow entries and bounded-region continuations, avoiding
+compilation of every overlapping suffix. Unknown computed entries use individual preparations
+until they reach a compiled entry.
 
 ## Run the workstation demo
 
@@ -367,6 +384,45 @@ tests before the model can assume their throughput. Separating the metadata cach
 body residency remains a distinct hierarchy profile: it changes which replacements save
 objects and therefore the observable NEW/MOD flags. This pass retains the direct-mapped
 pager, resident-only probes, save/refill policy and flag behavior.
+
+### Native hardware translation measurements
+
+The first hardware-JIT pass generated simple OBJEKT register/index controls, batched quiet
+peripheral edges, linked static microcode branches, deferred CPU register materialization to
+region exits, and replaced NAM/map callbacks with checked native loads. At this intermediate
+stage, pager/metadata/RAM commands still used the model helper.
+
+Against `43185e4` on a Ryzen 9 7940HS, alternating baseline/current processes pinned to CPU 7,
+three paired runs gave these medians. Timings exclude loading and JIT compilation.
+
+| Workload | Baseline | Initial hardware JIT | Throughput gain |
+| --- | ---: | ---: | ---: |
+| Fibonacci(18), seconds per call (10 calls/run) | 0.16027 | 0.10454 | 1.53× |
+| Sum 0 through 9,999, seconds per call (10 calls/run) | 0.17078 | 0.10617 | 1.61× |
+| Saved Squeak image, 500,000 bytecodes | 175,653 bytecodes/s | 251,540 bytecodes/s | 1.43× |
+| Saved Smalltalk-80 image, 500,000 bytecodes | 248,914 bytecodes/s | 333,406 bytecodes/s | 1.34× |
+
+Each pair executed identical mutator/collector instruction counts and produced the same
+frame hash. No microcode or architectural operation changed; these are host-emulator gains,
+not improvements to FPGA cycle counts. The larger eagerly compiled regions also increased
+startup compilation: the first paired Squeak run rose from 4.84 to 25.58 seconds, and
+Smalltalk-80 from 4.30 to 23.29 seconds.
+
+The completed resident translation also generates probes, metadata and RAM accesses directly.
+Compilation now targets known control-flow entries rather than every overlapping suffix.
+A short subsequent check used one alternating baseline/current pair per workload, three calls
+per process, on the same pinned CPU:
+
+| Workload | Baseline | Native resident translation | Throughput gain |
+| --- | ---: | ---: | ---: |
+| Fibonacci(18), seconds per call | 0.16260 | 0.08194 | 1.98× |
+| Sum 0 through 9,999, seconds per call | 0.16944 | 0.09046 | 1.87× |
+
+Results, bytecode counts and microinstruction counts matched exactly. These are short workload
+measurements, not a repeated full-image regression. Compilation was 12.37 and 12.34 seconds;
+reducing it further remains useful. The saved-image measurements above describe the intermediate
+version, not the completed resident translation.
+Raw logs, binary hashes and paired results are in `artifacts/hardware-jit/` when retained.
 
 ### Compare with a native Smalltalk VM
 
@@ -789,7 +845,15 @@ time and UTC. These modes deliberately produce different timing observations. Ne
 reproduce RTL cycle timing. Tests can schedule deterministic input through the shared device API.
 Transaction history stays disabled in interactive sessions to avoid unbounded memory growth.
 
-Run the emulator tests, including RTL comparisons:
+For JIT iteration, use the focused checks (about four seconds after compilation on the
+measurement host). These use small synthetic programs, including RTL comparisons, without
+loading guest images:
+
+```sh
+scripts/check-jit.sh
+```
+
+Run the broader emulator tests separately when warranted:
 
 ```sh
 cargo test --locked -p rekursiv-emulator

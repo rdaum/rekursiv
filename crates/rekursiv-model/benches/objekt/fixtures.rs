@@ -48,7 +48,7 @@ pub fn resident(objects: usize) -> Model {
             RESIDENT_WORDS,
         );
     }
-    model.classes[2] = Some(class());
+    model.classes[2] = Some(class()).into();
     assert_eq!(
         model
             .execute_response(Command::fetch(reference(1)), false)

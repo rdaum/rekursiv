@@ -38,7 +38,7 @@ impl Model {
             if c.pager == Pager::Fetch {
                 match self.resolve(c.data) {
                     Ok(e) => {
-                        self.state.selected = Some(e);
+                        self.state.selected = Some(e).into();
                         return Ok(e.reference);
                     }
                     Err(Status::NotResident) => {}
@@ -94,7 +94,7 @@ impl Model {
                 self.next_identity += 1;
             }
             let slot = self.slot(incoming.reference);
-            if let Some(victim) = self.entries[slot] {
+            if let Some(victim) = self.entries[slot].get() {
                 if victim.new || victim.modified {
                     if victim.base as u64 + victim.size as u64 > self.memory.len() as u64 {
                         return Err(Status::BoundsError);
@@ -208,9 +208,9 @@ impl Model {
                 }
             }
             self.invalidate_prepared_slot(slot);
-            self.entries[slot] = Some(incoming);
+            self.entries[slot] = Some(incoming).into();
             self.persistent_roots[slot] = !incoming.new;
-            self.state.selected = Some(incoming);
+            self.state.selected = Some(incoming).into();
             Ok(incoming.reference)
         })();
         out.response = match result {

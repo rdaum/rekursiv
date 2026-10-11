@@ -43,7 +43,7 @@ pub struct State {
     /// Auxiliary signed 40-bit index register.
     pub index_reg: i64,
     /// Last selected object snapshot. It can outlive its resident mapping.
-    pub selected: Option<Entry>,
+    pub selected: crate::Slot<Entry>,
     /// Prepared access consumed by a later command with the prepared control set.
     pub prepared: PreparedAccess,
 }
@@ -53,7 +53,7 @@ impl Default for State {
             vr: [Word::NIL; 8],
             index: 0,
             index_reg: 0,
-            selected: None,
+            selected: crate::Slot::default(),
             prepared: PreparedAccess::default(),
         }
     }

@@ -293,7 +293,7 @@ impl Machine {
         fault
     }
     /// Execute at most `budget` calls to the microinstruction executor. Native
-    /// blocks retain each instruction's device tick and precise fault boundary.
+    /// regions preserve device edges (batching quiet ticks) and precise faults.
     /// Use `step` for tracing or breakpoints that inspect every retirement.
     pub fn run_steps(&mut self, budget: u64) -> Result<u64> {
         if self.code_dirty {
@@ -617,7 +617,7 @@ impl Machine {
         };
         let mut roots = vec![Word::ZERO; 20 + STACK_WORDS + 2 * CODE_WORDS + 32];
         roots[..8].copy_from_slice(&self.objekt.state.vr);
-        if let Some(e) = self.objekt.state.selected {
+        if let Some(e) = self.objekt.state.selected.get() {
             roots[8] = e.reference;
             roots[9] = e.class;
         }

@@ -1,7 +1,7 @@
 //! OBJEKT machine state, construction, and reset.
 #![deny(missing_docs)]
 
-use crate::{store::BackingStore, State};
+use crate::{store::BackingStore, Slot, State};
 use rekursiv_asm::{Entry, Word, ADDRESS_LIMIT};
 
 /// Complete OBJEKT state: resident objects, register state, RAM, and backing storage.
@@ -20,9 +20,9 @@ pub struct Model {
     pub state: State,
     /// Direct-mapped resident metadata, indexed by the low identity bits.
     /// Lookup compares the complete reference to detect collisions.
-    pub entries: Vec<Option<Entry>>,
+    pub entries: Vec<Slot<Entry>>,
     /// Class references for compact type codes. An unset class makes lookup fail.
-    pub classes: [Option<Word>; 64],
+    pub classes: [Slot<Word>; 64],
     /// Object RAM in 40-bit words. Entry bases are zero-based word addresses.
     pub memory: Vec<Word>,
     /// Persistent object records behind the backing-store request interface.
@@ -69,8 +69,8 @@ impl Model {
         assert!(memory_words > 0 && memory_words <= ADDRESS_LIMIT as usize);
         Self {
             state: State::default(),
-            entries: vec![None; pager_entries],
-            classes: [None; 64],
+            entries: vec![Slot::default(); pager_entries],
+            classes: [Slot::default(); 64],
             memory: vec![Word::ZERO; memory_words],
             store: BackingStore::default(),
             next_identity: 1,

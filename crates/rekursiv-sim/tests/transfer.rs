@@ -545,7 +545,7 @@ fn imported_identity_reservation_is_monotonic_and_does_not_publish_an_object() -
         );
         assert_eq!(h.rtl.dbg_next_identity_o, 32768);
         assert_eq!(h.rtl.dbg_body_cursor_o, 0);
-        assert!(h.oracle.entries.iter().all(Option::is_none));
+        assert!(h.oracle.entries.iter().all(|entry| entry.is_none()));
     }
     for next in [0, (1 << 37) + 1] {
         assert_eq!(
