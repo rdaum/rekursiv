@@ -211,9 +211,9 @@ fn main() -> Result<()> {
     }
     if jit {
         let started = Instant::now();
-        let functions = loaded.machine.enable_jit()?;
+        loaded.machine.enable_jit()?;
         eprintln!(
-            "JIT: {functions} native functions compiled in {:.3} s",
+            "JIT initialized in {:.3} s; native code compiles on demand",
             started.elapsed().as_secs_f64()
         );
     }
@@ -384,6 +384,12 @@ fn main() -> Result<()> {
             .report(execution_time, elapsed)
     );
     if let Some(stats) = loaded.machine.jit_statistics() {
+        eprintln!(
+            "JIT compilation: {} functions, {:.3} s during execution (included above), {} failures",
+            stats.functions,
+            stats.compilation_time.as_secs_f64(),
+            stats.compilation_failures
+        );
         eprintln!(
             "JIT execution: {} instructions in {} native blocks, {} single-word preparations, {} transfer fallbacks",
             stats.block_instructions, stats.block_calls, stats.preparations, stats.transfer_fallbacks

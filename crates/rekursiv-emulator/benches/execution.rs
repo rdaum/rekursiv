@@ -20,7 +20,7 @@ impl Cpu {
             loaded.machine.step().unwrap();
         }
         if jit {
-            loaded.machine.enable_jit().unwrap();
+            loaded.machine.enable_jit_eager().unwrap();
         }
         Self(loaded.machine)
     }

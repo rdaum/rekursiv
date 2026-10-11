@@ -18,7 +18,6 @@ use eyre::Result;
 use rekursiv_asm::{processor::*, Command, Word};
 use rekursiv_devices::Device as ExternalDevice;
 use rekursiv_model::processor::{Image, Processor};
-use std::cell::Cell;
 
 mod compile;
 mod emit;
@@ -48,7 +47,7 @@ type RunBlock = unsafe extern "C" fn(
 ) -> u64;
 // Only dispatch data is hot. Keeping source snapshots here inflated each
 // lookup to 40 bytes; the compact record fits four entries in a cache line.
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct Block {
     run: Option<RunBlock>,
     length: u8,
@@ -88,6 +87,7 @@ extern "C" fn tick(device: &mut ExternalDevice, error: &mut Option<eyre::Report>
 type Prepare = unsafe extern "C" fn(*const Processor, *mut ScalarWrites, u8, *const Tables) -> u8;
 type PrepareStackFetch =
     unsafe extern "C" fn(*const Processor, *mut StackFetchWrites, u8, *const Tables) -> u8;
+#[derive(Clone, Copy)]
 enum Preparation {
     Scalar(Prepare),
     StackFetch(PrepareStackFetch),
@@ -102,11 +102,25 @@ struct Entry {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct JitStatistics {
     pub functions: usize,
+    /// Host time spent compiling and finalizing native functions. With lazy
+    /// compilation this is included in execution wall time, not startup time.
+    pub compilation_time: std::time::Duration,
+    /// A compiler error disables further compilation; execution falls back.
+    pub compilation_failures: u64,
     pub preparations: u64,
     pub block_calls: u64,
     pub block_instructions: u64,
     /// Native blocks that stopped before a Fetch miss for the general executor.
     pub transfer_fallbacks: u64,
+}
+
+const HOT_REGION: u8 = 16;
+const HOT_PREPARATION: u8 = 32;
+const DISABLED: u8 = u8::MAX;
+#[derive(Clone, Copy, Default)]
+struct Heat {
+    block: u8,
+    preparation: u8,
 }
 
 // Flatten optional microcode tables for checked native loads. The source Image
@@ -133,7 +147,12 @@ pub(crate) struct Jit {
     entries: Vec<Option<Entry>>,
     blocks: Vec<Block>,
     block_sources: Vec<Vec<(usize, Instruction)>>,
-    stats: Cell<JitStatistics>,
+    heat: Vec<Heat>,
+    preparations: std::collections::HashMap<[u32; 8], Preparation>,
+    guest_dispatch_pc: Option<u16>,
+    lazy: bool,
+    compilation_failed: bool,
+    stats: JitStatistics,
 }
 impl Drop for Jit {
     fn drop(&mut self) {
@@ -181,32 +200,100 @@ impl Jit {
             {
                 *entry = None;
             }
+            if entry.is_none() {
+                self.heat[pc].preparation = 0;
+            }
         }
-        for (block, source) in self.blocks.iter_mut().zip(&self.block_sources) {
-            if block.run.is_some()
-                && source
+        for (pc, (block, source)) in self
+            .blocks
+            .iter_mut()
+            .zip(&mut self.block_sources)
+            .enumerate()
+        {
+            if source.is_empty()
+                || source
                     .iter()
                     .any(|(pc, instruction)| image.code.get(*pc) != Some(&Some(*instruction)))
             {
-                block.run = None;
+                *block = Block::default();
+                source.clear();
+                self.heat[pc].block = 0;
             }
+        }
+        self.entries.resize_with(image.code.len(), || None);
+        self.blocks.resize_with(image.code.len(), Block::default);
+        self.block_sources.resize_with(image.code.len(), Vec::new);
+        self.heat.resize(image.code.len(), Heat::default());
+    }
+
+    fn finish_compilation(&mut self, result: Result<()>, started: std::time::Instant) {
+        self.stats.compilation_time += started.elapsed();
+        if let Err(error) = result {
+            self.stats.compilation_failures += 1;
+            self.compilation_failed = true;
+            eprintln!("JIT compilation failed; retaining executor fallback: {error:#}");
+        }
+    }
+
+    #[cold]
+    fn heat_region(&mut self, pc: usize, image: &Image, budget: u64, policy: &BlockPolicy) {
+        if self.block_sources[pc].is_empty() {
+            self.discover_region(image, pc);
+            if self.blocks[pc].length == 0 {
+                self.heat[pc].block = DISABLED;
+                return;
+            }
+        }
+        let block = &self.blocks[pc];
+        if u64::from(block.length) > budget
+            || (block.object && !policy.allow_object)
+            || (block.barrier && policy.pending_object)
+            || (policy.recovering && !block.recovery_safe)
+        {
+            return;
+        }
+        self.heat[pc].block += 1;
+        if self.heat[pc].block == HOT_REGION {
+            self.heat[pc].block = DISABLED;
+            let started = std::time::Instant::now();
+            let result = self.compile_region(pc);
+            self.finish_compilation(result, started);
+        }
+    }
+
+    #[cold]
+    fn heat_preparation(&mut self, pc: usize, image: &Image) {
+        self.heat[pc].preparation += 1;
+        if self.heat[pc].preparation == HOT_PREPARATION {
+            self.heat[pc].preparation = DISABLED;
+            let started = std::time::Instant::now();
+            let result = self.compile_preparation(image, pc);
+            self.finish_compilation(result, started);
         }
     }
 
     pub(crate) fn statistics(&self) -> JitStatistics {
-        self.stats.get()
+        self.stats
     }
 
     pub(crate) fn run_block(
-        &self,
+        &mut self,
         cpu: &mut Processor,
         devices: &mut ExternalDevice,
-        _image: &Image,
+        image: &Image,
         budget: u64,
         objekt: &mut rekursiv_model::Model,
         policy: BlockPolicy,
     ) -> Option<BlockResult> {
         let pc = cpu.pc as usize;
+        if self.blocks.get(pc)?.run.is_none()
+            && cpu.roots.is_some()
+            && self.lazy
+            && !self.compilation_failed
+            && self.heat[pc].block != DISABLED
+        {
+            self.heat_region(pc, image, budget, &policy);
+        }
         let block = self.blocks.get(pc)?;
         let run = block.run?;
         if objekt.entries.len() < 2
@@ -236,7 +323,7 @@ impl Jit {
                 &view,
             )
         };
-        let mut stats = self.stats.get();
+        let stats = &mut self.stats;
         stats.block_calls += 1;
         let retired = (result >> 8) & 0xffff;
         if tickless != 0 {
@@ -245,7 +332,6 @@ impl Jit {
         stats.block_instructions += retired;
         let transfer = result as u8 == resident::TRANSFER;
         stats.transfer_fallbacks += u64::from(transfer);
-        self.stats.set(stats);
         Some(BlockResult {
             retired,
             guest_bytecodes: (result >> 24) & 0xff,
@@ -263,16 +349,23 @@ impl Jit {
     // stalls on the instruction hot path. No local effects reach CPU yet.
     #[inline]
     pub(crate) fn prepare_into(
-        &self,
+        &mut self,
         cpu: &Processor,
         irq: bool,
-        _image: &Image,
+        image: &Image,
         out: &mut NativeWrites,
     ) -> Option<Result<Option<Command>, u8>> {
-        let entry = self.entries.get(cpu.pc as usize)?.as_ref()?;
-        let mut stats = self.stats.get();
+        let pc = cpu.pc as usize;
+        if self.entries.get(pc)?.is_none()
+            && self.lazy
+            && !self.compilation_failed
+            && self.heat[pc].preparation != DISABLED
+        {
+            self.heat_preparation(pc, image);
+        }
+        let entry = self.entries.get(pc)?.as_ref()?;
+        let stats = &mut self.stats;
         stats.preparations += 1;
-        self.stats.set(stats);
         let d = match entry.prepare {
             Preparation::Scalar(prepare) => {
                 *out = NativeWrites::Scalar(ScalarWrites::default());
@@ -312,7 +405,7 @@ impl Jit {
 
     #[cfg(test)]
     pub(crate) fn prepare(
-        &self,
+        &mut self,
         cpu: &Processor,
         irq: bool,
         image: &Image,

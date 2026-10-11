@@ -61,8 +61,8 @@ fn simultaneous_stack_and_fetch_retirements_match_rtl_and_native_blocks() -> Res
     let image = simultaneous_image();
     let mut jit = Machine::new(image.clone(), 0, 16, 512)?;
     let mut blocks = Machine::new(image.clone(), 0, 16, 512)?;
-    jit.enable_jit()?;
-    blocks.enable_jit()?;
+    jit.enable_jit_eager()?;
+    blocks.enable_jit_eager()?;
     let rt = rekursiv_sim::runtime()?;
     let mut h = Harness::new(&rt, Timing::default(), None)?;
     h.load_processor(&image)?;
@@ -106,7 +106,7 @@ fn fetch_uses_live_tables_and_missing_slots_do_not_publish_writes() -> Result<()
         Instruction::halt(),
     ]);
     let mut m = Machine::new(image, 0, 16, 512)?;
-    m.enable_jit()?;
+    m.enable_jit_eager()?;
     // Both tables were empty when compiled. Populate/replace their allocations
     // afterward: generated code must never embed their data pointers or values.
     m.image_mut().nam = vec![Some((3 << 30) | 123), Some((5 << 30) | 999)];
@@ -141,7 +141,7 @@ fn blocking_object_failure_discards_prepared_stack_and_fetch_destinations() -> R
     i.fetch = Fetch::Both;
     image.nam[0] = Some((7 << 30) | 123);
     let mut m = Machine::new(image, 0, 16, 512)?;
-    m.enable_jit()?;
+    m.enable_jit_eager()?;
     let mut expected = m.cpu.clone();
     expected.halted = true;
     assert!(m.step().is_err());
@@ -177,7 +177,7 @@ fn compact_stack_fault_retains_only_earlier_block_retirements() -> Result<()> {
     ];
     let mut a = Machine::new(Image::program(&code), 0, 16, 512)?;
     let mut b = Machine::new(Image::program(&code), 0, 16, 512)?;
-    b.enable_jit()?;
+    b.enable_jit_eager()?;
     a.step()?;
     assert!(a.step().is_err());
     assert!(b.run_steps(3).is_err());
@@ -206,7 +206,7 @@ fn native_nam_tables_preserve_all_value_bits_before_a_later_map_fault() -> Resul
     image.nam = vec![Some(u64::MAX)];
     let mut expected = Machine::new(image.clone(), 0, 16, 512)?;
     let mut actual = Machine::new(image, 0, 16, 512)?;
-    actual.enable_jit()?;
+    actual.enable_jit_eager()?;
     assert!(expected.run_steps(2).is_err());
     assert!(actual.run_steps(2).is_err());
     assert_eq!(actual.cpu, expected.cpu);
@@ -269,7 +269,7 @@ fn generated_objekt_register_controls_match_hdl_with_backpressure() -> Result<()
     code.push(Instruction::halt());
     let image = Image::program(&code);
     let mut native = Machine::new(image.clone(), 0, 16, 512)?;
-    native.enable_jit()?;
+    native.enable_jit_eager()?;
     native.run_steps(32)?;
     let rt = rekursiv_sim::runtime()?;
     let mut h = Harness::new(

@@ -225,9 +225,16 @@ impl Machine {
         self.guest_dispatch_pc.is_some()
     }
 
-    /// Compile the current control store. Modified or unsupported words keep
-    /// using the interpreter. Repeating this call rebuilds the translation.
+    /// Enable demand-driven translation. Cold words use the executor; repeated
+    /// entries compile bounded regions or single-word preparations. Returns the
+    /// initial native function count (zero). Repeating this call resets the JIT.
     pub fn enable_jit(&mut self) -> Result<usize> {
+        self.jit = Some(jit::Jit::new(&self.image, self.guest_dispatch_pc)?);
+        Ok(0)
+    }
+    /// Precompile the current control store for native-path tests and controlled
+    /// comparisons. Edited words fall back until this method is called again.
+    pub fn enable_jit_eager(&mut self) -> Result<usize> {
         let compiled = jit::Jit::compile(&self.image, self.guest_dispatch_pc)?;
         let functions = compiled.statistics().functions;
         self.jit = Some(compiled);
@@ -333,7 +340,7 @@ impl Machine {
                 {
                     self.join_object()?;
                 }
-                if let Some(result) = self.jit.as_ref().and_then(|jit| {
+                if let Some(result) = self.jit.as_mut().and_then(|jit| {
                     jit.run_block(
                         &mut self.cpu,
                         &mut self.devices,

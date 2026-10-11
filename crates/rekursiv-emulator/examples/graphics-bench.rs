@@ -183,7 +183,7 @@ fn main() -> Result<()> {
             m.enable_cycle_estimate(config)?;
         }
         if engine == "jit" {
-            m.enable_jit()?;
+            m.enable_jit_eager()?;
         }
         let started = Instant::now();
         m.run_steps(2_000_000 + iterations as u64 * 20_000_000)?;

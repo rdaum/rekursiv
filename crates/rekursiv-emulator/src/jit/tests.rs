@@ -129,7 +129,7 @@ fn compiled_datapath_matches_the_processor_oracle() -> Result<()> {
     }
     // Compile once, then vary dynamic state without recompilation. Include
     // valid boundaries, stale pointers, and signed arithmetic extremes.
-    let jit = Jit::compile(&image, None)?;
+    let mut jit = Jit::compile(&image, None)?;
     let mut successes = 0;
     let mut faults = [0; 7];
     for pc in 0..1024 {

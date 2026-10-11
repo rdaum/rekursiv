@@ -10,6 +10,11 @@ Verilator remains necessary for handshake, pipeline, stall, and reset validation
 Synthesis and timing analysis must establish the achievable FPGA clock frequency.
 
 The CLI uses a [Cranelift](https://docs.wasmtime.dev/api/cranelift_jit/index.html) JIT by default.
+Startup initializes tables without generating native functions. Cold code uses the existing
+executor. A region compiles after 16 eligible entry attempts; a fallback instruction helper
+compiles after 32 uses. These are host policy thresholds, not architectural state. Helpers
+with identical control words share a translation. `Machine::enable_jit_eager()` retains eager
+compilation for native-path tests and controlled comparisons.
 It translates arithmetic, flag calculations, branches, stack controls, fetch controls, and validation checks into native code.
 Native regions execute up to 32 instructions per call, including resident OBJEKT commands.
 They follow static jumps and immediate relative branches, retaining register values in SSA
@@ -61,12 +66,13 @@ Before the next `step` or `run_steps`, the executor refreshes scalar decoding an
 This check includes every region whose source dependencies include a changed or removed word,
 including noncontiguous branch targets.
 Unchanged translations remain available, including after NAM/map-only edits.
-Changed words use the interpreter until a library caller recompiles the image.
+Changed words return to the executor and can become hot again. In explicit eager mode,
+they remain interpreted until the library caller recompiles the image.
 Execution performs no repeated source comparisons between edits.
 JIT code belongs to the machine and is freed when the machine drops or disables the JIT.
-Regions are compiled at known control-flow entries and bounded-region continuations, avoiding
-compilation of every overlapping suffix. Unknown computed entries use individual preparations
-until they reach a compiled entry.
+Regions form at observed entries, including computed branch destinations. Compilation occurs
+between native calls, before architectural effects. A compiler error is reported and disables
+further compilation; existing translations and the executor remain available.
 
 ## Run the workstation demo
 
@@ -191,7 +197,8 @@ instructions. Active time includes instruction execution, emulated devices, reco
 optional trace output. It excludes worker input/clock updates and snapshot publication. Elapsed time
 also includes window startup, frontend work, and time spent displaying a stopped processor. Window
 work runs concurrently with CPU execution, so their measured durations overlap. Both intervals
-exclude image loading/conversion, JIT compilation, and final trace flush/frame export. The window title updates
+exclude image loading/conversion, JIT initialization, and final trace flush/frame export;
+demand compilation during execution is included. The window title updates
 approximately once per second with the recent active execution rate. Headless runs with fixed memory
 and step counts provide repeatable workloads. Trace output affects throughput.
 
@@ -214,7 +221,9 @@ Run-to-run ranges overlap; these results do not establish zero overhead on every
 All final processor counters and framebuffer hashes match their baselines.
 Repeated runs report 2,010,226 Squeak bytecodes and 2,477,743 Xerox bytecodes at that step budget.
 
-JIT startup reports its function count and compilation time separately.
+JIT startup reports initialization time. The final JIT report includes the function count,
+runtime compilation time and compilation failures. Active execution timing includes runtime
+compilation, so cold-start latency remains visible rather than disappearing from the totals.
 The exit report counts instructions retired in native blocks and individual native preparations.
 Preparations include attempts that later fault or enter collection, so they are not retirement counts.
 
@@ -409,7 +418,7 @@ startup compilation: the first paired Squeak run rose from 4.84 to 25.58 seconds
 Smalltalk-80 from 4.30 to 23.29 seconds.
 
 The completed resident translation also generates probes, metadata and RAM accesses directly.
-Compilation now targets known control-flow entries rather than every overlapping suffix.
+That revision compiled known control-flow entries rather than every overlapping suffix.
 A short subsequent check used one alternating baseline/current pair per workload, three calls
 per process, on the same pinned CPU:
 
@@ -419,10 +428,31 @@ per process, on the same pinned CPU:
 | Sum 0 through 9,999, seconds per call | 0.16944 | 0.09046 | 1.87× |
 
 Results, bytecode counts and microinstruction counts matched exactly. These are short workload
-measurements, not a repeated full-image regression. Compilation was 12.37 and 12.34 seconds;
-reducing it further remains useful. The saved-image measurements above describe the intermediate
+measurements, not a repeated full-image regression. Compilation was 12.37 and 12.34 seconds.
+The saved-image measurements above describe the intermediate
 version, not the completed resident translation.
 Raw logs, binary hashes and paired results are in `artifacts/hardware-jit/` when retained.
+
+### Demand compilation
+
+The default policy now compiles only code reached often enough to cross the hotness thresholds.
+A short comparison with the saved `9bfcbe7` executable used CPU 7 on the same Ryzen host,
+three calls per workload. Times exclude fixture loading; totals include JIT initialization,
+all runtime compilation and execution:
+
+| Workload | Eager total | On-demand total | Functions, eager → on demand | Runtime compilation |
+| --- | ---: | ---: | ---: | ---: |
+| Fibonacci(18), three calls | 12.70 s | 0.608 s | 4,058 → 57 | 0.353 s |
+| Sum 0 through 9,999, three calls | 12.98 s | 0.489 s | 4,058 → 43 | 0.202 s |
+
+On-demand initialization took about 0.3 ms. Both workloads returned identical results and
+retired identical bytecode and microinstruction counts, with no compilation failures.
+Subtracting runtime compilation gave 84.9 versus 81.8 ms per Fibonacci call and 95.5 versus
+91.4 ms per sum call: approximately 4% slower execution in these short samples, despite the
+large reduction in total latency. These are cold-process measurements, not warmed steady-state
+or saved-image performance claims. Full regression runs are not needed for routine iteration;
+the focused checks exercise both eager native paths and cold-to-hot execution, including
+noncontiguous code edits, table resizing, helper reuse and exact device timing.
 
 ### Compare with a native Smalltalk VM
 
@@ -448,7 +478,11 @@ prompt, writes `rekursiv-benchmark.csv` beside the image, and exits without savi
 Errors write `rekursiv-error.txt` and exit unsuccessfully. It warms each method with ten
 calls and measures three batches of 10,000 calls; Rekursiv defaults to three calls per
 process. Compare time per completed call, not raw batch times. Rekursiv excludes fixture
-loading and JIT compilation; native timing excludes startup, source compilation, warmup
+loading. Its `seconds` and `seconds_per_call` include runtime compilation; `startup_seconds`
+and `runtime_compilation_seconds` expose both compilation phases. `execution_seconds_per_call`
+subtracts measured runtime compilation, but still includes cold interpreted execution and
+is not a fully warmed measurement. Append `eager` to the Rekursiv command to compile before
+timing, as in the historical results below. Native timing excludes startup, source compilation, warmup
 and the full collection before each batch. Any collection during a timed batch is included.
 
 On a Ryzen 9 7940HS, each process pinned to logical CPU 7 and run sequentially, three

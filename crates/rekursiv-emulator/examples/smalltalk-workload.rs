@@ -40,7 +40,7 @@ fn main() -> Result<()> {
             10000,
             49995000,
         ),
-        _ => eyre::bail!("usage: smalltalk-workload fib|loop [repetitions]"),
+        _ => eyre::bail!("usage: smalltalk-workload fib|loop [repetitions] [eager]"),
     };
     let method = f.method(&bytes, literals, 1, temps, 0);
     f.bind(f.class, selector, method);
@@ -55,15 +55,29 @@ fn main() -> Result<()> {
     f.start(&caller, vec![int(n), selector], vec![]);
     let mut m = boot::squeak_source(&f.image, 16_777_216, 65_536)?.machine;
     let compilation = Instant::now();
-    let functions = m.enable_jit()?;
-    eprintln!(
-        "JIT: {functions} native functions compiled in {:.3} s",
-        compilation.elapsed().as_secs_f64()
+    let eager = args.get(3).is_some_and(|s| s == "eager");
+    ensure!(
+        args.len() <= 4 && (args.len() < 4 || eager),
+        "expected optional 'eager'"
     );
+    if eager {
+        m.enable_jit_eager()?;
+    } else {
+        m.enable_jit()?;
+    }
+    let startup_seconds = compilation.elapsed().as_secs_f64();
+    eprintln!(
+        "JIT startup: {startup_seconds:.3} s ({})",
+        if eager { "eager" } else { "on demand" }
+    );
+    let compiled_before = m.jit_statistics().unwrap().compilation_time;
     let start = Instant::now();
     m.run_steps(repetitions as u64 * 200_000_000)?;
     let elapsed = start.elapsed().as_secs_f64();
-    eprintln!("JIT execution: {:?}", m.jit_statistics().unwrap());
+    let jit = m.jit_statistics().unwrap();
+    let runtime_compilation = (jit.compilation_time - compiled_before).as_secs_f64();
+    let execution = (elapsed - runtime_compilation).max(0.0);
+    eprintln!("JIT execution: {jit:?}");
     ensure!(
         m.cpu.halted && !m.cpu.service && m.cpu.rf[15] == 1,
         "did not finish: pc={} status={}",
@@ -75,6 +89,6 @@ fn main() -> Result<()> {
         "wrong result: {:?}",
         m.objekt.state.vr[5]
     );
-    println!("case={case}, n={n}, repetitions={repetitions}, result={expected}, seconds={elapsed:.9}, seconds_per_call={:.9}, bytecodes={}, microinstructions={}, collections={}", elapsed / repetitions as f64, m.stats.guest_bytecodes, m.stats.retired+m.stats.collector_retired,m.stats.collections);
+    println!("case={case}, n={n}, repetitions={repetitions}, result={expected}, seconds={elapsed:.9}, seconds_per_call={:.9}, startup_seconds={startup_seconds:.9}, runtime_compilation_seconds={runtime_compilation:.9}, execution_seconds={execution:.9}, execution_seconds_per_call={:.9}, bytecodes={}, microinstructions={}, collections={}", elapsed / repetitions as f64, execution / repetitions as f64, m.stats.guest_bytecodes, m.stats.retired+m.stats.collector_retired,m.stats.collections);
     Ok(())
 }

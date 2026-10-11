@@ -39,13 +39,13 @@ impl WriteSet for Writes {
 
 pub(super) trait Execution {
     type Writes: WriteSet + Default;
-    fn prepare(m: &Machine, irq: bool, out: &mut Self::Writes) -> Result<Option<Command>, u8>;
+    fn prepare(m: &mut Machine, irq: bool, out: &mut Self::Writes) -> Result<Option<Command>, u8>;
 }
 pub(super) struct Interpreted;
 impl Execution for Interpreted {
     type Writes = Writes;
     #[inline(never)]
-    fn prepare(m: &Machine, irq: bool, out: &mut Writes) -> Result<Option<Command>, u8> {
+    fn prepare(m: &mut Machine, irq: bool, out: &mut Writes) -> Result<Option<Command>, u8> {
         let (writes, command) = if m.recovering() {
             if let Some(decoded) = m
                 .recovery_code
@@ -109,11 +109,11 @@ pub(super) struct Native;
 impl Execution for Native {
     type Writes = NativeWrites;
     #[inline(never)]
-    fn prepare(m: &Machine, irq: bool, out: &mut NativeWrites) -> Result<Option<Command>, u8> {
+    fn prepare(m: &mut Machine, irq: bool, out: &mut NativeWrites) -> Result<Option<Command>, u8> {
         if !m.recovering() {
             if let Some(result) = m
                 .jit
-                .as_ref()
+                .as_mut()
                 .and_then(|jit| jit.prepare_into(&m.cpu, irq, &m.image, out))
             {
                 return result;

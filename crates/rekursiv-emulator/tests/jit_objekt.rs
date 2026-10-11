@@ -98,7 +98,7 @@ fn resident_datapath_preserves_lookup_flags_bounds_and_old_operands() -> Result<
             Instruction::halt(),
         ]);
         let mut native = Machine::new(image.clone(), 0, 16, 64)?;
-        native.enable_jit()?;
+        native.enable_jit_eager()?;
         for case in 0..40 {
             let mut reference = Machine::new(image.clone(), 0, 16, 64)?;
             let mut first = Entry {

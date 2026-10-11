@@ -12,13 +12,13 @@ fn edited_control_store_falls_back_and_can_be_recompiled() -> Result<()> {
         ..Instruction::default()
     };
     let mut machine = Machine::new(Image::program(&[original, Instruction::halt()]), 0, 16, 512)?;
-    assert!(machine.enable_jit()? > 0);
+    assert!(machine.enable_jit_eager()? > 0);
     // A mutable image borrow invalidates changed translations before execution.
     machine.image_mut().code[0].as_mut().unwrap().data = Word::raw(73)?;
     assert_eq!(machine.step()?, Step::Retired);
     assert_eq!(machine.cpu.rf[0], 73);
     machine.cpu.pc = 0;
-    machine.enable_jit()?;
+    machine.enable_jit_eager()?;
     machine.step()?;
     assert_eq!(machine.cpu.rf[0], 73);
     // An invalid replacement must be validated, never run as cached code.
@@ -41,7 +41,7 @@ fn jit_and_interpreter_match_through_gc_objects_and_devices() -> Result<()> {
     ] {
         let mut interpreter = boot::microcode_with_pager(source, 512, 16)?.machine;
         let mut jit = boot::microcode_with_pager(source, 512, 16)?.machine;
-        jit.enable_jit()?;
+        jit.enable_jit_eager()?;
         interpreter.devices.registers.insert(16, 0);
         jit.devices.registers.insert(16, 0);
         interpreter.objekt_metrics_enabled = true;
@@ -77,7 +77,7 @@ fn native_blocks_preserve_ticks_budget_edits_and_fault_boundaries() -> Result<()
     for budget in [1, 2, 3, 7, 256] {
         let mut interpreted = boot::microcode_with_pager(source, 512, 16)?.machine;
         let mut compiled = boot::microcode_with_pager(source, 512, 16)?.machine;
-        compiled.enable_jit()?;
+        compiled.enable_jit_eager()?;
         interpreted.devices = rekursiv_emulator::presentation::workstation(0, 2);
         compiled.devices = rekursiv_emulator::presentation::workstation(0, 2);
         for _ in 0..budget {
@@ -94,7 +94,7 @@ fn native_blocks_preserve_ticks_budget_edits_and_fault_boundaries() -> Result<()
     let mut m =
         boot::microcode_with_pager("d=1, r=Bus, ldrb\nd=2, r=Bus, rb=1, ldrb\nhalt", 512, 16)?
             .machine;
-    m.enable_jit()?;
+    m.enable_jit_eager()?;
     m.image_mut().code[1].as_mut().unwrap().data = Word::raw(73)?;
     m.run_steps(2)?;
     assert_eq!(m.cpu.rf[..2], [1, 73]);
@@ -104,7 +104,7 @@ fn native_blocks_preserve_ticks_budget_edits_and_fault_boundaries() -> Result<()
     let mut a = boot::microcode_with_pager(source, 512, 16)?.machine;
     let mut b = boot::microcode_with_pager(source, 512, 16)?.machine;
     // Bus target 99 is in range but absent; the next fetch faults precisely.
-    b.enable_jit()?;
+    b.enable_jit_eager()?;
     a.step()?;
     a.step()?;
     assert!(a.step().is_err());
@@ -167,7 +167,7 @@ fn saved_image_jit_matches_interpreter_with_batched_execution() -> Result<()> {
     b.devices = rekursiv_emulator::presentation::workstation(0, 1000);
     a.objekt_metrics_enabled = true;
     b.objekt_metrics_enabled = true;
-    b.enable_jit()?;
+    b.enable_jit_eager()?;
     // Small RAM exercises machine GC; the saved display exercises BitBlt.
     // Each batch compares every CPU field and all architectural counters.
     for batch in 0..20000 {
@@ -202,7 +202,7 @@ fn a_block_fault_drains_an_older_object_fault_first() -> Result<()> {
         );
         let mut a = boot::microcode_with_pager(&source, 512, 16)?.machine;
         let mut b = boot::microcode_with_pager(&source, 512, 16)?.machine;
-        b.enable_jit()?;
+        b.enable_jit_eager()?;
         for _ in 0..4 {
             a.step()?;
         }
@@ -229,7 +229,7 @@ fn peripheral_errors_leave_the_failing_block_instruction_uncommitted() -> Result
         events.schedule.insert(1, 1);
         m.devices.events = Some(events);
     }
-    b.enable_jit()?;
+    b.enable_jit_eager()?;
     a.step()?;
     let expected = a.step().unwrap_err();
     let actual = b.run_steps(2).unwrap_err();
@@ -305,7 +305,7 @@ fn native_block_destinations_use_old_operands_and_flags() -> Result<()> {
     let image = Image::program(&code);
     let mut a = Machine::new(image.clone(), 0, 16, 512)?;
     let mut b = Machine::new(image, 0, 16, 512)?;
-    b.enable_jit()?;
+    b.enable_jit_eager()?;
     for case in 0..256 {
         let mut cpu = rekursiv_model::processor::Processor {
             pc: ((case % 16) * 16) as u16,
@@ -353,7 +353,7 @@ fn image_edits_invalidate_overlapping_blocks_but_keep_unrelated_code() -> Result
     .machine;
     let second = m.image().code[..4].to_vec();
     m.image_mut().code[8..12].copy_from_slice(&second);
-    m.enable_jit()?;
+    m.enable_jit_eager()?;
     // Invalidate blocks beginning at 0 and 1 as well as the edited word at 2.
     m.image_mut().code[2].as_mut().unwrap().data = Word::raw(73)?;
     m.run_steps(3)?;
@@ -379,7 +379,7 @@ fn replacing_and_resizing_the_image_cannot_execute_stale_code() -> Result<()> {
         for batched in [false, true] {
             let mut m = boot::microcode_with_pager("d=11, r=Bus, ldrb\nhalt", 512, 16)?.machine;
             if jit {
-                m.enable_jit()?;
+                m.enable_jit_eager()?;
             }
             let original = m.image().code[0].unwrap();
             *m.image_mut() = Image::program(&[Instruction {
@@ -420,7 +420,7 @@ fn replacing_and_resizing_the_image_cannot_execute_stale_code() -> Result<()> {
                 m.cpu.pc = 0;
                 m.image_mut().code[0].as_mut().unwrap().data = Word::raw(59)?;
                 // Recompilation before the next execution must use the new image.
-                m.enable_jit()?;
+                m.enable_jit_eager()?;
                 m.run_steps(1)?;
                 assert_eq!(m.cpu.rf[0], 59);
                 assert_eq!(m.jit_statistics().unwrap().block_instructions, 1);
@@ -445,7 +445,7 @@ fn resident_blocks_and_fetch_fallback_preserve_each_committed_prefix() -> Result
         for budget in [1, 7, 256] {
             let mut expected = boot::microcode_with_pager(source, 512, 16)?.machine;
             let mut actual = boot::microcode_with_pager(source, 512, 16)?.machine;
-            actual.enable_jit()?;
+            actual.enable_jit_eager()?;
             for _ in 0..8 {
                 let mut failed = false;
                 for _ in 0..budget {
@@ -513,7 +513,7 @@ fn native_objekt_registers_match_model_at_signed_limits_and_combined_controls() 
         };
         let image = Image::program(&[instruction, Instruction::halt()]);
         let mut compiled = Machine::new(image.clone(), 0, 16, 512)?;
-        compiled.enable_jit()?;
+        compiled.enable_jit_eager()?;
         for (i, index) in limits.into_iter().enumerate() {
             let mut interpreted = Machine::new(image.clone(), 0, 16, 512)?;
             interpreted.objekt.state.index = index;
@@ -549,7 +549,7 @@ fn tick_elision_rechecks_peripherals_between_batches() -> Result<()> {
     let source = "d=17, r=Bus, rb=1, ldrb\nseq=Jump, brch=0";
     let mut expected = boot::microcode_with_pager(source, 512, 16)?.machine;
     let mut actual = boot::microcode_with_pager(source, 512, 16)?.machine;
-    actual.enable_jit()?;
+    actual.enable_jit_eager()?;
     for installed in [false, true, false, true] {
         for m in [&mut actual, &mut expected] {
             m.devices = if installed {
@@ -572,7 +572,7 @@ fn linked_microcode_branches_preserve_budgets_and_invalidate_noncontiguous_sourc
     let source = "seq=Jump, brch=8\nhalt\nhalt\nhalt\nhalt\nhalt\nhalt\nhalt\nra=0, rb=0, alu=Add, s=Branch, brch=1, ldrb\nd=0xfffffffff7, seq=Relative";
     let mut expected = boot::microcode_with_pager(source, 512, 16)?.machine;
     let mut actual = boot::microcode_with_pager(source, 512, 16)?.machine;
-    actual.enable_jit()?;
+    actual.enable_jit_eager()?;
     for budget in [32, 1, 7, 64, 3] {
         expected.run_steps(budget)?;
         actual.run_steps(budget)?;
@@ -607,7 +607,7 @@ fn quiet_devices_advance_only_the_prefix_before_an_object_fault() -> Result<()> 
         m.devices.events = Some(rekursiv_devices::Events::default());
         m.devices.clocks = Some(rekursiv_devices::Clocks::new(0, 0, 1000));
     }
-    actual.enable_jit()?;
+    actual.enable_jit_eager()?;
     assert!(expected.run_steps(32).is_err());
     assert!(actual.run_steps(32).is_err());
     assert_eq!(actual.cpu, expected.cpu);
@@ -626,11 +626,82 @@ fn dynamic_relative_branch_exits_with_materialized_registers() -> Result<()> {
     let source = "d=3, r=Bus, rb=1, ldrb\nd=Register, ra=1, seq=Relative, brch=0\nhalt\nhalt\nd=73, r=Bus, rb=2, ldrb\nhalt";
     let mut expected = boot::microcode_with_pager(source, 512, 16)?.machine;
     let mut actual = boot::microcode_with_pager(source, 512, 16)?.machine;
-    actual.enable_jit()?;
+    actual.enable_jit_eager()?;
     expected.run_steps(32)?;
     actual.run_steps(32)?;
     assert_eq!(actual.cpu, expected.cpu);
     assert_eq!(actual.stats, expected.stats);
     assert_eq!(actual.cpu.rf[2], 73);
+    Ok(())
+}
+
+#[test]
+fn demand_compilation_leaves_cold_code_alone_and_reheats_edited_regions() -> Result<()> {
+    let source = "seq=Jump, brch=8\nhalt\nhalt\nhalt\nhalt\nhalt\nhalt\nhalt\nra=0, rb=0, alu=Add, s=Branch, brch=1, ldrb\nseq=Jump, brch=0\nd=77, r=Bus, rb=4, ldrb\nhalt";
+    let mut interpreted = boot::microcode_with_pager(source, 512, 16)?.machine;
+    let mut native = boot::microcode_with_pager(source, 512, 16)?.machine;
+    interpreted.devices = rekursiv_emulator::presentation::workstation(0, 17);
+    native.devices = rekursiv_emulator::presentation::workstation(0, 17);
+    interpreted.devices.clocks.as_mut().unwrap().deadline = Some(3);
+    native.devices.clocks.as_mut().unwrap().deadline = Some(3);
+    assert_eq!(native.enable_jit()?, 0);
+    // One visit leaves all code cold, including the unreachable second program.
+    interpreted.run_steps(3)?;
+    native.run_steps(3)?;
+    assert_eq!(native.jit_statistics().unwrap().functions, 0);
+    for pass in 0..2 {
+        if pass == 1 {
+            for m in [&mut interpreted, &mut native] {
+                m.image_mut().code[8].as_mut().unwrap().branch = 7;
+            }
+        }
+        interpreted.run_steps(2048)?;
+        native.run_steps(2048)?;
+        assert_eq!(native.cpu, interpreted.cpu);
+        assert_eq!(native.stats, interpreted.stats);
+        assert_eq!(native.objekt, interpreted.objekt);
+        compare_devices(&native, &interpreted);
+        let stats = native.jit_statistics().unwrap();
+        assert!(stats.functions > 0 && stats.functions < 8, "{stats:?}");
+        assert!(stats.block_instructions > 1000);
+        assert_eq!(stats.compilation_failures, 0);
+    }
+    assert_eq!(native.cpu.rf[4], 0);
+    Ok(())
+}
+
+#[test]
+fn demand_preparations_share_code_and_handle_image_resizing() -> Result<()> {
+    let mut m = boot::microcode_with_pager("d=11, r=Bus, ldrb\nhalt", 512, 16)?.machine;
+    let original = m.image().code[0].unwrap();
+    m.image_mut().code[8] = Some(original);
+    m.enable_jit()?;
+    // Single stepping never compiles regions, but hot preparations share code.
+    for pc in [0, 8] {
+        for _ in 0..40 {
+            m.cpu.pc = pc;
+            m.step()?;
+            assert_eq!(m.cpu.rf[0], 11);
+        }
+        assert_eq!(m.jit_statistics().unwrap().functions, 1);
+    }
+    assert!(m.jit_statistics().unwrap().preparations > 0);
+    m.image_mut().code.clear();
+    m.cpu.pc = 0;
+    assert!(m.step().is_err());
+    assert_eq!(m.fault.unwrap().code, 2);
+    m.image_mut().code = vec![Some(Instruction {
+        data: Word::raw(29)?,
+        ..original
+    })];
+    m.cpu.halted = false;
+    m.fault = None;
+    for _ in 0..40 {
+        m.cpu.pc = 0;
+        m.step()?;
+        assert_eq!(m.cpu.rf[0], 29);
+    }
+    assert_eq!(m.jit_statistics().unwrap().functions, 2);
+    assert_eq!(m.jit_statistics().unwrap().compilation_failures, 0);
     Ok(())
 }
