@@ -368,6 +368,53 @@ body residency remains a distinct hierarchy profile: it changes which replacemen
 objects and therefore the observable NEW/MOD flags. This pass retains the direct-mapped
 pager, resident-only probes, save/refill policy and flag behavior.
 
+### Compare with a native Smalltalk VM
+
+For a quick practical comparison, use the same portable Smalltalk work on the same host,
+without requiring the same image version. `examples/smalltalk-workload.rs` assembles two
+methods into a synthetic Squeak 1.1 graph and executes them through the normal microcode,
+OBJEKT model and microinstruction JIT. The corresponding Smalltalk source is in
+[`scripts/smalltalk-workload.st`](../scripts/smalltalk-workload.st); a stock Squeak 6.0
+Cog VM compiles and executes it normally. Neither side supplies benchmark answers from
+the host; both check the final result.
+
+```sh
+cargo build --release --locked -p rekursiv-emulator --example smalltalk-workload
+taskset -c 7 target/release/examples/smalltalk-workload fib 3
+taskset -c 7 target/release/examples/smalltalk-workload loop 3
+# With a downloaded native bundle; pass absolute paths for the image and script:
+taskset -c 7 /path/to/bundle/bin/squeak -headless /path/to/bundle/shared/Squeak.image \
+  "$PWD/scripts/smalltalk-workload.st"
+```
+
+The native script sets author initials in the temporary image session to avoid a first-use
+prompt, writes `rekursiv-benchmark.csv` beside the image, and exits without saving the image.
+Errors write `rekursiv-error.txt` and exit unsuccessfully. It warms each method with ten
+calls and measures three batches of 10,000 calls; Rekursiv defaults to three calls per
+process. Compare time per completed call, not raw batch times. Rekursiv excludes fixture
+loading and JIT compilation; native timing excludes startup, source compilation, warmup
+and the full collection before each batch. Any collection during a timed batch is included.
+
+On a Ryzen 9 7940HS, each process pinned to logical CPU 7 and run sequentially, three
+trials measured the following median times per call. Rekursiv used revision `64be8ed`,
+16,777,216 RAM words and 65,536 pager entries. The native VM was the production x86-64
+Cog/Spur VM `202206021410` from the official
+[Squeak 6.0-22104 Linux bundle](https://files.squeak.org/6.0/Squeak6.0-22104-64bit/Squeak6.0-22104-64bit-202206021410-Linux-x64.tar.gz).
+
+| Workload | Result | Rekursiv | Native Cog | Cog speedup |
+| --- | ---: | ---: | ---: | ---: |
+| Recursive Fibonacci(18), base cases return 1 | 4,181 | 157.49 ms | 19.5 µs | 8,077× |
+| Sum integers 0 through 9,999 with a while loop | 49,995,000 | 169.97 ms | 16.0 µs | 10,623× |
+
+Rekursiv ranges were 156.69–160.92 ms and 168.54–170.12 ms respectively; native ranges
+were 19.4–19.6 µs and 16.0–16.4 µs. No Rekursiv collections occurred. These deliberately
+small workloads measure arithmetic, branches and recursive sends, not graphics, plugins
+or general application performance. The source-level work and inputs match; image versions,
+bytecode encodings, compilers and object representations differ. Cog compiles guest methods
+directly to host code, whereas Rekursiv's JIT still executes the emulated microarchitecture.
+This is a comparison of the complete software stacks, not an FPGA performance prediction
+or a comparison of their reported bytecodes/s.
+
 ### Compare microcode revisions
 
 Use equal guest-dispatch budgets when changing microcode. A fixed microinstruction budget would
