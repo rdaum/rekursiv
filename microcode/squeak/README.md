@@ -77,6 +77,9 @@ depths 1, 2, 4, 8, 16 and 32. It computes addresses once per row, caches the rul
 and source word, and advances by destination words. Differently aligned sources merge
 two words only when the requested pixels cross a source boundary. Edge masks preserve
 pixels outside the clipped rectangle, including sub-word copies.
+Source fetching finishes before each destination read, which prepares the subsequent
+write address. That write reuses the prepared address and overlaps local loop bookkeeping
+through `launch`; the next OBJEKT command joins it. Kernel exit releases the prepared root.
 
 Mapped 1-bit to 8-bit copy glyphs cache the two colours replicated across byte lanes.
 Four source bits expand into a destination word using ordinary NUMERIK multiplication

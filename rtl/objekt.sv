@@ -75,6 +75,16 @@ module objekt #(
     prepared_access_t prepared_access, next_prepared, pending_prepared;
     typedef enum logic [2:0] {IDLE, REQUEST, WAIT_MEMORY, RESPONSE, TRANSFER, EXCHANGE, DIRECTORY} resident_state_t;
     resident_state_t phase;
+    logic [3:0] response_status;
+    logic [39:0] response_data;
+    // Forward a resident RAM completion to the response channel on the same
+    // edge that commits it. If the consumer stalls, retain exactly that reply
+    // in RESPONSE; memory completion and architectural effects happen once.
+    wire resident_completion = phase==WAIT_MEMORY && mem_rsp_valid_i;
+    assign rsp_status_o = resident_completion ? (mem_rsp_error_i ? MEMORY_ERROR : OK) : response_status;
+    assign rsp_data_o = resident_completion
+        ? (mem_rsp_error_i ? NIL : (pending_write ? (pending_mutator ? pending_data : NIL) : mem_rsp_data_i))
+        : response_data;
     // Entry payload: {cond, modified, new, representation, base, class, size, reference}.
     logic [170:0] entries [0:ENTRIES-1];
     logic [ENTRIES-1:0] valid, persistent;
@@ -273,7 +283,7 @@ module objekt #(
     assign mem_data_o=gc_active_i ? gc_mem_data :(phase==EXCHANGE) ? 40'b0 :(phase==TRANSFER) ? transfer_mem_data : resident_mem_data_o;
     assign cmd_ready_o = phase==IDLE && run_i && !maintenance && !gc_active_i && !rst_i;
     assign svc_ready_o = phase==IDLE && !run_i && !gc_active_i && !rst_i;
-    assign rsp_valid_o = phase==RESPONSE && !rst_i;
+    assign rsp_valid_o = (phase==RESPONSE || resident_completion) && !rst_i;
     assign mem_valid_o = gc_active_i ? gc_mem_valid : ((phase==REQUEST) || (phase==TRANSFER && transfer_mem_valid) || (phase==EXCHANGE && exchange_mem_valid)) && !rst_i;
     assign mem_rsp_ready_o = gc_active_i ? gc_mem_ready : ((phase==WAIT_MEMORY) || (phase==TRANSFER && transfer_mem_rsp_ready) || (phase==EXCHANGE && exchange_mem_ready)) && !rst_i;
     assign dbg_maintenance_o=maintenance;
@@ -463,7 +473,7 @@ module objekt #(
             phase<=IDLE; maintenance<=0; valid<=0; persistent<=0; class_valid<=0; selected<=0; snapshot<=0;
             prepared_access.reference<=NIL; prepared_access.index<=0; prepared_access.address<=0; prepared_access.status<=NO_SELECTION;
             pending_prepared<='0; pending_memory_entry<=0;
-            idx<=0; idxreg<=0; rsp_status_o<=OK; rsp_data_o<=NIL;
+            idx<=0; idxreg<=0; response_status<=OK; response_data<=NIL;
             resident_mem_write_o<=0;resident_mem_addr_o<=0;resident_mem_data_o<=0;
             pending_idx<=0;pending_reg<=0;pending_selected<=0;pending_load_vr<=0;
             pending_mutator<=0;pending_write<=0;pending_vr<=0; directory_vr<=0;pending_data<=0;pending_snapshot<=0;pending_slot<=0; saved_victim_slot<=0; saved_edges<=0; saved_scan<=0; exchange_edges<='0;
@@ -514,7 +524,7 @@ module objekt #(
             case(phase)
                 IDLE: begin
                     if(cmd_valid_i && cmd_ready_o) begin
-                        rsp_status_o<=error; rsp_data_o<=(error==OK) ? result_data : NIL;
+                        response_status<=error; response_data<=(error==OK) ? result_data : NIL;
                         if(start_directory) begin phase<=DIRECTORY; directory_vr<=vr_i; end
                         else if(start_exchange) phase<=EXCHANGE;
                         else if(start_transfer) begin phase<=TRANSFER; saved_victim_slot<=transfer_slot; end
@@ -536,11 +546,11 @@ module objekt #(
                             phase<=RESPONSE;
                         end
                     end else if(svc_valid_i && svc_ready_o) begin
-                        rsp_status_o<=OK;rsp_data_o<=NIL;phase<=RESPONSE;
+                        response_status<=OK;response_data<=NIL;phase<=RESPONSE;
                         case(svc_op_i)
                             0: begin
-                                if(!is_ref(svc_ref_i) || !is_ref(svc_class_i)) rsp_status_o<=INVALID_REFERENCE;
-                                else if(svc_size_i==0 && svc_repr_i!=NIL) rsp_status_o<=BAD_VALUE;
+                                if(!is_ref(svc_ref_i) || !is_ref(svc_class_i)) response_status<=INVALID_REFERENCE;
+                                else if(svc_size_i==0 && svc_repr_i!=NIL) response_status<=BAD_VALUE;
                                 else begin
                                     entries[svc_ref_i[PAGER_BITS-1:0]]<=svc_entry;
                                     if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==svc_ref_i[PAGER_BITS-1:0]) prepared_access.status<=NOT_RESIDENT;
@@ -550,23 +560,23 @@ module objekt #(
                                 end
                             end
                             1: begin
-                                if(!is_ref(svc_ref_i)) rsp_status_o<=INVALID_REFERENCE;
-                                else if(!valid[svc_ref_i[PAGER_BITS-1:0]] || entries[svc_ref_i[PAGER_BITS-1:0]][39:0]!=svc_ref_i) rsp_status_o<=NOT_RESIDENT;
+                                if(!is_ref(svc_ref_i)) response_status<=INVALID_REFERENCE;
+                                else if(!valid[svc_ref_i[PAGER_BITS-1:0]] || entries[svc_ref_i[PAGER_BITS-1:0]][39:0]!=svc_ref_i) response_status<=NOT_RESIDENT;
                                 else begin
                                     valid[svc_ref_i[PAGER_BITS-1:0]]<=0;
                                     if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==svc_ref_i[PAGER_BITS-1:0]) prepared_access.status<=NOT_RESIDENT;
                                 end
                             end
                             2: begin
-                                if(svc_code_i>3 || !is_ref(svc_class_i)) rsp_status_o<=BAD_VALUE;
+                                if(svc_code_i>3 || !is_ref(svc_class_i)) response_status<=BAD_VALUE;
                                 else begin
                                     classes[svc_code_i[1:0]]<=svc_class_i;class_valid[svc_code_i[1:0]]<=1;
                                     if(selected && snapshot[39:38]==2'b11 && snapshot[37:32]==svc_code_i) snapshot[103:64]<=svc_class_i;
                                 end
                             end
                             3: begin
-                                if({8'b0,svc_base_i}>=MEMORY_WORDS) rsp_status_o<=BOUNDS;
-                                else if(svc_overlap) rsp_status_o<=BAD_COMMAND;
+                                if({8'b0,svc_base_i}>=MEMORY_WORDS) response_status<=BOUNDS;
+                                else if(svc_overlap) response_status<=BAD_COMMAND;
                                 else begin
                                     pending_mutator<=0;pending_write<=1;
                                     resident_mem_addr_o<=svc_base_i;resident_mem_data_o<=svc_repr_i;resident_mem_write_o<=1;
@@ -574,7 +584,7 @@ module objekt #(
                                 end
                             end
                             4: begin
-                                if({8'b0,svc_base_i}>=MEMORY_WORDS) rsp_status_o<=BOUNDS;
+                                if({8'b0,svc_base_i}>=MEMORY_WORDS) response_status<=BOUNDS;
                                 else begin
                                     pending_mutator<=0;pending_write<=0;
                                     resident_mem_addr_o<=svc_base_i;resident_mem_data_o<=0;resident_mem_write_o<=0;
@@ -582,20 +592,20 @@ module objekt #(
                                 end
                             end
                             5: begin
-                                if(maintenance) rsp_status_o<=BAD_COMMAND;
+                                if(maintenance) response_status<=BAD_COMMAND;
                                 else maintenance<=1;
                             end
                             6: begin
-                                if(!maintenance) rsp_status_o<=BAD_COMMAND;
-                                else if(!cursor_safe) rsp_status_o<=BOUNDS;
+                                if(!maintenance) response_status<=BAD_COMMAND;
+                                else if(!cursor_safe) response_status<=BOUNDS;
                             end
                             7: begin
-                                if(!maintenance) rsp_status_o<=BAD_COMMAND;
+                                if(!maintenance) response_status<=BAD_COMMAND;
                                 else maintenance<=0;
                             end
                             8: if(svc_repr_i==0 || svc_repr_i>40'h2000000000)
-                                rsp_status_o<=BAD_VALUE;
-                            default: rsp_status_o<=BAD_COMMAND;
+                                response_status<=BAD_VALUE;
+                            default: response_status<=BAD_COMMAND;
                         endcase
                     end
                 end
@@ -604,32 +614,32 @@ module objekt #(
                 // memory completion. First-field writes publish both the body
                 // value and its cached representation on the same logical commit.
                 WAIT_MEMORY: if(mem_rsp_valid_i) begin
-                    rsp_status_o<=mem_rsp_error_i ? MEMORY_ERROR : OK;
-                    rsp_data_o<=NIL;
+                    response_status<=mem_rsp_error_i ? MEMORY_ERROR : OK;
+                    response_data<=NIL;
                     if(!mem_rsp_error_i && pending_mutator) begin
                         idx<=pending_idx;idxreg<=pending_reg;snapshot<=pending_snapshot;selected<=pending_selected;
                         prepared_access<=pending_prepared;
                         if(pending_load_vr) vr[pending_vr]<=pending_data;
                         if(pending_write) begin
                             entries[pending_slot]<=pending_memory_entry;
-                            rsp_data_o<=pending_data;
-                        end else rsp_data_o<=mem_rsp_data_i;
+                            response_data<=pending_data;
+                        end else response_data<=mem_rsp_data_i;
                     end
-                    if(!mem_rsp_error_i && !pending_mutator && !pending_write) rsp_data_o<=mem_rsp_data_i;
-                    phase<=RESPONSE;
+                    if(!mem_rsp_error_i && !pending_mutator && !pending_write) response_data<=mem_rsp_data_i;
+                    phase<=rsp_ready_i ? IDLE : RESPONSE;
                 end
                 // Publication is one complete metadata write plus valid bit.
                 // A failed transfer leaves the old slot and selection untouched;
                 // transfer reservations and completed unpublished writes may remain.
                 DIRECTORY: if(directory_done) begin
-                    rsp_status_o<=directory_status;
-                    rsp_data_o<=directory_status==OK ? directory_ref : NIL;
+                    response_status<=directory_status;
+                    response_data<=directory_status==OK ? directory_ref : NIL;
                     if(directory_status==OK) vr[directory_vr]<=directory_class;
                     phase<=RESPONSE;
                 end
                 TRANSFER: if(transfer_done) begin
-                    rsp_status_o<=transfer_status;
-                    rsp_data_o<=(transfer_status==OK) ? transfer_entry[39:0] : NIL;
+                    response_status<=transfer_status;
+                    response_data<=(transfer_status==OK) ? transfer_entry[39:0] : NIL;
                     if(transfer_status==OK) begin
                         if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==transfer_entry[PAGER_BITS-1:0]) prepared_access.status<=NOT_RESIDENT;
                         entries[transfer_entry[PAGER_BITS-1:0]]<=transfer_entry;
@@ -640,8 +650,8 @@ module objekt #(
                     phase<=RESPONSE;
                 end
                 EXCHANGE: if(exchange_done) begin
-                    rsp_status_o<=exchange_status;
-                    rsp_data_o<=exchange_status==OK ? exchange_first : NIL;
+                    response_status<=exchange_status;
+                    response_data<=exchange_status==OK ? exchange_first : NIL;
                     if(exchange_status==OK && exchange_first!=exchange_second) begin
                         if(prepared_access.status==OK && (prepared_access.reference==exchange_first || prepared_access.reference==exchange_second)) prepared_access.status<=NOT_RESIDENT;
                         persistent<=persistent | exchange_edges;

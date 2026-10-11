@@ -210,3 +210,46 @@ fn full_system_reset_at_each_transaction_phase() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn resident_reply_can_retire_on_the_memory_completion_edge() -> Result<()> {
+    let rt = runtime()?;
+    for memory in [Memory::Read, Memory::Write] {
+        for fail in [false, true] {
+            let mut h = Harness::new(&rt, Timing::default(), None)?;
+            setup(&mut h)?;
+            h.execute(Command::index(2)?)?; // Bypass the cached first component.
+            let command = Command {
+                memory,
+                data: Word::signed(321),
+                ..Default::default()
+            };
+            let expected = h.oracle.execute(command, fail);
+            h.drive(command.encode()?)?;
+            h.rtl.run_i = 1;
+            h.rtl.cmd_valid_i = 1;
+            h.rtl.rsp_ready_i = 1;
+            h.fail_next_memory = fail;
+            assert!(h.tick()?.command);
+            h.rtl.cmd_valid_i = 0;
+            let before = h.stats;
+            let mut completed = false;
+            for _ in 0..20 {
+                let edge = h.tick()?;
+                let memory_completed = h.stats.reads != before.reads
+                    || h.stats.writes != before.writes
+                    || h.stats.errors != before.errors;
+                assert_eq!(edge.response, memory_completed);
+                if memory_completed {
+                    assert_eq!(edge.response_value, Some(expected.response));
+                    h.compare_state()?;
+                    completed = true;
+                    break;
+                }
+            }
+            assert!(completed);
+            assert!(!h.tick()?.response, "reply must not be repeated");
+        }
+    }
+    Ok(())
+}

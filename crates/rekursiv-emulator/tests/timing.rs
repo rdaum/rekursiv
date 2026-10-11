@@ -172,7 +172,8 @@ fn reporting_does_not_drain_an_outstanding_reply() -> Result<()> {
     m.run_steps(10)?;
     let e = m.cycle_estimate().unwrap();
     assert!(!e.pending());
-    assert_eq!(e.cycles().async_wait, 14);
+    // RAM completion now reaches LOGIK without a registered-response bubble.
+    assert_eq!(e.cycles().async_wait, 13);
     assert!(e.report(&m.stats, f64::NAN).is_err());
     assert!(m.enable_cycle_estimate(Config::SRAM).is_err());
     Ok(())

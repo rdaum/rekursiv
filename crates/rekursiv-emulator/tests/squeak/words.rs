@@ -122,3 +122,24 @@ fn word_raster_clipping_and_short_rows_match_native() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn word_writes_overlap_bookkeeping_and_release_the_prepared_root() -> Result<()> {
+    use rekursiv_emulator::timing::Config;
+    let (f, bits, expected) = fixture(8, 6, [1, 0, 10, 3, 0, 0, 0, 0, 12, 3], false, false);
+    let m = run_with(&f, false, |m| {
+        m.enable_cycle_estimate(Config::DRAM).unwrap()
+    })?;
+    assert!(m.cycle_estimate().unwrap().work().async_hidden > 0);
+    assert!(m.cycle_estimate().unwrap().work().async_joins > 0);
+    assert!(!m.cycle_estimate().unwrap().pending());
+    assert_ne!(m.objekt.state.prepared.status, rekursiv_asm::Status::Ok);
+    assert_eq!(
+        body(&m, target::reference(bits)?)?[2..]
+            .iter()
+            .map(|w| w.bits() as u32)
+            .collect::<Vec<_>>(),
+        expected
+    );
+    Ok(())
+}

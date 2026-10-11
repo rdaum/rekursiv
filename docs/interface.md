@@ -173,8 +173,11 @@ commit on the successful memory-completion edge. Fetch misses and allocations co
 entry and selection after the complete transfer succeeds. Allocator reservations and transfer side
 effects have the separate failure rules specified below. That commit is architectural retirement:
 registers, metadata, and flags change together. OBJEKT state remains unchanged while a resident
-memory command waits. The result becomes valid after retirement and remains stable until
-`rsp_ready_i` accepts it. Response consumption does not execute or commit the operation again.
+memory command waits. A resident RAM completion drives the result directly, allowing the
+response handshake and architectural commit on the same edge. If `rsp_ready_i` is low,
+the core captures that result in RESPONSE and holds it stable until accepted; the RAM
+completion and commit still occur exactly once. Other paths register their result after
+retirement. Response consumption does not execute or commit the operation again.
 Neither input channel accepts another operation while a response is pending.
 
 The memory request channel uses `mem_valid_o`, `mem_ready_i`, `mem_write_o`, `mem_addr_o`, and
@@ -335,6 +338,12 @@ The engine initializes every scanned allocation word to nil and every opaque all
 zero. Refill copies exact 40-bit words from the backing record. Each operation uses a fresh physical
 range beyond the body cursor. The engine derives the representation cache from the first
 successfully written word. An empty object's representation is nil.
+
+The transfer engine enters FILL once to select initialization or refill. After each
+successful body write, it advances directly to the next RAM write (allocation) or
+backing read (refill). Allocation retains the same nil/zero fill word in its buffer.
+Channels still allow only one outstanding request each; this removes a control cycle
+between words without introducing bursts, speculative reads, or different error effects.
 
 After the complete body succeeds, the core replaces the target slot and selects the incoming object
 on one clock edge. A new allocation has new set, modified clear, and cond clear. A refilled object

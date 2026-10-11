@@ -306,6 +306,68 @@ pinned to CPU 7 at the same million-dispatch budget, measured median throughput 
 202,973 → 217,816 bytecodes/s (**1.073×**). All six framebuffer hashes match. These
 host measurements exclude loading/JIT compilation and do not predict FPGA clock speed.
 
+### OBJEKT pipeline improvements
+
+The next pass, measured against `3d81c92`, changes the RTL as well as microcode:
+
+- Resident RAM operations forward their completion to LOGIK on the commit edge.
+  Backpressure captures the same reply in the existing response registers, without
+  repeating memory writes or architectural effects. This saves one cycle when the
+  consumer is ready, for both synchronous and asynchronous memory commands.
+- Allocation/refill enters its FILL setup state once. Subsequent words advance directly
+  to the next RAM write or backing read, saving one cycle per additional body word.
+  External transactions remain serialized; these figures assume no burst support.
+- Squeak's Boolean word kernel completes source fetches before reading the destination.
+  That read also prepares the write address. Changed words use `prepared, launch` to
+  avoid another destination fetch and overlap local loop bookkeeping. An OBJEKT barrier
+  joins the write before further object work. Exit clears the prepared root. If RAM
+  reports an error, the existing launch contract retains intervening local arithmetic
+  and faults at the barrier; it never publishes the failed write or continues drawing.
+
+The emulator's functional OBJEKT model has no new execution shortcut. Its passive cost
+estimator was updated to match the changed state machines, and the timing suite compares
+those estimates with actual RTL clock counts. The simulator samples response payloads
+after driving external RAM inputs, so a forwarded reply cannot escape the oracle checks.
+
+The same eight-operation graphics benchmark now measures:
+
+| Workload | SRAM cycles/op | SRAM speedup | DRAM cycles/op | DRAM speedup |
+| --- | ---: | ---: | ---: | ---: |
+| Fill | 32,357.50 | 1.166× | 49,305.50 | 1.221× |
+| Aligned copy | 45,931.00 | 1.130× | 75,699.50 | 1.127× |
+| Unaligned copy | 43,173.00 | 1.121× | 68,589.50 | 1.147× |
+| Overlapping scroll | 62,433.50 | 1.106× | 101,074.75 | 1.110× |
+| Mapped glyph | 45,121.00 | 1.038× | 67,732.50 | 1.026× |
+
+These speedups are additional to the preceding raster changes. Glyph microcode is
+unchanged in this pass; its improvement comes from OBJEKT. Interpreter and JIT work
+counts match, and the pixel oracle also passes with a 16-entry pager.
+
+At one million dispatches, 16,777,216 RAM words and 65,536 pager entries:
+
+| Guest | SRAM cycles before → after | SRAM speedup | DRAM cycles before → after | DRAM speedup |
+| --- | ---: | ---: | ---: | ---: |
+| Xerox V2 | 410,177,113 → 385,822,448 | 1.063× | 743,385,081 → 719,030,416 | 1.034× |
+| Squeak 1.1 | 487,016,954 → 461,597,635 | 1.055× | 896,607,261 → 868,203,855 | 1.033× |
+
+Both final framebuffer hashes match their respective baselines. Squeak hides 544,398
+asynchronous service cycles across 272,199 writes in the SRAM profile; joining still
+costs a cycle, so hidden service is not itself the net speedup.
+
+Yosys 0.66 `synth_xilinx -family xcup -top objekt -noiopad` passes structural checks
+for the default 16-entry/512-word configuration. Including OBJEKT's submodules, LUT1–LUT6
+counts change from 26,829 to 27,210 (+1.4%); FDRE+FDSE remains 5,909. This is synthesis
+of OBJEKT alone, without a board memory controller or placement/routing. Completion
+forwarding introduces a combinational RAM-response-to-LOGIK path: clock timing must be
+checked on the eventual board. These counts do not establish the feasibility or clock
+speed of the 65,536-entry configuration used for image estimates.
+
+Further transfer buffering/bursts need explicit ordering, cancellation and partial-failure
+tests before the model can assume their throughput. Separating the metadata cache from
+body residency remains a distinct hierarchy profile: it changes which replacements save
+objects and therefore the observable NEW/MOD flags. This pass retains the direct-mapped
+pager, resident-only probes, save/refill policy and flag behavior.
+
 ### Compare microcode revisions
 
 Use equal guest-dispatch budgets when changing microcode. A fixed microinstruction budget would

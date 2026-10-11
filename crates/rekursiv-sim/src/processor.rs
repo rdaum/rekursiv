@@ -1,7 +1,7 @@
 //! Loading and observing an autonomous RTL processor. The host does not choose its next instruction.
 use crate::{Harness, Result};
 use eyre::ensure;
-use rekursiv_asm::{Ports, Response, Status, Word};
+use rekursiv_asm::{Ports, Status, Word};
 use rekursiv_model::processor::{Image, Processor, STACK_WORDS};
 
 impl Harness<'_> {
@@ -317,25 +317,19 @@ impl Harness<'_> {
                 accepted_ports = Some(ports);
                 launched = image.code[model.pc as usize].unwrap().object_async;
             }
-            let received = self.rtl.rsp_valid_o != 0
-                && self.rtl.cpu_rsp_ready_o != 0
-                && self.rtl.cpu_response_enable_i != 0;
-            if received {
-                response = Some(Response {
-                    status: Status::try_from(self.rtl.rsp_status_o)?,
-                    data: Word::from_bits(self.rtl.rsp_data_o)?,
-                });
-            }
-            // Nonblocking commands retire at acceptance. Their reply stays
-            // private until a dependent instruction or external boundary. A
-            // barrier joins on a separate edge before evaluating its operands.
-            let joining = launched
-                && response.is_some()
-                && (image.code[model.pc as usize].is_none_or(|i| i.object_barrier())
-                    || candidate.as_ref().is_some_and(|c| c.is_err()));
+            // Sample the reply inside tick, after external RAM has been driven.
+            // A forwarded completion need not have been visible before tick.
+            let barrier = image.code[model.pc as usize].is_none_or(|i| i.object_barrier())
+                || candidate.as_ref().is_some_and(|c| c.is_err());
             let device_requests = self.device.requests.len();
             let device_completions = self.device.completions.len();
-            self.tick()?;
+            let edges = self.tick()?;
+            let received = edges.response;
+            if received {
+                response = edges.response_value;
+            }
+            // A barrier joins on a separate edge before evaluating operands.
+            let joining = launched && response.is_some() && barrier;
             if self.device.requests.len() != device_requests {
                 ensure!(
                     !launched && expected_object.is_none(),

@@ -104,6 +104,9 @@ pub struct Edges {
     pub command: bool,
     pub service: bool,
     pub response: bool,
+    /// Payload sampled on the response handshake, after driving external RAM.
+    /// Completion may pass through combinationally and disappear at the edge.
+    pub response_value: Option<Response>,
 }
 
 pub struct Harness<'a> {
@@ -284,7 +287,7 @@ impl<'a> Harness<'a> {
         self.tick_store()?;
         self.tick_device()?;
         self.rtl.eval();
-        let edges = Edges {
+        let mut edges = Edges {
             command: (if self.rtl.cpu_enable_i != 0 {
                 self.rtl.cpu_cmd_valid_o & self.rtl.cpu_command_enable_i
             } else {
@@ -298,7 +301,14 @@ impl<'a> Harness<'a> {
                 } else {
                     self.rtl.rsp_ready_i
                 }) != 0,
+            response_value: None,
         };
+        if edges.response {
+            edges.response_value = Some(Response {
+                status: Status::try_from(self.rtl.rsp_status_o)?,
+                data: Word::from_bits(self.rtl.rsp_data_o)?,
+            });
+        }
         let request = self.rtl.mem_valid_o != 0 && self.rtl.mem_ready_i != 0;
         let complete = self.rtl.mem_rsp_valid_i != 0 && self.rtl.mem_rsp_ready_o != 0;
         self.held_request = if self.rtl.mem_valid_o != 0 && !request {

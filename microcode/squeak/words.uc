@@ -4,6 +4,10 @@
 ; pixels outside the clipped rectangle; a source read crosses a word boundary
 ; only when a requested pixel needs that word. All object identities stay rooted
 ; in VR3/4/5, never in numeric address caches. Re-fetch after any other object.
+; Finish source fetches before the destination read, which also prepares its
+; write address. The prepared write launches asynchronously; only local loop
+; bookkeeping can pass it before the next OBJEKT barrier. Clear the prepared
+; root at kernel exit so later collections do not retain the destination.
 ;
 ; Frame31 is the row continuation (bb_pixel / bb_glyph_row / bb_word_row).
 ; R1 caches the Boolean-rule entry across rows. R0 is the current halftone row.
@@ -102,18 +106,16 @@ bb_word:
 bb_word_count:
     d=0xffffffff, r=Bus, rb=12, ldrb
     ra=10, s=Branch, brch=32, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=bb_word_destination
+    seq=ConditionalJump, cc=Zero, brch=bb_word_operands
     ra=7, rb=10, alu=Add, ldq
     r=Q, s=Branch, brch=32, alu=SubReverse, cin=One, rb=14, ldrb
     d=1, r=Bus, s=Register, rb=10, alu=Rotate, ldq
     r=Q, s=Branch, brch=1, alu=Sub, cin=One, ldq
     r=Q, s=Register, rb=14, alu=Rotate, ldq
     r=Q, rb=12, ldrb
-bb_word_destination:
-    d=Register, ra=6, idx=Load, read=Vr, vr=3
-    d=Object, page=Fetch
-    mem=Read
-    d=Object, r=Bus, rb=3, ldrb
+; Finish source fetching before preparing the destination. A source refill
+; could otherwise invalidate that prepared address through a pager collision.
+bb_word_operands:
     ra=5, s=Branch, brch=64, alu=Sub, cin=One, flags
     ra=0, rb=2, ldrb, seq=ConditionalJump, cc=Zero, brch=bb_word_combine
     ra=11, rb=5, alu=Rotate, ldq
@@ -145,6 +147,10 @@ bb_word_position:
     r=Q, s=Register, rb=0, alu=And, ldq
     r=Q, rb=2, ldrb
 bb_word_combine:
+    d=Register, ra=6, idx=Load, read=Vr, vr=3
+    d=Object, page=Fetch
+    mem=Read, prepare
+    d=Object, r=Bus, rb=3, ldrb
     d=Register, ra=1, seq=Bus
 
 ; Q is the Boolean result. Preserve untouched pixels and skip unchanged writes.
@@ -156,9 +162,9 @@ bb_word_merged:
     r=Q, s=Register, rb=13, alu=Or, ldq
     r=Q, s=Register, rb=3, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=bb_word_next
-    d=Register, ra=6, idx=Load, read=Vr, vr=3
-    d=Object, page=Fetch
-    d=Q, mem=Write
+    ; No intervening object command has changed the destination mapping.
+    ; Launch the write while the following local word/row bookkeeping runs.
+    d=Q, mem=Write, prepared, launch
 bb_word_next:
     ra=9, rb=10, alu=Sub, cin=One, ldq, flags
     r=Q, rb=9, ldrb, seq=ConditionalJump, cc=Zero, brch=bb_word_next_row
@@ -179,7 +185,7 @@ bb_word_next_row:
     estk=Read
     d=Estk, r=Bus, s=Register, rb=8, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=bb_row
-    seq=Jump, brch=bb_refresh
+    idx=Clear, prepare, seq=Jump, brch=bb_refresh
 
 ; Two words per rule. Single-operation entries return in the first word;
 ; their padding is unreachable. Preserve the existing profile's rule-15 policy.

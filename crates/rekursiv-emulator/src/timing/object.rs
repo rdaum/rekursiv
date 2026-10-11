@@ -38,13 +38,18 @@ impl Estimate {
         let status = outcome.response.status;
         let approximate = !matches!(status, Status::Ok | Status::OutOfSpace);
         match path {
+            // Resident RAM completion is forwarded directly to LOGIK. A
+            // stalled consumer retains the reply in RESPONSE in the RTL;
+            // this estimator assumes no response-consumption backpressure.
+            ObjectPath::Resident if ram != 0 => service -= 1,
             ObjectPath::Resident => (),
             ObjectPath::Transfer => {
-                // RESERVE and DONE/publication, plus FILL before each incoming
-                // word (once for an empty object). Victim reads are distinct.
+                // RESERVE and DONE/publication, plus one initial FILL.
+                // Subsequent words go directly to WRITE (allocation) or
+                // GET (refill). Victim reads are distinct.
                 service += 2;
                 if status == Status::Ok {
-                    service += outcome.memory.iter().filter(|m| m.write).count().max(1) as u64;
+                    service += 1;
                 }
             }
             ObjectPath::Directory => service += 1, // DONE/publication

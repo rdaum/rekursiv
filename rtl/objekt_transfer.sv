@@ -226,7 +226,11 @@ module objekt_transfer #(
                             if (offset + 24'd1 == incoming.size) phase <= DONE;
                             else begin
                                 offset <= offset + 24'd1;
-                                phase <= FILL;
+                                // Size and fill mode are invariant for the
+                                // transfer. Allocation reuses its initialized
+                                // buffer; refill requests the next stored word.
+                                // No extra FILL cycle between body words.
+                                phase <= allocating ? WRITE : GET;
                             end
                         end
                     end
