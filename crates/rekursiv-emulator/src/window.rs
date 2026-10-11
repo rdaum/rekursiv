@@ -2,7 +2,10 @@
 //! The CPU worker never waits for presentation or owns a platform window.
 use crate::frontend;
 use eyre::Result;
-use rekursiv_emulator::Machine;
+use rekursiv_emulator::{
+    graphics::{rate as graphics_rate, GraphicsCounters},
+    Machine,
+};
 use softbuffer::{Context, Surface};
 use std::{
     collections::BTreeSet,
@@ -166,7 +169,13 @@ struct WindowTiming {
     source_bytes: u64,
 }
 impl WindowTiming {
-    fn report(&self) {
+    fn report(&self, elapsed: Duration) {
+        eprintln!(
+            "Presentation: {} successful surface submissions; {:.1} FPS over {:.3} s wall time",
+            self.submission.calls,
+            graphics_rate(self.submission.calls, elapsed),
+            elapsed.as_secs_f64()
+        );
         eprintln!("Window timings (concurrent with CPU execution):");
         for (name, timing) in [
             ("creation", &self.creation),
@@ -206,6 +215,7 @@ pub fn run(
         let worker = scope.spawn(|| frontend::execute(machine, step, &exchange, receive));
         let stop = frontend::StopOnDrop(&exchange);
         let mut timing = WindowTiming::default();
+        let window_started = Instant::now();
         let result = (|| -> Result<()> {
             let created = Instant::now();
             let event_loop = EventLoop::new()?;
@@ -219,7 +229,7 @@ pub fn run(
             .join()
             .map_err(|_| eyre::eyre!("CPU worker panicked"))?;
         *execution_time = worker.timing.execution;
-        timing.report();
+        timing.report(window_started.elapsed());
         eprintln!("CPU worker overhead: {:.3} s input/clock, {:.3} s snapshots ({} published), {} input overruns",
             worker.timing.input_clock.as_secs_f64(), worker.timing.snapshots.as_secs_f64(),
             worker.timing.snapshots_published, worker.timing.input_overruns);
@@ -344,6 +354,8 @@ struct App<'a> {
     reported_execution: Duration,
     reported_instructions: f64,
     reported_bytecodes: u64,
+    reported_presentations: u64,
+    reported_graphics: GraphicsCounters,
     stopped: bool,
     waiting_since: Option<Instant>,
     timing: &'a mut WindowTiming,
@@ -378,6 +390,8 @@ impl<'a> App<'a> {
             reported_execution: Duration::ZERO,
             reported_instructions: 0.0,
             reported_bytecodes: 0,
+            reported_presentations: 0,
+            reported_graphics: GraphicsCounters::default(),
             stopped: false,
             waiting_since: None,
             timing,
@@ -482,7 +496,15 @@ impl<'a> App<'a> {
             } else {
                 format!("Rekursiv — {:.2} M microinstructions/s", rate / 1_000_000.0)
             };
+            let wall = self.reported_at.elapsed();
+            let graphics = snapshot.graphics.since(self.reported_graphics);
+            let title = format!("{title} · {:.1} FPS · {:.0} display updates/s · {:.1} kwords/s · {:.0} cursor updates/s",
+                graphics_rate(self.timing.submission.calls - self.reported_presentations, wall),
+                graphics_rate(graphics.display.updates, wall), graphics_rate(graphics.display.words, wall) / 1000.0,
+                graphics_rate(graphics.cursor.updates, wall));
             window.set_title(&title);
+            self.reported_presentations = self.timing.submission.calls;
+            self.reported_graphics = snapshot.graphics;
             self.reported_bytecodes = snapshot.stats.guest_bytecodes;
             self.reported_at = Instant::now();
             self.reported_execution = snapshot.execution_time;

@@ -158,3 +158,23 @@ fn character_scanner_matches_rtl_through_refills_and_raster_calls() -> Result<()
     }
     Ok(())
 }
+
+#[test]
+fn unaligned_boolean_words_match_rtl_with_refills_and_stalls() -> Result<()> {
+    for (depth, rule, rect, alias, fill) in [
+        (8, 6, [1, 0, 10, 1, 0, 1, 0, 0, 12, 3], false, false),
+        (8, 3, [1, 1, 10, 2, 0, 0, 0, 0, 12, 3], true, false),
+        (32, 3, [0, 0, 3, 1, 0, 0, 0, 0, 3, 3], false, true),
+    ] {
+        let (f, bits, expected) = super::words::fixture(depth, rule, rect, alias, fill);
+        let m = compare_rtl(&f, false)?;
+        assert_eq!(
+            body(&m, target::reference(bits)?)?[2..]
+                .iter()
+                .map(|w| w.bits() as u32)
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+    Ok(())
+}

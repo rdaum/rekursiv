@@ -378,6 +378,11 @@ fn main() -> Result<()> {
             loaded.machine.stats.bytecodes_per_second(elapsed),
         );
     }
+    eprint!(
+        "{}",
+        rekursiv_emulator::graphics::GraphicsCounters::capture(&loaded.machine.devices)
+            .report(execution_time, elapsed)
+    );
     if let Some(stats) = loaded.machine.jit_statistics() {
         eprintln!(
             "JIT execution: {} instructions in {} native blocks, {} single-word preparations, {} transfer fallbacks",

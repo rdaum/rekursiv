@@ -15,6 +15,7 @@ use rekursiv_model::{
     Model,
 };
 pub mod boot;
+pub mod graphics;
 mod jit;
 pub mod metrics;
 pub mod presentation;

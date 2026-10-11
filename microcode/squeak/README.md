@@ -23,8 +23,8 @@ image and observes execution; it does not implement Squeak primitives.
 | `floats.uc` | Binary64 register pairs, Float allocation and primitive policy |
 | `bitmaps.uc` | Form validation, palette setup and atomic scanout upload |
 | `bitblt.uc` | Raster operands, clipping, rooted scratch frame and alias handling |
-| `pixels.uc`, `words.uc` | Pixel mapping, Boolean rules and aligned word operations |
-| `glyphs.uc` | Mapped monochrome glyphs with one write per destination word |
+| `pixels.uc`, `words.uc` | General pixel mapping, cached halftone rows and Boolean word operations with arbitrary source alignment |
+| `glyphs.uc` | Mapped monochrome glyphs with four-pixel expansion and one write per destination word |
 | `scanner.uc` | Character runs, font metrics, stop conditions and BitBlt calls |
 | `refresh.uc` | Publish changed display/cursor regions through device registers |
 | `devices.uc`, `events.uc` | Clocks, mouse, keyboard buffering, timer and low-space delivery |
@@ -70,6 +70,24 @@ The registered display lives in the guest special-object array.
 BitBlt saves IP/SP in its rooted expression-stack frame while R8/R9 traverse pixels.
 Shared validators use expression-stack slot zero for compact checks.
 They must not overwrite a caller's rooted Form or temporary object slot.
+
+After validation, clipping and alias snapshots, BitBlt selects one row kernel for the call.
+Boolean rules with no colour map and an absent or same-depth source use `words.uc` at
+depths 1, 2, 4, 8, 16 and 32. It computes addresses once per row, caches the rule entry
+and source word, and advances by destination words. Differently aligned sources merge
+two words only when the requested pixels cross a source boundary. Edge masks preserve
+pixels outside the clipped rectangle, including sub-word copies.
+
+Mapped 1-bit to 8-bit copy glyphs cache the two colours replicated across byte lanes.
+Four source bits expand into a destination word using ordinary NUMERIK multiplication
+and masking; partial edges and source-boundary fragments use the scalar glyph loop.
+Other mappings, mixed depths and transparent rules retain the general pixel path.
+All three kernels use a wrapped halftone row index in frame0 during drawing; frame31
+holds their row continuation. Source and halftone aliases retain snapshot semantics,
+and object identities remain rooted across OBJEKT refills. These optimizations need
+no emulator raster helper or new hardware operations. The
+[graphics benchmark](../../docs/emulator.md#repeatable-graphics-workloads) records
+verified pixel results and estimated hardware costs.
 
 Internal BitBlt callers enter `bb_enter` with the receiver in VR6 and a failure continuation in R15.
 CSTK[2] holds the success continuation. BitBlt preserves VR0–VR2, VR6–VR7 and the caller IP/SP.

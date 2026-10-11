@@ -34,7 +34,7 @@ pub(super) fn blit(
     let selector = f.primitive(96, 0, &[122]);
     f.start(&[32, 209, 124], vec![bb, selector], vec![]);
 }
-fn boolean(rule: u32, s: u32, d: u32) -> u32 {
+pub(super) fn boolean(rule: u32, s: u32, d: u32) -> u32 {
     match rule {
         0 => 0,
         1 => s & d,

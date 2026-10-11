@@ -201,6 +201,111 @@ JIT startup reports its function count and compilation time separately.
 The exit report counts instructions retired in native blocks and individual native preparations.
 Preparations include attempts that later fault or enter collection, so they are not retirement counts.
 
+### Graphics measurements
+
+The running window title reports recent **FPS**, **display updates/s**, **kwords/s**
+for the display, and **cursor updates/s**, alongside the execution rates. These graphics
+rates use wall time; bytecode and microinstruction rates still use active CPU execution time.
+
+FPS counts successful window surface submissions, including cursor motion and OS repaints.
+It does not count presentation checks or guarantee compositor scanout at that rate. An idle
+window can report zero FPS. `--frames N` retains its smoke-test meaning: N presentation checks,
+including unchanged screens. The exit summary reports submissions, wall-time FPS, checks,
+and unchanged checks separately.
+
+Guest display/cursor updates count successful bitmap publications, including sparse patches,
+identical content, and empty patches. Published words count the accepted 32-bit payload writes
+in those committed uploads; duplicate offsets count as traffic. Abandoned/pending uploads and
+rejected requests do not count. Words are not pixels or unique changed words. Display and cursor
+traffic are separate, and pointer motion alone is not a cursor bitmap publication. Counters are
+cumulative across replaced worker snapshots, even when the UI skips an unchanged image.
+
+Both windowed and headless exit summaries report total updates and published words, with rates
+per active and elapsed second. A headless run has no presentation FPS. These counters observe
+peripheral work, without interpreting guest graphics operations or changing hardware cycle costs.
+
+#### Repeatable graphics workloads
+
+Run the synthetic Squeak workloads through ordinary guest sends and microcode:
+
+```sh
+cargo run --release --locked -p rekursiv-emulator --example graphics-bench -- \
+  --iterations 8
+cargo run --release --locked -p rekursiv-emulator --example graphics-bench -- \
+  --iterations 8 --estimate-cycles sram
+```
+
+CSV output covers fill, aligned copy, unaligned copy with preserved edges, overlapping scroll,
+and mapped monochrome glyphs into an 8-bit display. `--case fill|copy|unaligned|scroll|glyph`
+selects one case; `--engine interpreter` provides a reference execution engine. Each case verifies
+the guest bitmap and published display against a scalar pixel oracle before reporting success.
+Copy, fill, and glyph operands alternate so repeated operations continue to change pixels.
+Repeated scrolling eventually makes parts of the bitmap uniform, so compare identical iteration
+counts. The benchmark accepts 1–1000 operations per case, defaulting to 8. For native timing,
+use longer batches and repeated runs; the default cases are short and sensitive to host scheduling.
+
+The fixed display is 64×32, RAM is 131,072 words, and the pager defaults to 65,536 entries.
+`--pager-entries N` permits explicit paging-pressure experiments. The timed interval excludes
+image construction/loading and JIT compilation, but includes guest display registration, sends,
+drawing, publication, collection if needed, and final return. There is one initial display
+publication in addition to the requested drawing operations. Reported costs per operation
+amortize that setup; they are not isolated inner-loop costs or full-screen FPS.
+
+CSV includes native operations/s, microinstructions and OBJEKT commands per operation, display
+traffic, and (when enabled) estimated cycles/operation and operations/s at `--clock-mhz N`
+(default 100). `--estimate-cycles dram` selects the alternate example memory timings. Estimation
+adds host overhead: compare native rates with estimation disabled and hardware work with it
+enabled. Estimated rates are not measurements from an FPGA board. A faster implementation may
+publish fewer patches or words, so fixed workloads and verified pixels are the optimization
+criterion, rather than maximizing the update counter.
+
+With the `ac99f2c` microcode and the default eight operations/pager configuration, the initial
+baseline is below. Interpreter and JIT SRAM runs match these work counts exactly; all cases
+match the independent pixel oracle. Costs include the setup described above.
+
+| Workload | Microinstructions/op | OBJEKT commands/op | SRAM cycles/op | DRAM cycles/op |
+| --- | ---: | ---: | ---: | ---: |
+| Fill | 63,979.25 | 6,122.25 | 83,284.25 | 105,766.25 |
+| Aligned copy | 83,642.25 | 8,087.25 | 109,402.00 | 142,784.50 |
+| Unaligned copy | 242,679.25 | 22,775.25 | 304,255.00 | 374,553.50 |
+| Overlapping scroll | 292,352.25 | 29,144.25 | 370,178.50 | 458,845.75 |
+| Mapped glyph | 47,693.25 | 5,453.25 | 65,627.75 | 88,239.25 |
+
+The subsequent graphics microcode optimization uses a dedicated word loop for unmapped
+Boolean operations, including differently aligned sources, and expands four mapped glyph
+pixels at a time. Row addresses and rule selection are hoisted out of the word loop, and
+halftone rows advance through a cached wrapped index. These are ordinary processor
+instructions; there is no host raster shortcut or new hardware operation.
+
+With the same eight-operation workload and memory configuration:
+
+| Workload | Microinstructions/op | OBJEKT commands/op | SRAM cycles/op | SRAM speedup | DRAM cycles/op | DRAM speedup |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Fill | 21,418.25 | 4,618.25 | 37,715.25 | 2.208× | 60,197.25 | 1.757× |
+| Aligned copy | 30,174.25 | 6,071.25 | 51,902.00 | 2.108× | 85,284.50 | 1.674× |
+| Unaligned copy | 29,116.25 | 5,275.25 | 48,412.00 | 6.285× | 78,670.50 | 4.761× |
+| Overlapping scroll | 39,227.50 | 9,270.50 | 69,036.75 | 5.362× | 112,221.75 | 4.089× |
+| Mapped glyph | 30,958.25 | 4,433.25 | 46,852.75 | 1.401× | 69,464.25 | 1.270× |
+
+Interpreter and JIT SRAM work counts agree. Scalar-oracle tests cover all Boolean rules,
+packed depths 1–32, source alignments, clipped edges and aliases. RTL retirement comparisons
+exercise word/glyph/scanner paths with memory stalls and pager refills. The archived image
+still restores its desktop and opens a mouse menu.
+
+These kernel gains translate to **1.101× SRAM / 1.055× DRAM** over one million Squeak
+dispatches with 16,777,216 RAM words and 65,536 pager entries. Total estimated cycles fall
+from 536,160,595 to 487,016,954 (SRAM), and 945,818,035 to 896,607,261 (DRAM).
+Mutator instructions fall from 278,027,528 to 231,621,157; both versions execute 14,658,506
+collector instructions and produce the same final framebuffer hash. This is an image
+startup workload, not a sustained interactive FPS measurement. Mixed-depth mappings and
+transparent rules still use the general pixel path, overlapping sources still require
+snapshots, and display publication costs remain included.
+
+With cycle estimation disabled, three alternating native pairs on a Ryzen 9 7940HS,
+pinned to CPU 7 at the same million-dispatch budget, measured median throughput of
+202,973 → 217,816 bytecodes/s (**1.073×**). All six framebuffer hashes match. These
+host measurements exclude loading/JIT compilation and do not predict FPGA clock speed.
+
 ### Compare microcode revisions
 
 Use equal guest-dispatch budgets when changing microcode. A fixed microinstruction budget would

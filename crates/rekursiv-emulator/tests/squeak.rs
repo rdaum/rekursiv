@@ -85,3 +85,6 @@ mod scanner;
 
 #[path = "squeak/scanner_archive.rs"]
 mod scanner_archive;
+
+#[path = "squeak/words.rs"]
+mod words;

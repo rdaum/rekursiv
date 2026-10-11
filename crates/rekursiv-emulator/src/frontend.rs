@@ -5,7 +5,9 @@
 //! memory bounded when presentation stalls; intermediate frames are replaced.
 use eyre::Result;
 use rekursiv_devices::{Bitmap, BitmapFrame, InputKind, InputPacket};
-use rekursiv_emulator::{boot::DEFAULT_DISPLAY_SIZE, presentation, Machine, Statistics};
+use rekursiv_emulator::{
+    boot::DEFAULT_DISPLAY_SIZE, graphics::GraphicsCounters, presentation, Machine, Statistics,
+};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -59,6 +61,7 @@ impl Screen {
 pub struct Snapshot {
     pub screen: Screen,
     pub stats: Statistics,
+    pub graphics: GraphicsCounters,
     pub guest_counter_enabled: bool,
     pub execution_time: Duration,
     pub running: bool,
@@ -70,6 +73,7 @@ impl Default for Snapshot {
         Self {
             screen: Screen::default(),
             stats: Statistics::default(),
+            graphics: GraphicsCounters::default(),
             guest_counter_enabled: false,
             execution_time: Duration::ZERO,
             running: true,
@@ -267,6 +271,7 @@ fn publish(
     *exchange.snapshot.lock().unwrap() = Snapshot {
         screen,
         stats: machine.stats,
+        graphics: GraphicsCounters::capture(&machine.devices),
         guest_counter_enabled: machine.guest_counter_enabled(),
         execution_time: timing.execution,
         running,
@@ -282,6 +287,37 @@ mod tests {
     use super::*;
     use rekursiv_emulator::{boot, Step};
     use std::sync::mpsc;
+
+    #[test]
+    fn replaced_snapshots_preserve_cumulative_graphics_work() -> Result<()> {
+        let mut machine = boot::microcode("halt", 512)?.machine;
+        machine.devices = presentation::workstation(0, 1000);
+        let exchange = Exchange::default();
+        let mut display = BitmapCache::default();
+        let mut cursor = BitmapCache::default();
+        let mut timing = WorkerTiming::default();
+        // No UI consumes the first snapshot. Counts must survive replacement,
+        // even when the visible pixels remain identical and no redraw occurs.
+        for (updates, words) in [(1, 8), (4, 19)] {
+            let bitmap = machine.devices.display_bitmap.as_mut().unwrap();
+            bitmap.publications = updates;
+            bitmap.published_words = words;
+            publish(
+                &machine,
+                &exchange,
+                &mut display,
+                &mut cursor,
+                &mut timing,
+                true,
+                None,
+            );
+        }
+        let latest = exchange.snapshot.lock().unwrap();
+        assert_eq!(latest.graphics.display.updates, 4);
+        assert_eq!(latest.graphics.display.words, 19);
+        assert_eq!(latest.graphics.cursor.updates, 0);
+        Ok(())
+    }
 
     #[test]
     fn published_frames_are_immutable_and_identical_publications_share_storage() {

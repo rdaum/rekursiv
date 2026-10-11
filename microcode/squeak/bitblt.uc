@@ -7,8 +7,9 @@
 ; 4 rule, 5..14 coordinates exactly as the BitBlt fields; 15/16 strides,
 ; 17..20 extents, 21 colour map, 22/23 depths, 24 halftone height,
 ; 25 clone root, 26 scratch, 27/28 saved IP/SP, 29 failure, 30/31 scratch.
-; During drawing, frame31 selects the mapped glyph path; that path caches
-; map[0]/map[1] in frame26/30. The general path uses 26/30 for word advances.
+; During drawing, frame0 caches the next wrapped halftone row, and frame31
+; holds the row-kernel continuation. The glyph path
+; caches map entries in frame26/30; the general path uses frame30 for advance.
 ; VR3 destination bits, VR4 source bits, VR5 halftone bits. VR6 receiver,
 ; VR7 fallback method, VR0..2 activation. All source aliases are cloned before
 ; the first write, so paging/collection cannot invalidate source pixels.

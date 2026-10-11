@@ -223,8 +223,10 @@ Float primitives also run through both native microinstruction engines.
 Microcode handles packed 32-bit bitmap words at depths 1, 2, 4, 8, 16 and 32.
 BitBlt implements Boolean rules 0–15 and transparent paint/mask rules 25–26.
 It clips coordinates, applies indexed colour maps and halftones, and preserves overlapping source data.
-Aligned Boolean copies and fills process whole words.
-Mapped 1-bit glyph copies to 8-bit destinations cache both colours and merge pixels before each destination word write.
+Unmapped Boolean operations use a word kernel even with different source/destination
+alignments, preserving clipped edge pixels. Mapped 1-bit glyph copies to 8-bit destinations
+cache both colours, expand four pixels at a time where possible, and merge partial edges
+before each destination word write. All raster paths advance a cached halftone row index.
 Other mapped pixels use the general pixel loop.
 Only changed words are written. Registered display updates publish through the external scanout device.
 The host converts published pixels for presentation; it does not read Forms or perform BitBlt.

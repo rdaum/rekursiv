@@ -2,34 +2,52 @@
 ; current halftone row; R10 component, R11 shift, R13 original destination word,
 ; R14 pixel mask. Source operands and map lookups remain rooted in the frame.
 ; No new objects are allocated once drawing starts.
+; Shared row entry initializes/advances the halftone index in frame0, then
+; dispatches through frame31 to the selected pixel, word or glyph kernel.
 bb_row:
     d=0, r=Bus, rb=9, ldrb
     d=0xffffffff, r=Bus, rb=0, ldrb
     read=Vr, vr=5
     d=Object, ldsym
     d=NIL, seq=ConditionalJump, cc=Symbol, brch=bb_row_ready
-    d=6, esp=Bus
-    estk=Read
-    d=Estk, r=Bus, rb=2, ldrb
-    ra=8, rb=2, alu=Add, ldq, ldrb
     d=24, esp=Bus
     estk=Read
     d=Estk, r=Bus, rb=3, ldrb
+    ra=8, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_halftone_cached
+    ; Initial absolute row only. Power-of-two halftones use a mask, including
+    ; the common one-row fill. Later rows advance a wrapped index in frame0.
+    d=6, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=2, ldrb
+    ra=3, s=Branch, brch=1, alu=Sub, cin=One, rb=13, ldrb
+    ra=3, rb=13, alu=And, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_halftone_modulo
+    ra=13, rb=2, alu=And, ldrb, seq=Jump, brch=bb_halftone_row
+bb_halftone_cached:
+    d=0, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=2, ldrb, seq=Jump, brch=bb_halftone_row
 bb_halftone_modulo:
     ra=2, rb=3, alu=Sub, cin=One, ldq, flags
     seq=ConditionalJump, cc=!Carry, brch=bb_halftone_row
     d=Q, r=Bus, rb=2, ldrb, seq=Jump, brch=bb_halftone_modulo
 bb_halftone_row:
-    d=Symbol, page=Fetch
-    ra=2, s=Branch, brch=3, alu=Add, ldq
+    ra=2, s=Branch, brch=1, alu=Add, rb=13, ldrb
+    ra=13, rb=3, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_halftone_save
+    d=0, r=Bus, rb=13, ldrb
+bb_halftone_save:
+    d=0, esp=Bus
+    ra=13, estk=Alu
+    d=Symbol, page=Fetch, ra=2, s=Branch, brch=3, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
     d=Object, r=Bus, rb=0, ldrb
 bb_row_ready:
     d=31, esp=Bus
     estk=Read
-    d=Estk, r=Bus, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_glyph_row
+    d=Estk, seq=Bus
 bb_pixel:
     d=5, esp=Bus
     estk=Read
@@ -57,7 +75,6 @@ bb_destination_pixel:
     d=Register, ra=10, idx=Load
     mem=Read
     d=Object, r=Bus, rb=13, ldrb
-    seq=Jump, brch=bb_try_word
 bb_pixel_operands:
     ra=14, rb=12, ldrb
     read=Vr, vr=4
@@ -84,10 +101,6 @@ bb_source_pixel:
     d=Register, ra=2, idx=Load
     mem=Read
     d=Object, r=Bus, rb=2, ldrb
-    d=30, esp=Bus
-    estk=Read
-    d=Estk, r=Bus, s=Branch, brch=1, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_source_word
     ra=3, s=Branch, brch=32, alu=SubReverse, cin=One, rb=3, ldrb
     ra=2, rb=3, alu=Rotate, ldq
     r=Q, s=Register, rb=4, alu=And, ldq
@@ -102,8 +115,6 @@ bb_source_pixel:
     mem=Read
     d=Object, r=Bus, rb=12, ldrb
     seq=Jump, brch=bb_source_mapped
-bb_source_word:
-    ra=2, rb=12, ldrb
 bb_source_mapped:
     ra=11, s=Branch, brch=32, alu=SubReverse, cin=One, rb=4, ldrb
     ra=0, rb=4, alu=Rotate, ldq

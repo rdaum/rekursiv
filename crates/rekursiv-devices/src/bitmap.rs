@@ -60,6 +60,7 @@ struct Upload {
     height: u32,
     stride: u32,
     offset: usize,
+    writes: u64,
     data: UploadData,
     depth: u32,
     palette: Vec<u32>,
@@ -105,6 +106,9 @@ pub struct Bitmap {
     pub publications: u64,
     /// Accepted pixel writes, independent of full-frame or sparse upload mode.
     pub pixel_writes: u64,
+    /// Accepted 32-bit word writes belonging to successfully published uploads.
+    /// Includes duplicate offsets; excludes abandoned or still pending uploads.
+    pub published_words: u64,
     width: u32,
     height: u32,
     stride: u32,
@@ -124,6 +128,7 @@ impl Bitmap {
             visible: None,
             publications: 0,
             pixel_writes: 0,
+            published_words: 0,
             width: 0,
             height: 0,
             stride: 0,
@@ -230,6 +235,7 @@ impl Bitmap {
                     height,
                     stride,
                     offset: 0,
+                    writes: 0,
                     depth: self.depth,
                     palette: self.palette.clone(),
                     origin: self.origin,
@@ -255,10 +261,12 @@ impl Bitmap {
                     UploadData::Patch(writes) => writes.push((n, word)),
                 }
                 upload.offset = n + 1;
+                upload.writes += 1;
                 self.pixel_writes += 1;
             }
             Effect::Publish => {
                 let upload = self.upload.take().unwrap();
+                self.published_words += upload.writes;
                 match upload.data {
                     UploadData::Full { words, .. } => {
                         self.visible = Some(BitmapFrame {
@@ -324,6 +332,7 @@ mod tests {
             assert!(write(&mut b, a, v));
         }
         assert!(!write(&mut b, 20, 1)); // incomplete frame
+        assert_eq!((b.publications, b.published_words), (0, 0));
         assert!(b.visible.is_none());
         // Changes after Begin belong to the next transaction.
         assert!(write(&mut b, 36, 1));
@@ -333,6 +342,7 @@ mod tests {
         assert!(!write(&mut b, 52, 2));
         assert!(write(&mut b, 28, 0x01010101));
         assert!(write(&mut b, 20, 1));
+        assert_eq!((b.publications, b.published_words), (1, 1));
         let first = b.visible.clone().unwrap();
         assert_eq!(first.palette[1], 0x123456);
         assert_eq!(first.offset, (-1, 0));
@@ -345,6 +355,7 @@ mod tests {
         assert!(write(&mut b, 20, 2));
         assert_eq!(b.visible.as_ref(), Some(&first));
         assert!(write(&mut b, 20, 1));
+        assert_eq!((b.publications, b.published_words), (2, 1)); // empty patch
         let next = b.visible.unwrap();
         assert_eq!(next.words, first.words);
         assert_eq!(next.palette[1], 0xabcdef);
@@ -390,5 +401,6 @@ mod tests {
         assert_eq!(b.visible.as_ref().unwrap().words, vec![1, 77, 3, 99]);
         assert_eq!(b.publications, 2);
         assert_eq!(b.pixel_writes, 4);
+        assert_eq!(b.published_words, 3);
     }
 }

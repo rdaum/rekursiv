@@ -11,7 +11,7 @@ fn draw(f: &Fixture, jit: bool, fast: bool) -> Result<Machine> {
     let assembly = rekursiv_smalltalk::squeak::interpreter::assemble(&f.image)?;
     run_with(f, jit, |m| {
         if !fast {
-            // Set frame31=0 normally, then bypass only the glyph selector.
+            // Set the general row continuation normally, then bypass the glyph selector.
             let pc = assembly.symbols["bb_choose_glyphs"] as usize + 1;
             let i = m.image_mut().code[pc].as_mut().unwrap();
             i.seq = Seq::Jump;
