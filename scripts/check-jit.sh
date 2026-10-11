@@ -4,4 +4,4 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 cargo test --release --locked -p rekursiv-devices --lib idle_tests
 cargo test --release --locked -p rekursiv-emulator \
-  --test jit --test jit_objekt --test jit_stack_fetch
+  --test jit --test jit_dispatch --test jit_objekt --test jit_stack_fetch

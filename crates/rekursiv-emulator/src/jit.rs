@@ -20,6 +20,7 @@ use rekursiv_devices::Device as ExternalDevice;
 use rekursiv_model::processor::{Image, Processor};
 
 mod compile;
+mod dispatch;
 mod emit;
 mod emit_stack;
 mod native_objekt;
@@ -48,6 +49,7 @@ type RunBlock = unsafe extern "C" fn(
 // Only dispatch data is hot. Keeping source snapshots here inflated each
 // lookup to 40 bytes; the compact record fits four entries in a cache line.
 #[derive(Clone, Copy, Default)]
+#[repr(C)]
 struct Block {
     run: Option<RunBlock>,
     length: u8,
@@ -109,6 +111,8 @@ pub struct JitStatistics {
     pub compilation_failures: u64,
     pub preparations: u64,
     pub block_calls: u64,
+    /// Rust-to-native entries, each of which may execute several regions.
+    pub native_entries: u64,
     pub block_instructions: u64,
     /// Native blocks that stopped before a Fetch miss for the general executor.
     pub transfer_fallbacks: u64,
@@ -153,6 +157,7 @@ pub(crate) struct Jit {
     lazy: bool,
     compilation_failed: bool,
     stats: JitStatistics,
+    dispatch: Option<dispatch::RunChain>,
 }
 impl Drop for Jit {
     fn drop(&mut self) {
@@ -310,22 +315,62 @@ impl Jit {
         // SAFETY: Machine invalidates changed code before execution. Fields are accessed
         // with build-local offsets, and the pointed-to objects are live
         // and disjoint throughout this synchronous call.
-        let tickless = u8::from(devices.idle_budget() >= u64::from(block.length));
+        let quiet = devices.idle_budget();
+        let tickless = u8::from(quiet >= u64::from(block.length));
         let view = native_objekt::MemoryView::new(objekt);
-        let result = unsafe {
-            run(
-                cpu,
-                devices,
-                &mut error,
-                &self.tables(),
-                objekt,
-                tickless,
-                &view,
-            )
+        // A chain stays entirely inside a quiet device interval. Resident
+        // regions cannot launch asynchronous work, refill, allocate or collect.
+        // Pending replies, recovery and instrumentation retain individual calls.
+        let chain_budget = budget.min(quiet).min(dispatch::MAX_INSTRUCTIONS);
+        let chain = if policy.allow_object
+            && !policy.pending_object
+            && !policy.recovering
+            && chain_budget >= u64::from(block.length)
+        {
+            let mut result = dispatch::ChainResult::default();
+            // SAFETY: the dispatch table and borrowed vectors cannot change
+            // while generated code runs. Every indirect call checks its entry
+            // and remaining budget; Machine invalidates edits before entry.
+            unsafe {
+                self.dispatch.unwrap()(
+                    cpu,
+                    devices,
+                    &mut error,
+                    &self.tables(),
+                    objekt,
+                    &view,
+                    self.blocks.as_ptr(),
+                    self.blocks.len(),
+                    chain_budget,
+                    &mut result,
+                );
+            }
+            result
+        } else {
+            let result = unsafe {
+                run(
+                    cpu,
+                    devices,
+                    &mut error,
+                    &self.tables(),
+                    objekt,
+                    tickless,
+                    &view,
+                )
+            };
+            dispatch::ChainResult {
+                retired: (result >> 8) & 0xffff,
+                guest_bytecodes: (result >> 24) & 0xff,
+                object_commands: result >> 56,
+                blocks: 1,
+                result,
+            }
         };
+        let result = chain.result;
         let stats = &mut self.stats;
-        stats.block_calls += 1;
-        let retired = (result >> 8) & 0xffff;
+        stats.block_calls += chain.blocks;
+        stats.native_entries += 1;
+        let retired = chain.retired;
         if tickless != 0 {
             devices.advance_idle(retired);
         }
@@ -334,9 +379,9 @@ impl Jit {
         stats.transfer_fallbacks += u64::from(transfer);
         Some(BlockResult {
             retired,
-            guest_bytecodes: (result >> 24) & 0xff,
+            guest_bytecodes: chain.guest_bytecodes,
             transfer,
-            object_commands: result >> 56,
+            object_commands: chain.object_commands,
             object_status: (result as u8 == 4)
                 .then(|| rekursiv_asm::Status::try_from(((result >> 48) & 255) as u8).unwrap()),
             fault: if transfer { 0 } else { result as u8 },

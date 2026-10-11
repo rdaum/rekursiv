@@ -40,7 +40,7 @@ fn main() -> Result<()> {
             10000,
             49995000,
         ),
-        _ => eyre::bail!("usage: smalltalk-workload fib|loop [repetitions] [eager]"),
+        _ => eyre::bail!("usage: smalltalk-workload fib|loop [repetitions] [eager|warm]"),
     };
     let method = f.method(&bytes, literals, 1, temps, 0);
     f.bind(f.class, selector, method);
@@ -56,9 +56,10 @@ fn main() -> Result<()> {
     let mut m = boot::squeak_source(&f.image, 16_777_216, 65_536)?.machine;
     let compilation = Instant::now();
     let eager = args.get(3).is_some_and(|s| s == "eager");
+    let warm = args.get(3).is_some_and(|s| s == "warm");
     ensure!(
-        args.len() <= 4 && (args.len() < 4 || eager),
-        "expected optional 'eager'"
+        args.len() <= 4 && (args.len() < 4 || eager || warm),
+        "expected optional 'eager' or 'warm'"
     );
     if eager {
         m.enable_jit_eager()?;
@@ -70,6 +71,29 @@ fn main() -> Result<()> {
         "JIT startup: {startup_seconds:.3} s ({})",
         if eager { "eager" } else { "on demand" }
     );
+    if warm {
+        ensure!(repetitions >= 80, "warm mode needs at least 80 calls");
+        m.run_steps(500_000_000)?;
+        ensure!(!m.cpu.halted, "workload exhausted during warmup");
+        let before = m.jit_statistics().unwrap();
+        let retired = m.stats.retired + m.stats.collector_retired;
+        let bytecodes = m.stats.guest_bytecodes;
+        let started = Instant::now();
+        let steps = m.run_steps(100_000_000)?;
+        let seconds = started.elapsed().as_secs_f64();
+        let after = m.jit_statistics().unwrap();
+        ensure!(
+            steps == 100_000_000 && !m.cpu.halted,
+            "workload exhausted during sample"
+        );
+        ensure!(
+            after.compilation_time == before.compilation_time,
+            "sample compiled new code; increase warmup: {before:?} -> {after:?}"
+        );
+        ensure!(after.compilation_failures == 0, "JIT compilation failed");
+        let instructions = m.stats.retired + m.stats.collector_retired - retired;
+        println!("warm_case={case}, seconds={seconds:.9}, microinstructions={instructions}, microinstructions_per_second={:.0}, bytecodes={}, native_regions={}, native_entries={}, native_instructions={}, preparations={}", instructions as f64 / seconds, m.stats.guest_bytecodes-bytecodes, after.block_calls-before.block_calls, after.native_entries-before.native_entries, after.block_instructions-before.block_instructions, after.preparations-before.preparations);
+    }
     let compiled_before = m.jit_statistics().unwrap().compilation_time;
     let start = Instant::now();
     m.run_steps(repetitions as u64 * 200_000_000)?;
@@ -89,6 +113,10 @@ fn main() -> Result<()> {
         "wrong result: {:?}",
         m.objekt.state.vr[5]
     );
+    if warm {
+        println!("verified_case={case}, repetitions={repetitions}, result={expected}, bytecodes={}, microinstructions={}, collections={}", m.stats.guest_bytecodes, m.stats.retired+m.stats.collector_retired, m.stats.collections);
+        return Ok(());
+    }
     println!("case={case}, n={n}, repetitions={repetitions}, result={expected}, seconds={elapsed:.9}, seconds_per_call={:.9}, startup_seconds={startup_seconds:.9}, runtime_compilation_seconds={runtime_compilation:.9}, execution_seconds={execution:.9}, execution_seconds_per_call={:.9}, bytecodes={}, microinstructions={}, collections={}", elapsed / repetitions as f64, execution / repetitions as f64, m.stats.guest_bytecodes, m.stats.retired+m.stats.collector_retired,m.stats.collections);
     Ok(())
 }

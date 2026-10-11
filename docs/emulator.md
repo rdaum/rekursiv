@@ -16,7 +16,7 @@ compiles after 32 uses. These are host policy thresholds, not architectural stat
 with identical control words share a translation. `Machine::enable_jit_eager()` retains eager
 compilation for native-path tests and controlled comparisons.
 It translates arithmetic, flag calculations, branches, stack controls, fetch controls, and validation checks into native code.
-Native regions execute up to 32 instructions per call, including resident OBJEKT commands.
+Each native region covers up to 32 instructions, including resident OBJEKT commands.
 They follow static jumps and immediate relative branches, retaining register values in SSA
 until a region exit. Conditional exits and faults materialize exactly the successful prefix;
 dynamic transfers, interrupts and unsupported operations return to the executor.
@@ -51,6 +51,15 @@ arrival, clock rollover, due timer, pointer sample, handshake, or possible devic
 If the complete region fits, it omits per-instruction device calls and advances counters by
 only the successfully retired prefix. Otherwise it retains individual ticks. Empty peripherals
 have an unlimited quiet budget. Device changes between execution batches are rechecked.
+
+A generated dispatcher can call successive compiled regions without returning to Rust,
+up to the smaller of the caller's remaining budget, the quiet-device budget, or 1,024
+instructions. Each region still publishes its architectural state. Dispatch stops before
+a cold or invalidated target, refill, or other executor operation, and immediately on a fault.
+Pending asynchronous replies, collector execution and object instrumentation retain individual
+region calls. Counts accumulate in separate 64-bit fields, preserving totals across many
+regions and the precise successful prefix on faults. JIT statistics distinguish native regions
+from Rust-to-native entries.
 
 Floating-point, device, and root-access instructions use the checked interpreter.
 Collector local instructions use validated scalar decoding or native blocks.
@@ -453,6 +462,36 @@ large reduction in total latency. These are cold-process measurements, not warme
 or saved-image performance claims. Full regression runs are not needed for routine iteration;
 the focused checks exercise both eager native paths and cold-to-hot execution, including
 noncontiguous code edits, table resizing, helper reuse and exact device timing.
+
+### Native dispatch between regions
+
+The bounded native dispatcher was compared with `b334bbd` using a warmed summation workload
+on the Ryzen 9 7940HS, pinned to CPU 7. Each process executes 500 million warmup steps,
+times the next 100 million, then finishes all 80 guest calls and checks the result. The
+benchmark rejects samples that compile any code during the timed interval:
+
+```sh
+target/release/examples/smalltalk-workload loop 80 warm
+```
+
+Three alternating pairs gave these medians:
+
+| Metric, timed interval | Before | Native dispatch |
+| --- | ---: | ---: |
+| Time for 100 million microinstructions | 0.8790 s | 0.8282 s |
+| Retired microinstructions/s | 113.76 million | 120.74 million |
+| Rust-to-native entries | 12,640,506 | 4,799,180 |
+| Executed native regions | 12,640,506 | 12,640,506 |
+
+Throughput improved **6.1%**, with 62% fewer native entries. Baseline times ranged from
+0.8653–0.8840 seconds and current times from 0.8268–0.8460 seconds. Each sample retired
+1,199,202 guest bytecodes; results, instruction counts and helper counts matched. There were
+no collections in this workload. Fibonacci warmup still encountered later compilation and
+was excluded rather than subtracting compiler time from a purported steady-state sample.
+Hardware sampling was unavailable (`perf_event_paranoid=3`); this comparison uses execution
+counters and controlled timings. Raw paired logs and binary hashes are retained in
+`artifacts/hardware-jit/dispatch-paired/` when available. The result demonstrates sustained
+host-emulator throughput on this workload, not FPGA speed or general workstation performance.
 
 ### Compare with a native Smalltalk VM
 

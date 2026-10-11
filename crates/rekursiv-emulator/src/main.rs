@@ -300,7 +300,7 @@ fn main() -> Result<()> {
             // requests promptly. Debugging keeps exact single-step observation.
             // At most one dispatch retires per microinstruction. Restrict the
             // tail batch to the remaining guest budget to stop exactly, without
-            // adding polling to native code or charging compilation to execution.
+            // adding guest-counter polling to native code.
             let remaining = bytecode_limit.map_or(u64::MAX, |n| n - machine.stats.guest_bytecodes);
             steps += machine.run_steps((limit - steps).min(256).min(remaining))?;
             return Ok(!machine.cpu.halted && !machine.cpu.service);
@@ -391,8 +391,8 @@ fn main() -> Result<()> {
             stats.compilation_failures
         );
         eprintln!(
-            "JIT execution: {} instructions in {} native blocks, {} single-word preparations, {} transfer fallbacks",
-            stats.block_instructions, stats.block_calls, stats.preparations, stats.transfer_fallbacks
+            "JIT execution: {} instructions in {} native blocks through {} native entries, {} single-word preparations, {} transfer fallbacks",
+            stats.block_instructions, stats.block_calls, stats.native_entries, stats.preparations, stats.transfer_fallbacks
         );
     }
     if let Some(estimate) = loaded.machine.cycle_estimate() {

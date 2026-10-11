@@ -29,6 +29,7 @@ impl Jit {
             lazy: true,
             compilation_failed: false,
             stats: JitStatistics::default(),
+            dispatch: None,
         };
         jit.refresh_tables(image);
         Ok(jit)
@@ -198,6 +199,9 @@ impl Jit {
     }
 
     pub(super) fn compile_region(&mut self, start: usize) -> Result<()> {
+        if self.dispatch.is_none() {
+            self.compile_dispatch()?;
+        }
         let code = &self.block_sources[start];
         let module = self.module.as_mut().unwrap();
         let mut context = module.make_context();
