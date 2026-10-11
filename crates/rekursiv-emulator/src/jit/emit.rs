@@ -109,7 +109,10 @@ impl Emit<'_> {
             Bus::Upcor => load!(self, I16, upcor),
             Bus::Q => load!(self, I32, q),
             Bus::Device => load!(self, I32, device),
-            Bus::Root => unreachable!("decode excludes root reads"),
+            Bus::Root => {
+                let address = self.root_address(i);
+                return self.b.ins().load(I64, MemFlagsData::trusted(), address, 0);
+            }
         };
         self.wide(narrow)
     }
@@ -154,8 +157,32 @@ impl Emit<'_> {
             .icmp_imm_s(IntCC::NotEqual, pc, i64::from(next));
         self.reject(taken, 0);
     }
+    fn root_address(&mut self, i: Instruction) -> Value {
+        let index = self.rf(i.ra);
+        let index = self.b.ins().uextend(self.pointer, index);
+        let offset = self.b.ins().ishl_imm_s(index, 3);
+        let roots = self.b.ins().load(
+            self.pointer,
+            MemFlagsData::trusted(),
+            self.tables,
+            offset_of!(super::Tables, roots) as i32,
+        );
+        self.b.ins().iadd(roots, offset)
+    }
     pub(super) fn instruction(&mut self, decoded: &ScalarInstruction) {
         let i = decoded.instruction;
+        // Validate even when the root bus has no visible destination, and
+        // before PC/stack checks or any object/device side effect.
+        if i.write_root || i.bus == Bus::Root {
+            debug_assert!(matches!(self.mode, Mode::Block { .. }));
+            let index = self.rf(i.ra);
+            let bad = self
+                .b
+                .ins()
+                .icmp_imm_s(IntCC::UnsignedGreaterThanOrEqual, index, 32);
+            self.reject(bad, 1);
+        }
+        let root_destination = i.write_root.then(|| self.root_address(i));
         let d = if decoded.bus {
             self.bus(i)
         } else {
@@ -389,6 +416,11 @@ impl Emit<'_> {
             self.b.ins().jump(ticked, &[]);
             self.b.switch_to_block(ticked);
             self.publish_object();
+            if let Some(address) = root_destination {
+                // Address and data were evaluated from OLD state. A failed
+                // tick must not publish the root, like all other local writes.
+                self.b.ins().store(MemFlagsData::trusted(), d, address, 0);
+            }
             // Validation and the device tick succeeded. Publish simultaneous
             // local destinations using the already evaluated OLD operands.
             self.cpu_store(offset_of!(Processor, pc), next_pc);

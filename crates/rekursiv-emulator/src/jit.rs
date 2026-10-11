@@ -56,6 +56,7 @@ struct Block {
     object: bool,
     barrier: bool,
     recovery_safe: bool,
+    interrupt: bool,
 }
 /// Conditions that restrict which native blocks can execute.
 pub(crate) struct BlockPolicy {
@@ -141,6 +142,10 @@ struct Tables {
     nam_len: usize,
     map: *const u32,
     map_len: usize,
+    // Region-only runtime inputs. Roots point at the initialized payload, never
+    // at Rust's Option representation. IRQ is stable throughout a quiet run.
+    roots: *mut Word,
+    irq: u8,
 }
 
 pub(crate) struct Jit {
@@ -190,6 +195,8 @@ impl Jit {
             nam_len: self.nam.len(),
             map: self.map.as_ptr(),
             map_len: self.map.len(),
+            roots: std::ptr::null_mut(),
+            irq: 0,
         }
     }
     // Called once after a mutable image borrow, before any execution resumes.
@@ -313,10 +320,19 @@ impl Jit {
         }
         let mut error = None;
         // SAFETY: Machine invalidates changed code before execution. Fields are accessed
-        // with build-local offsets, and the pointed-to objects are live
-        // and disjoint throughout this synchronous call.
+        // with build-local offsets. CPU, devices, tables and model stay live
+        // throughout this synchronous call; the root pointer aliases only the
+        // initialized root payload, which generated scalar accesses do not touch.
         let quiet = devices.idle_budget();
         let tickless = u8::from(quiet >= u64::from(block.length));
+        // Interrupt words sample pre-edge event status. A snapshot is valid
+        // only when every edge in the region is covered by the quiet budget.
+        if block.interrupt && tickless == 0 {
+            return None;
+        }
+        let mut tables = self.tables();
+        tables.roots = cpu.roots.as_mut().unwrap().as_mut_ptr();
+        tables.irq = u8::from(devices.events.as_ref().is_some_and(|e| e.status() != 0));
         let view = native_objekt::MemoryView::new(objekt);
         // A chain stays entirely inside a quiet device interval. Resident
         // regions cannot launch asynchronous work, refill, allocate or collect.
@@ -336,7 +352,7 @@ impl Jit {
                     cpu,
                     devices,
                     &mut error,
-                    &self.tables(),
+                    &tables,
                     objekt,
                     &view,
                     self.blocks.as_ptr(),
@@ -347,17 +363,7 @@ impl Jit {
             }
             result
         } else {
-            let result = unsafe {
-                run(
-                    cpu,
-                    devices,
-                    &mut error,
-                    &self.tables(),
-                    objekt,
-                    tickless,
-                    &view,
-                )
-            };
+            let result = unsafe { run(cpu, devices, &mut error, &tables, objekt, tickless, &view) };
             dispatch::ChainResult {
                 retired: (result >> 8) & 0xffff,
                 guest_bytecodes: (result >> 24) & 0xff,

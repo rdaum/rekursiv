@@ -15,11 +15,11 @@ executor. A region compiles after 16 eligible entry attempts; a fallback instruc
 compiles after 32 uses. These are host policy thresholds, not architectural state. Helpers
 with identical control words share a translation. `Machine::enable_jit_eager()` retains eager
 compilation for native-path tests and controlled comparisons.
-It translates arithmetic, flag calculations, branches, stack controls, fetch controls, and validation checks into native code.
+It translates arithmetic, flag calculations, branches, stack controls, fetch controls, root accesses, and validation checks into native code.
 Each native region covers up to 32 instructions, including resident OBJEKT commands.
 They follow static jumps and immediate relative branches, retaining register values in SSA
-until a region exit. Conditional exits and faults materialize exactly the successful prefix;
-dynamic transfers, interrupts and unsupported operations return to the executor.
+until a region exit. Conditional exits and faults materialize exactly the successful prefix.
+Dynamic control transfers end a region; unsupported operations return to the executor.
 
 OBJEKT virtual-register and signed-index operations, resident probes, metadata reads and RAM
 accesses are generated directly, including combined controls, overflow checks, prepared-access
@@ -61,10 +61,18 @@ region calls. Counts accumulate in separate 64-bit fields, preserving totals acr
 regions and the precise successful prefix on faults. JIT statistics distinguish native regions
 from Rust-to-native entries.
 
-Floating-point, device, and root-access instructions use the checked interpreter.
+Root reads and writes use checked native accesses to the live 32-word root bank. Index checks
+precede other effects, and simultaneous register writes cannot change the old root address or data.
+Writes publish only after the device tick succeeds. Rust supplies a pointer to the initialized
+payload, so generated code does not depend on the layout of `Option<[Word; 32]>`.
+
+Floating-point and device instructions use the checked interpreter.
 Collector local instructions use validated scalar decoding or native blocks.
 Collector maintenance operations execute individually through the recovery state machine.
-Interrupt-sensitive instructions execute individually so each condition uses the correct device state.
+Interrupt conditions use the pre-edge event status sampled at native entry. Regions containing
+an interrupt check run natively only if the whole region fits within the quiet device budget;
+otherwise the executor handles the word and its edge normally. A chained run uses the same
+snapshot throughout its quiet interval, then resamples on reentry.
 Microcode still implements Smalltalk operations and collection.
 The JIT changes host execution speed without changing the hardware control words or replacing guest operations.
 
@@ -492,6 +500,41 @@ Hardware sampling was unavailable (`perf_event_paranoid=3`); this comparison use
 counters and controlled timings. Raw paired logs and binary hashes are retained in
 `artifacts/hardware-jit/dispatch-paired/` when available. The result demonstrates sustained
 host-emulator throughput on this workload, not FPGA speed or general workstation performance.
+
+### Native roots and interrupt checks
+
+A temporary per-PC profile of the warmed loop found that virtually all fallback instructions
+were root reads/writes and the interrupt check in bytecode dispatch. These operations now
+execute in native regions under the root and quiet-interval rules above. The profiling
+instrumentation was removed after identifying the hot PCs.
+
+Three alternating pairs compared this change with `0f05b54`, on the same Ryzen 9 7940HS
+pinned to CPU 7. Both binaries were rebuilt with the same revised `loop 80 warm` benchmark:
+500 million initial warmup steps, a further 100 million to warm the resumed entry, then
+single steps back to that entry PC before timing 100 million steps. Resuming at an arbitrary
+new PC can itself trigger demand compilation; starting at the warmed entry avoids that
+artifact. The benchmark still rejects any compilation during the timed interval.
+
+| Metric, timed interval | Before | Native roots/interrupt checks |
+| --- | ---: | ---: |
+| Median time for 100 million microinstructions | 1.0089 s | 0.2856 s |
+| Retired microinstructions/s | 99.12 million | 350.11 million |
+| Rust-to-native entries | 4,799,180 | 98,845 |
+| Instructions retired within native regions | 94,002,786 | 99,999,988 |
+| Single-word native preparations | 1,199,212 | 9 |
+
+Throughput improved **3.53×** and native entries fell **97.9%**. Baseline times ranged from
+1.0048–1.0108 seconds; current times ranged from 0.2854–0.2864 seconds. Every sample retired
+1,199,203 guest bytecodes. Each complete run returned 49,995,000 and retired 10,401,120 guest
+bytecodes and 867,337,364 microinstructions, with no collections. Logs and binary hashes are
+in `artifacts/hardware-jit/exits-paired/` when retained. This synthetic arithmetic loop is
+especially sensitive to bytecode-dispatch overhead; it is not a saved-image, GUI or FPGA
+throughput measurement.
+
+The focused checks cover full-width root values, simultaneous old-address/data semantics,
+root bounds before other effects, failed device ticks, and interrupt arrival/host mutation
+at batch boundaries. They use small programs and the existing interpreter/model oracle;
+no broad saved-image regression is required for this pass.
 
 ### Compare with a native Smalltalk VM
 

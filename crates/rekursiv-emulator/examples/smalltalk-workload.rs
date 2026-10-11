@@ -74,6 +74,20 @@ fn main() -> Result<()> {
     if warm {
         ensure!(repetitions >= 80, "warm mode needs at least 80 calls");
         m.run_steps(500_000_000)?;
+        // Resuming at a new PC can itself make a native region hot. Warm that
+        // entry, then time a batch beginning at the same microcode PC.
+        let entry = m.cpu.pc;
+        m.run_steps(100_000_000)?;
+        for _ in 0..4096 {
+            if m.cpu.pc == entry || m.cpu.halted {
+                break;
+            }
+            m.step()?;
+        }
+        ensure!(
+            m.cpu.pc == entry,
+            "warm entry did not recur within 4096 steps"
+        );
         ensure!(!m.cpu.halted, "workload exhausted during warmup");
         let before = m.jit_statistics().unwrap();
         let retired = m.stats.retired + m.stats.collector_retired;

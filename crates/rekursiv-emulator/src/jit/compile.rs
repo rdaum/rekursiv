@@ -58,9 +58,8 @@ impl Jit {
                 leaders.insert(pc);
             }
             if i.seq != Seq::Continue
-                || decode(*i).is_none()
+                || decode_region(*i).is_none()
                 || i.halt
-                || i.condition == Condition::Interrupt
                 || i.allocation_dynamic
                 || i.object
                     .is_some_and(|c| !resident::eligible(c) || i.object_async)
@@ -187,6 +186,9 @@ impl Jit {
             length: source.len() as u8,
             object: source.iter().any(|(_, i)| i.object.is_some()),
             barrier: source.iter().any(|(_, i)| i.object_barrier()),
+            interrupt: source
+                .iter()
+                .any(|(_, i)| i.condition == Condition::Interrupt),
             recovery_safe: source
                 .iter()
                 .all(|(_, i)| crate::scalar::ScalarInstruction::decode_recovery(*i).is_some()),
@@ -237,7 +239,12 @@ impl Jit {
         b.append_block_params_for_function_params(entry);
         b.switch_to_block(entry);
         let params = b.block_params(entry).to_vec();
-        let irq = b.ins().iconst(I8, 0);
+        let irq = b.ins().load(
+            I8,
+            cranelift_codegen::ir::MemFlagsData::trusted(),
+            params[3],
+            std::mem::offset_of!(Tables, irq) as i32,
+        );
         let mut emit = Emit {
             b,
             cpu: params[0],
@@ -264,7 +271,7 @@ impl Jit {
             if let Mode::Block { retired, .. } = &mut emit.mode {
                 *retired = n as u64;
             }
-            emit.instruction(&decode(instruction).unwrap());
+            emit.instruction(&decode_region(instruction).unwrap());
             // Encode the successful prefix in each exit constant. Native
             // instructions need no PC comparison, callback, or increment.
             if self.guest_dispatch_pc == Some(pc as u16) {
@@ -317,6 +324,24 @@ impl Jit {
     }
 }
 
+// Root accesses are currently emitted only for retiring regions. The generic
+// preparation path retains its existing checked write-set implementation.
+fn decode_region(i: Instruction) -> Option<crate::scalar::ScalarInstruction> {
+    i.validate().ok()?;
+    let mut decoded = decode(Instruction {
+        write_root: false,
+        bus: if i.bus == Bus::Root {
+            Bus::Immediate
+        } else {
+            i.bus
+        },
+        ..i
+    })?;
+    decoded.instruction = i;
+    decoded.bus |= i.write_root || i.bus == Bus::Root;
+    Some(decoded)
+}
+
 fn region(image: &Image, start: usize) -> Vec<(usize, Instruction)> {
     let mut code = Vec::new();
     let mut pc = start;
@@ -324,12 +349,11 @@ fn region(image: &Image, start: usize) -> Vec<(usize, Instruction)> {
         let Some(Some(i)) = image.code.get(pc).copied() else {
             break;
         };
-        if decode(i).is_none()
+        if decode_region(i).is_none()
             || i.object
                 .is_some_and(|c| !resident::eligible(c) || i.object_async)
             || i.halt
             || i.seq == Seq::Service
-            || i.condition == Condition::Interrupt
             || i.allocation_dynamic
         {
             break;
