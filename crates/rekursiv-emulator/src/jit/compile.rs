@@ -24,6 +24,8 @@ impl Jit {
             blocks: (0..image.code.len()).map(|_| Block::default()).collect(),
             block_sources: vec![Vec::new(); image.code.len()],
             heat: vec![Heat::default(); image.code.len()],
+            fallthrough: None,
+            linear: Vec::new(),
             preparations: HashMap::new(),
             guest_dispatch_pc,
             lazy: true,
@@ -79,7 +81,7 @@ impl Jit {
             if start >= image.code.len() {
                 continue;
             }
-            let code = region(image, start);
+            let code = region(image, start, &self.blocks);
             if code.len() == 32 {
                 let &(pc, i) = code.last().unwrap();
                 let next = if matches!(
@@ -197,7 +199,7 @@ impl Jit {
     }
 
     pub(super) fn discover_region(&mut self, image: &Image, pc: usize) {
-        self.install_region(pc, region(image, pc));
+        self.install_region(pc, region(image, pc, &self.blocks));
     }
 
     pub(super) fn compile_region(&mut self, start: usize) -> Result<()> {
@@ -342,20 +344,34 @@ fn decode_region(i: Instruction) -> Option<crate::scalar::ScalarInstruction> {
     Some(decoded)
 }
 
-fn region(image: &Image, start: usize) -> Vec<(usize, Instruction)> {
+// Unsupported operations end the native path even with Seq::Continue. Their
+// successor must be able to heat independently after the executor handles them.
+pub(super) fn linear(i: Instruction) -> bool {
+    i.seq == Seq::Continue && eligible(i)
+}
+fn eligible(i: Instruction) -> bool {
+    decode_region(i).is_some()
+        && !i
+            .object
+            .is_some_and(|c| !resident::eligible(c) || i.object_async)
+        && !i.halt
+        && i.seq != Seq::Service
+        && !i.allocation_dynamic
+}
+
+fn region(image: &Image, start: usize, compiled: &[Block]) -> Vec<(usize, Instruction)> {
     let mut code = Vec::new();
     let mut pc = start;
     for _ in 0..32 {
+        // Reuse a translated continuation through the native dispatcher instead
+        // of embedding its body in every incoming region.
+        if pc != start && compiled.get(pc).is_some_and(|b| b.run.is_some()) {
+            break;
+        }
         let Some(Some(i)) = image.code.get(pc).copied() else {
             break;
         };
-        if decode_region(i).is_none()
-            || i.object
-                .is_some_and(|c| !resident::eligible(c) || i.object_async)
-            || i.halt
-            || i.seq == Seq::Service
-            || i.allocation_dynamic
-        {
+        if !eligible(i) {
             break;
         }
         code.push((pc, i));

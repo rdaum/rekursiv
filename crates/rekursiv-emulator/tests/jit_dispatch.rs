@@ -251,3 +251,73 @@ fn native_interrupt_checks_sample_before_device_edges() -> Result<()> {
     assert!(b.jit_statistics().unwrap().block_calls > b.jit_statistics().unwrap().native_entries);
     Ok(())
 }
+
+#[test]
+fn batch_boundaries_do_not_heat_overlapping_fallthrough_regions() -> Result<()> {
+    use rekursiv_asm::processor::*;
+    use rekursiv_model::processor::Image;
+    let mut code = vec![
+        Instruction {
+            alu: Alu::Add,
+            s: Source::Branch,
+            branch: 1,
+            write_register: true,
+            ..Instruction::default()
+        };
+        96
+    ];
+    code.push(Instruction {
+        seq: Seq::Bus,
+        ..Instruction::default()
+    });
+    let image = Image::program(&code);
+    let mut a = Machine::new(image.clone(), 0, 16, 64)?;
+    let mut b = Machine::new(image, 0, 16, 64)?;
+    b.enable_jit()?;
+    // Relatively prime loop/batch lengths resume at every interior PC. Those
+    // pauses must not turn sequential instructions into new hot region heads.
+    for _ in 0..200 {
+        a.run_steps(257)?;
+        b.run_steps(257)?;
+        same(&a, &b);
+    }
+    let stats = b.jit_statistics().unwrap();
+    // Four regions, the dispatcher, and at most two deduplicated preparations.
+    assert!(stats.functions <= 7, "{stats:?}");
+    assert!(stats.block_instructions > 30_000, "{stats:?}");
+    assert_eq!(stats.compilation_failures, 0);
+    Ok(())
+}
+
+#[test]
+fn new_regions_reuse_an_already_compiled_continuation() -> Result<()> {
+    use rekursiv_asm::processor::*;
+    use rekursiv_model::processor::Image;
+    let mut code = vec![Instruction::default(); 33];
+    code[7].seq = Seq::Bus;
+    code[32].seq = Seq::Jump;
+    let image = Image::program(&code);
+    let mut a = Machine::new(image.clone(), 0, 16, 64)?;
+    let mut b = Machine::new(image, 0, 16, 64)?;
+    b.enable_jit()?;
+    a.run_steps(4096)?;
+    b.run_steps(4096)?;
+    same(&a, &b);
+    for _ in 0..32 {
+        a.cpu.pc = 32;
+        b.cpu.pc = 32;
+        a.run_steps(128)?;
+        b.run_steps(128)?;
+        same(&a, &b);
+    }
+    a.cpu.pc = 32;
+    b.cpu.pc = 32;
+    let before = b.jit_statistics().unwrap().block_instructions;
+    a.run_steps(1)?;
+    b.run_steps(1)?;
+    same(&a, &b);
+    // Only the jump is compiled at 32. The existing body at 0 is reused,
+    // rather than embedded and then rejected for exceeding a one-word budget.
+    assert_eq!(b.jit_statistics().unwrap().block_instructions, before + 1);
+    Ok(())
+}

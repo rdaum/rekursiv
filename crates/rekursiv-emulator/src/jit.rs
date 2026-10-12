@@ -157,6 +157,10 @@ pub(crate) struct Jit {
     blocks: Vec<Block>,
     block_sources: Vec<Vec<(usize, Instruction)>>,
     heat: Vec<Heat>,
+    // A cold straight-line walk heats its entry, not every overlapping suffix.
+    // Keep the expected continuation across run_steps budget boundaries.
+    fallthrough: Option<u16>,
+    linear: Vec<bool>,
     preparations: std::collections::HashMap<[u32; 8], Preparation>,
     guest_dispatch_pc: Option<u16>,
     lazy: bool,
@@ -175,6 +179,12 @@ impl Drop for Jit {
 }
 impl Jit {
     fn refresh_tables(&mut self, image: &Image) {
+        self.fallthrough = None;
+        self.linear = image
+            .code
+            .iter()
+            .map(|i| i.is_some_and(compile::linear))
+            .collect();
         self.nam = image
             .nam
             .iter()
@@ -267,6 +277,9 @@ impl Jit {
         self.heat[pc].block += 1;
         if self.heat[pc].block == HOT_REGION {
             self.heat[pc].block = DISABLED;
+            // Other hot entries may have compiled since the first visit.
+            // Rediscovery can only shorten this source prefix at a native join.
+            self.discover_region(image, pc);
             let started = std::time::Instant::now();
             let result = self.compile_region(pc);
             self.finish_compilation(result, started);
@@ -298,7 +311,9 @@ impl Jit {
         policy: BlockPolicy,
     ) -> Option<BlockResult> {
         let pc = cpu.pc as usize;
-        if self.blocks.get(pc)?.run.is_none()
+        let entry = self.fallthrough != Some(cpu.pc);
+        if entry
+            && self.blocks.get(pc)?.run.is_none()
             && cpu.roots.is_some()
             && self.lazy
             && !self.compilation_failed
@@ -330,6 +345,9 @@ impl Jit {
         if block.interrupt && tickless == 0 {
             return None;
         }
+        // A native exit is a new region entry, including a conditional side
+        // exit, a dynamic target, or the continuation of a 32-word region.
+        self.fallthrough = None;
         let mut tables = self.tables();
         tables.roots = cpu.roots.as_mut().unwrap().as_mut_ptr();
         tables.irq = u8::from(devices.events.as_ref().is_some_and(|e| e.status() != 0));
@@ -407,6 +425,14 @@ impl Jit {
         out: &mut NativeWrites,
     ) -> Option<Result<Option<Command>, u8>> {
         let pc = cpu.pc as usize;
+        // Observe individual execution as well as run_steps fallback. This
+        // keeps explicit stepping and budget tails from inventing new entries.
+        self.fallthrough = self
+            .linear
+            .get(pc)
+            .copied()
+            .unwrap_or(false)
+            .then_some(cpu.pc.wrapping_add(1));
         if self.entries.get(pc)?.is_none()
             && self.lazy
             && !self.compilation_failed
