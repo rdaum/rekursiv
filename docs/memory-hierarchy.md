@@ -1,7 +1,7 @@
 # Memory hierarchy for the MEGA65
 
-Status: design. Nothing here is implemented. The board currently has a 1,024-entry LUT-RAM pager,
-16,384 words of block-RAM object memory, and the SD-card store.
+Status: design, partly built. Object bodies are in SDRAM (build step 1). The pager is still the
+1,024-entry LUT-RAM table and still defines residency.
 
 ## Problem
 
@@ -143,16 +143,20 @@ These change documented behaviour and need matching changes in `docs/interface.m
 
 ## Build order
 
-1. **SDRAM controller** behind the existing memory channel, with a simulation model. Exit: the
-   board's paging and collection programs pass with bodies in SDRAM, and a memory test covers the
-   full range without aliasing.
-2. **Block-RAM pager with authoritative L0.** Still the sole record of residency at this step, so it
-   is testable alone. Exit: all RTL suites pass with the one-cycle page change; the pager's LUTs are
-   recovered.
-3. **Object table** with skip allocation, pager refill, and the collector moved onto table slots.
-   Exit: a program with more live objects than pager slots runs with zero store requests.
-4. **Heap-pressure eviction.**
-5. **Body cache and store cache,** if measurements justify them.
+1. **SDRAM controller** behind the existing memory channel, with a simulation model. Done: the board
+   boots with bodies in SDRAM after a power-on check of the address and data lines. A full-range
+   cell test is still owed.
+2. **Object table and block-RAM pager together.** OBJEKT keeps per-slot state beside the pager
+   today: validity, the persistent flag, the collector's mark, staged and complete bits, and the
+   edge sets gathered during saves and exchanges. They are flip-flop vectors with whole-vector
+   operations, which cannot grow to 16,384 slots. Enlarging the pager while it is still the record
+   of residency would mean rebuilding all of that for the pager and then again for the table.
+   Instead this step moves residency and every per-object flag into the SDRAM object table, with
+   skip allocation and the collector on table slots, and makes the pager a cache that holds only
+   entries and valid bits. Exit: all RTL suites pass against the revised contracts; a program with
+   more live objects than pager slots runs with zero store requests; the pager's LUTs are recovered.
+3. **Heap-pressure eviction.**
+4. **Body cache and store cache,** if measurements justify them.
 
 ## Open questions
 
