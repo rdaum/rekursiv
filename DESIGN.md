@@ -22,6 +22,12 @@ The target uses the extended 40-bit architecture as its starting point. Compatib
 historical software, microinstruction encodings, chip pins, and clock timing is unnecessary. The
 project retains useful mechanisms from Rekursiv and defines missing behavior explicitly.
 
+The hardware target is the MEGA65 home computer, mainboard revision R6. Its Artix-7 XC7A200T FPGA
+holds the whole machine, with object memory in the board's SDRAM and the object image on its SD card.
+The machine runs standalone: no host computer supplies storage, devices, or loading. The
+[MEGA65 target](#mega65-target) section lists the board resources and what the design takes from
+them.
+
 The development environment follows `../simple_tta`: a Rust workspace, an assembler, Verilator
 simulation through Marlin, and independent lint and synthesis checks. The current implementation
 includes OBJEKT and the first LOGIK/NUMERIK processor checkpoint. A complete language runtime
@@ -360,6 +366,15 @@ The book indexes a 64K-entry pager with the low 16 identity bits (pages 175 and 
 upper 24 reference bits in the number table and reconstructs the low bits from the lookup address.
 Our table retains the full canonical reference, which also supports smaller configurable tables
 without this historical storage optimization.
+
+The RTL stores the table in RAM with one write port and several same-cycle read ports, so commands
+keep their timing at any table size. A stored reference can occupy only the slot its identity
+selects, so finding a reference reads one slot. The few operations that must inspect every entry
+(raw service writes, SetBodyCursor, collector Begin and Commit, and NextObject) walk the table one
+slot per cycle while they hold the core exclusively. On the MEGA65's FPGA a 1,024-entry table maps
+to distributed (LUT) RAM. It uses about 63,000 LUTs, nearly half the device, and estimates near
+55 MHz before placement. That is acceptable for bring-up. A block-RAM table, which adds a cycle to
+pager reads, is the expected route to larger tables.
 
 Architectural state includes eight 40-bit `VR` registers, `REF`, the metadata output registers,
 `IDX`, and `IDXREG`. It also includes the identity allocator, space allocator, and command status.
@@ -1258,10 +1273,10 @@ The source review narrows the remaining choices:
 | Area              | Established baseline                                                                                                                                 | Still open                                                                      |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | Microinstructions | Project packing, registered condition timing, checked addresses, explicit stack returns, service-break resumption, synchronous OBJEKT stalls         | Historical operand substitution, remaining controls                             |
-| Capacity          | Direct-mapped configurable pager, 24-bit address and size fields                                                                                     | Target FPGA capacities and RAM packing                                          |
+| Capacity          | Direct-mapped configurable pager, 24-bit address and size fields                                                                                     | MEGA65 pager size and table RAM, SDRAM word packing                             |
 | Classes           | Compact-to-class mapping, uniform type references; stage 5 access-type and dictionary conventions                                                    | Runtime class fields, method-dictionary layout, inheritance policy              |
 | Numbers           | Compact construction with a service path for supported larger exact results                                                                          | Stored numeric layout, arithmetic width, limb operations                        |
-| Persistence       | Object records, new/modified distinction, save-before-replacement                                                                                    | Disk index, record encoding, atomic commits, recovery                           |
+| Persistence       | Object records, new/modified distinction, save-before-replacement                                                                                    | SD-card index, record encoding, atomic commits, recovery                        |
 | GC                | Initial stopped-mutator tracer, concrete generational successor candidate                                                                            | Concurrent mutation protocol, capacity tuning, hardware acceleration            |
 | Processor         | Resident stacks and roots, checked bounds, opcode dispatch, sixteen ALU registers, carry/subtract rules, retained multiplication, full-word equality | Full calling convention and language ISA, remaining arithmetic and stack paging |
 
@@ -1289,9 +1304,9 @@ Squeak class layouts and primitive numbers remain language policy, outside the g
 
 The intended first language target is a single-core port of the Blue Book Smalltalk-80 VM. Multicore
 execution, MVCC, and snapshot isolation remain deferred. The eventual goal is a usable Smalltalk /
-object-oriented workstation. It will boot a converted Smalltalk-80 image on the Mellanox NV303212A
-FPGA card, use its 8 GB of RAM, and display through the PCIe host machine's framebuffer. Keyboard,
-mouse, storage, and saved images are part of that workstation goal. The architecture must remain
+object-oriented workstation on the MEGA65. It will boot a converted Smalltalk-80 image from the SD
+card, keep object memory in the board's SDRAM, and display through the board's video outputs.
+Keyboard, mouse, storage, and saved images are part of that workstation goal. The architecture must remain
 usable by other object-oriented languages.
 
 The runtime preserves guest VM semantics while adapting storage to the project machine. The offline
@@ -1603,41 +1618,65 @@ can evaluate expressions, browse and edit methods, interact with windows, and sa
 session. Display presentation and external device models are the permitted host execution boundary.
 Bytecode execution, drawing algorithms, scheduling, and GC must remain on the machine.
 
-#### ST-80 stage 6: Memory capacity and FPGA implementation
+#### ST-80 stage 6: MEGA65 implementation
 
 This work can start alongside interpreter development. It must finish before the workstation stage.
+The [MEGA65 target](#mega65-target) section gives the board resources.
 
-- Expand the current 8192-word control-store configuration as the interpreter requires.
-- Map the enlarged control store and suitable resident arrays to FPGA block RAM.
-- Preserve fetch timing, programming behavior, root inspection, and recovery across memory
-  implementation changes.
-- Expand the current 24-bit physical address path to cover the card's RAM with a documented
-  word-packing scheme.
-- Update address arithmetic, pager bases, transfer interfaces, collector relocation, and bounds
-  checks together.
-- Provide the board's memory controller and measure usable heap capacity after semispace and system
-  reservations.
-- Measure pager behavior and collection pauses beyond the current 16-entry test configuration.
-- Implement the PCIe device interface and complete placement, routing, and timing checks for the
-  actual FPGA.
+- Provide an R6 top level: clocks from the 100 MHz oscillator, reset, idle levels for unused board
+  peripherals, and timing closure for the chosen machine clock.
+- Boot without a host. Load the control store and the initial resident image from the SD card at
+  power-up, replacing the simulator's halted service loader.
+- Provide an SDRAM controller and the documented 40-bit word packing. Measure usable heap capacity
+  after semispace and system reservations.
+- Implement the [streaming backing-store interface](docs/interface.md#streaming-backing-store-interface)
+  on the SD card, including its index, record encoding, atomic commits, and recovery after power
+  loss.
+- Expand the control store as the interpreter requires and map it and other resident arrays to
+  block RAM. Preserve fetch timing, programming behavior, root inspection, and recovery.
+- Choose the pager size and table RAM, and measure pager behavior and collection pauses beyond the
+  16-entry test configuration.
 
-Completion requires working external-memory access across the intended address range without
-truncation or aliasing. Synthesis and board tests must establish resource use, clock timing, and
-reliable device handshakes. Smalltalk tests from earlier stages must pass on the revised generic
-machine. Addressable RAM and usable object-heap capacity must be reported separately.
+Completion requires the machine to boot from the SD card and run microcode tests on the board.
+Object memory must work across the intended SDRAM range without truncation or aliasing, and objects
+must page to and from the card. Synthesis and board tests must establish resource use and clock
+timing. Smalltalk tests from earlier stages must pass on the revised generic machine. Addressable
+RAM and usable object-heap capacity must be reported separately.
 
-#### ST-80 stage 7: Smalltalk / OO workstation
+#### ST-80 stage 7: Smalltalk / OO workstation on the MEGA65
 
-- Boot the converted image on the Mellanox NV303212A card.
-- Use the card's RAM for object memory through the stage 6 memory interface.
-- Present the machine-produced display through the PCIe host's framebuffer.
-- Support interactive keyboard and mouse input, storage, and saved sessions.
+- Boot the converted image from the SD card.
+- Use SDRAM for object memory through the stage 6 memory interface.
+- Scan out a machine-produced framebuffer on the HDMI connector (as DVI) or VGA.
+- Support the MEGA65 keyboard, a mouse, storage, and saved sessions on the card.
 
-Completion means the user can develop and run Smalltalk programs on the FPGA workstation. The
-demonstration must exercise sustained allocation, collection, message sends, process activity,
-drawing, and a save/reload cycle. Memory tests must demonstrate use beyond the simulator's small
-heap configuration and across the board's available RAM. The PCIe host supplies device services,
-never a substitute Smalltalk interpreter or collector.
+Completion means the user can develop and run Smalltalk programs on the MEGA65. The demonstration
+must exercise sustained allocation, collection, message sends, process activity, drawing, and a
+save/reload cycle. Memory tests must demonstrate use beyond the simulator's small heap
+configuration. Board hardware supplies device services only, never a substitute Smalltalk
+interpreter or collector.
+
+### MEGA65 target
+
+| Resource           | R6 board                                                   | Use                                                         |
+| ------------------ | ---------------------------------------------------------- | ----------------------------------------------------------- |
+| FPGA               | AMD Artix-7 XC7A200T-2FBG484: 134,600 LUTs, 365 36 Kb BRAM | The whole machine                                           |
+| Clock              | 100 MHz oscillator                                         | Source for the machine and video clocks                     |
+| SDRAM              | 64 MB, 16-bit                                              | Object memory                                               |
+| HyperRAM           | 8 MB, 8-bit                                                | Unassigned                                                  |
+| SD card slots      | Rear microSD slot; full-size slot under the bottom cover   | Object image, control store, saved sessions                 |
+| Video              | HDMI connector and VGA through a video DAC                 | Workstation display                                         |
+| Keyboard and ports | MEGA65 keyboard, two joystick ports                        | Keyboard and mouse input                                    |
+| Ethernet           | 100 Mbit PHY                                               | Unassigned by the machine; carries new cores to the SD card |
+
+Three 16-bit SDRAM words per 40-bit machine word give 11,184,810 words in 64 MB. That is below 2^24,
+so the existing 24-bit physical address path covers the whole SDRAM without widening.
+
+Pin assignments come from the MiSTer2MEGA65 framework's R6 constraint file. A test core has shown
+that the HDMI connector must carry plain DVI (no audio or data islands) for some DVI monitors, at
+640x480 and 60 Hz; VGA works at the same timing. Cores are built with Vivado, wrapped with
+`bit2core` for the `mega65r6` target, copied to the SD card over Ethernet, and flashed into a core
+slot from the MEGA65's boot menu.
 
 ### Validation and generic hardware changes
 

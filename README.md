@@ -59,15 +59,16 @@ keyboard, and mouse. The "Blue Book" was used as a reference to write the microc
 executes on the emulated Rekursiv hardware.
 
 A separate microcode profile runs the **Squeak 1.1** colour desktop, with binary64 Floats and mouse menus.
-Both desktops are tested only in the native software emulator. FPGA board integration remains unfinished.
+Both desktops are tested only in the native software emulator. MEGA65 board integration remains unfinished.
 
 ![Smalltalk-80 desktop and System Browser in the Rekursiv emulator](docs/images/st80.png)
 
 _Smalltalk-80 running on Rekursiv microcode in the native emulator._
 
-Ultimate success means running this Smalltalk-80 workstation on my Mellanox NV303212A FPGA card. It
-will have the card’s obscene 8 GB of RAM to play with. Display output will use the PCIe host
-machine’s framebuffer to make pretty pictures.
+Ultimate success means running this Smalltalk-80 workstation on my [MEGA65](https://mega65.org/), a
+modern Commodore 65 whose Artix-7 FPGA can be loaded with other machines' cores. Rekursiv will run
+there standalone: object memory in the board's 64 MB of SDRAM, the object image on its SD card, and
+the desktop on its HDMI or VGA output, driven from its own keyboard.
 
 ## Implementation
 
@@ -83,9 +84,9 @@ examples execute their program control flow and garbage collection on the RTL pr
 
 The Smalltalk microcode executes bytecodes, runtime primitives, and process scheduling. NUMERIK
 supports integer, binary32 and binary64 arithmetic. BitBlt runs in microcode and refreshes the display as the
-original Smalltalk image draws its desktop. Disk transfers, snapshot saving, and FPGA board
-integration remain unfinished. The RTL passes generic synthesis checks. It has not yet been
-validated on an FPGA board.
+original Smalltalk image draws its desktop. Disk transfers, snapshot saving, and MEGA65 board
+integration remain unfinished. The RTL passes generic synthesis checks and Vivado synthesis for the
+MEGA65's FPGA, but has not yet run on the board.
 
 ## Build and run
 
