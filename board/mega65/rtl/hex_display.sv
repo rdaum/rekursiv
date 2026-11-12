@@ -2,7 +2,8 @@
 // label digit, a gap, then eight digits. Glyphs are 5x7 in an 8x8 cell,
 // scaled four times. One pixel per clock; output is registered once.
 module hex_display #(
-    parameter integer ROWS = 9
+    parameter integer ROWS = 9,
+    parameter integer LEFT = 64
 )(
     input  logic        clk_i,
     input  logic [9:0]  x_i,
@@ -11,7 +12,7 @@ module hex_display #(
     output logic        ink_o,
     output logic        panel_o
 );
-    localparam integer LEFT = 64, TOP = 48, CELL = 32, PITCH = 40;
+    localparam integer TOP = 48, CELL = 32, PITCH = 40;
 
     function automatic logic [34:0] glyph(input logic [3:0] digit);
         unique case (digit)

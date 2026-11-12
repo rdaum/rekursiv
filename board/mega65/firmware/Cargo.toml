@@ -1,0 +1,24 @@
+[package]
+name = "disk-firmware"
+version = "0.1.0"
+edition = "2021"
+description = "Firmware for the MEGA65 board's disk processor (PicoRV32)"
+license = "GPL-3.0-or-later"
+
+# Built for riscv32im-unknown-none-elf, separately from the host workspace.
+[workspace]
+
+[[bin]]
+name = "disk-firmware"
+test = false
+bench = false
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
+
+[profile.dev]
+panic = "abort"

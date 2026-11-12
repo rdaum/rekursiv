@@ -34,6 +34,16 @@ module mega65_top (
     output logic       led_g_n_o,
     output logic       led_r_n_o,
 
+    // Internal full-size SD card slot, in SPI mode (D3 is chip select)
+    output logic       sd2_clk_o,
+    output logic       sd2_reset_o,
+    output logic       sd2_mosi_o,
+    input  logic       sd2_miso_i,
+    // Rear microSD slot, held deselected
+    output logic       sd_clk_o,
+    output logic       sd_reset_o,
+    output logic       sd_mosi_o,
+
     // Everything below is held inactive so the board's peripherals stay idle.
     output logic       f_density_o,
     output logic       f_motora_o,
@@ -155,8 +165,11 @@ module mega65_top (
     logic [3:0]  fault;
     logic [15:0] pc;
 
-    rekursiv_system #(.BOOT_FILE("boot.mem")) machine (
+    logic [31:0] disk_rows [8];
+    rekursiv_system #(.BOOT_FILE("boot.mem"), .FIRMWARE("firmware.mem")) machine (
         .clk_i(clk_cpu), .rst_i(rst_cpu),
+        .sd_clk_o(sd2_clk_o), .sd_cs_n_o(sd2_reset_o), .sd_mosi_o(sd2_mosi_o),
+        .sd_miso_i(sd2_miso_i), .disk_display_o(disk_rows),
         .debug_o(debug), .booted_o(booted), .halted_o(halted), .service_o(service),
         .fault_o(fault), .pc_o(pc)
     );
@@ -190,9 +203,25 @@ module mega65_top (
         rows[8] = {pc, fault, 3'b0, service, 3'b0, halted, 3'b0, booted};
     end
 
-    logic ink, panel;
-    hex_display #(.ROWS(9)) text (.clk_i(clk_pix), .x_i(x), .y_i(y), .values_i(rows),
-                                  .ink_o(ink), .panel_o(panel));
+    // The disk processor's display, in a second panel on the right.
+    assign sd_clk_o   = 1'b0;
+    assign sd_reset_o = 1'b1;
+    assign sd_mosi_o  = 1'b1;
+
+    // Sample both panels' values once per frame, during vertical blanking,
+    // so a value that changes mid-frame is not drawn half old, half new.
+    logic [31:0] rows_shown [9], disk_shown [8];
+    always_ff @(posedge clk_pix) if (x == 0 && y == V_ACTIVE) begin
+        rows_shown <= rows;
+        disk_shown <= disk_rows;
+    end
+
+    logic ink, panel, sd_ink, sd_panel;
+    hex_display #(.ROWS(9), .LEFT(0)) text (.clk_i(clk_pix), .x_i(x), .y_i(y), .values_i(rows_shown),
+                                            .ink_o(ink), .panel_o(panel));
+    hex_display #(.ROWS(8), .LEFT(320)) sd_text (.clk_i(clk_pix), .x_i(x), .y_i(y),
+                                                 .values_i(disk_shown), .ink_o(sd_ink),
+                                                 .panel_o(sd_panel));
 
     // Match the display's one-cycle latency for position and blanking.
     logic [9:0] x_d, y_d;
@@ -203,8 +232,9 @@ module mega65_top (
     always_comb begin
         active = (x_d < H_ACTIVE) && (y_d < V_ACTIVE);
         if (!active)        {r, g, b} = '0;
-        else if (ink)       {r, g, b} = 24'hFFFFFF;
+        else if (ink || sd_ink) {r, g, b} = 24'hFFFFFF;
         else if (panel)     {r, g, b} = fault != 0 ? 24'h800000 : 24'h102060;
+        else if (sd_panel)  {r, g, b} = 24'h104020;
         else                {r, g, b} = 24'h000000;
     end
 

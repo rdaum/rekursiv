@@ -2,8 +2,7 @@
 // implementations of their external channels.
 //
 // - Object memory is block RAM.
-// - The backing store answers every request with a service error, so a
-//   program must avoid pager collisions with new or modified victims.
+// - The disk processor serves the backing store from the SD card.
 // - The device channel serves only the debug display (0xf00-0xf1f).
 // - A boot sequencer replays a stream from BOOT_FILE through LOGIK's halted
 //   programming port, then starts the processor. The start record says
@@ -13,10 +12,16 @@ module rekursiv_system #(
     parameter integer MEMORY_WORDS = 16384,
     parameter integer CODE_WORDS = 1024,
     parameter integer BOOT_RECORDS = 1024,
-    parameter BOOT_FILE = "boot.mem"
+    parameter BOOT_FILE = "boot.mem",
+    parameter FIRMWARE = "firmware.mem"
 )(
     input  logic        clk_i,
     input  logic        rst_i,
+    output logic        sd_clk_o,
+    output logic        sd_cs_n_o,
+    output logic        sd_mosi_o,
+    input  logic        sd_miso_i,
+    output logic [31:0] disk_display_o [8],
     output logic [31:0] debug_o [8],
     output logic        booted_o,
     output logic        halted_o,
@@ -80,7 +85,11 @@ module rekursiv_system #(
     logic [23:0] mem_addr;
     logic [39:0] mem_data, mem_rsp_data;
 
-    logic store_valid, store_ready, store_rsp_valid, store_rsp_ready;
+    logic store_valid, store_ready, store_rsp_valid, store_rsp_ready, store_cond, store_rsp_cond;
+    logic [3:0]  store_op, store_rsp_status;
+    logic [39:0] store_ref, store_class, store_data;
+    logic [39:0] store_rsp_ref, store_rsp_class, store_rsp_data;
+    logic [23:0] store_size, store_offset, store_rsp_size;
 
     /* verilator lint_off PINCONNECTEMPTY */
     logik #(.CODE_WORDS(CODE_WORDS)) processor (
@@ -140,13 +149,14 @@ module rekursiv_system #(
         .mem_write_o(mem_write), .mem_addr_o(mem_addr), .mem_data_o(mem_data),
         .mem_rsp_valid_i(mem_rsp_valid), .mem_rsp_ready_o(mem_rsp_ready),
         .mem_rsp_data_i(mem_rsp_data), .mem_rsp_error_i(mem_rsp_error),
-        .store_valid_o(store_valid), .store_ready_i(store_ready), .store_op_o(),
-        .store_ref_o(), .store_class_o(), .store_size_o(), .store_cond_o(),
-        .store_offset_o(), .store_data_o(),
+        .store_valid_o(store_valid), .store_ready_i(store_ready), .store_op_o(store_op),
+        .store_ref_o(store_ref), .store_class_o(store_class), .store_size_o(store_size),
+        .store_cond_o(store_cond), .store_offset_o(store_offset), .store_data_o(store_data),
         .store_rsp_valid_i(store_rsp_valid), .store_rsp_ready_o(store_rsp_ready),
-        .store_rsp_status_i(4'd10),
-        .store_rsp_ref_i('0), .store_rsp_class_i('0), .store_rsp_size_i('0),
-        .store_rsp_cond_i(1'b0), .store_rsp_data_i('0),
+        .store_rsp_status_i(store_rsp_status),
+        .store_rsp_ref_i(store_rsp_ref), .store_rsp_class_i(store_rsp_class),
+        .store_rsp_size_i(store_rsp_size), .store_rsp_cond_i(store_rsp_cond),
+        .store_rsp_data_i(store_rsp_data),
         .dbg_next_identity_o(), .dbg_body_cursor_o(), .dbg_maintenance_o(),
         .dbg_class_code_i(2'd0), .dbg_class_valid_o(), .dbg_compact_class_o(),
         .dbg_vr_i(3'd0), .dbg_vr_o(), .dbg_idx_o(), .dbg_reg_o(),
@@ -185,16 +195,19 @@ module rekursiv_system #(
     end
 
     // ---------------------------------------------------------------------
-    // Backing store: refuse every request.
+    // Backing store: the disk processor.
     // ---------------------------------------------------------------------
-    logic store_pending;
-    assign store_ready     = !store_pending;
-    assign store_rsp_valid = store_pending;
-    always_ff @(posedge clk_i) begin
-        if (rst_i) store_pending <= 1'b0;
-        else if (store_valid && store_ready) store_pending <= 1'b1;
-        else if (store_rsp_valid && store_rsp_ready) store_pending <= 1'b0;
-    end
+    disk_processor #(.FIRMWARE(FIRMWARE)) disk (
+        .clk_i, .rst_i,
+        .store_valid_i(store_valid), .store_ready_o(store_ready), .store_op_i(store_op),
+        .store_ref_i(store_ref), .store_class_i(store_class), .store_size_i(store_size),
+        .store_cond_i(store_cond), .store_offset_i(store_offset), .store_data_i(store_data),
+        .store_rsp_valid_o(store_rsp_valid), .store_rsp_ready_i(store_rsp_ready),
+        .store_rsp_status_o(store_rsp_status), .store_rsp_ref_o(store_rsp_ref),
+        .store_rsp_class_o(store_rsp_class), .store_rsp_size_o(store_rsp_size),
+        .store_rsp_cond_o(store_rsp_cond), .store_rsp_data_o(store_rsp_data),
+        .sd_clk_o, .sd_cs_n_o, .sd_mosi_o, .sd_miso_i,
+        .display_o(disk_display_o));
 
     // ---------------------------------------------------------------------
     // Devices: the debug display only.

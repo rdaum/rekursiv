@@ -6,3 +6,4 @@
 /*.pdf
 /*.zip
 /board/mega65/build/
+/board/mega65/firmware/target/
