@@ -647,9 +647,9 @@ mod tests {
     }
     #[test]
     fn collector_source_assembles_at_distinct_origins() {
-        let a = crate::collector::program(128, 16, 595).unwrap();
-        let b = crate::collector::program(32, 16, 595).unwrap();
-        assert_eq!(a.len(), 68);
+        let a = crate::collector::program(128, 595).unwrap();
+        let b = crate::collector::program(32, 595).unwrap();
+        assert_eq!(a.len(), 40);
         for (mut x, y) in a.into_iter().zip(b) {
             if matches!(x.seq, Seq::Jump | Seq::ConditionalJump) {
                 x.branch -= 96;

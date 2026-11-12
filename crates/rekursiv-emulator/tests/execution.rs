@@ -110,7 +110,7 @@ fn collection_requires_a_handler_and_cannot_nest() -> Result<()> {
         };
         let mut image = Image::program(&[collect, Instruction::halt()]);
         if nested {
-            image = image.with_ram_collector(128, 16)?;
+            image = image.with_ram_collector(128)?;
             image.code[128] = Some(collect);
         }
         let mut m = Machine::new(image.clone(), 0, 16, 512)?;
@@ -146,7 +146,7 @@ fn malformed_collection_request_cannot_enter_recovery() -> Result<()> {
         recovery: Recovery::Collect,
         ..Default::default()
     };
-    let image = Image::program(&[collect, Instruction::halt()]).with_ram_collector(128, 16)?;
+    let image = Image::program(&[collect, Instruction::halt()]).with_ram_collector(128)?;
     let mut m = Machine::new(image.clone(), 0, 16, 512)?;
     m.image_mut().code[0].as_mut().unwrap().data = Word::raw(1)?;
     assert!(m.step().is_err());
@@ -380,7 +380,7 @@ fn collector_failure_preserves_source_heap_and_interrupted_registers() -> Result
         rb: 9,
         ..Default::default()
     }])
-    .with_ram_collector(3968, 16)?;
+    .with_ram_collector(3968)?;
     let mut m = Machine::new(program, 0, 16, 512)?;
     let memory = m.objekt.memory.clone();
     let result: Result<()> = (|| {

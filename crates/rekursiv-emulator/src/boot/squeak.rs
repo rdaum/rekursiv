@@ -34,8 +34,8 @@ pub fn squeak_source(
     validate_pager_entries(pager_entries)?;
     let converted = target::Image::convert(source)?;
     let assembly = interpreter::assemble(source)?;
-    let mut program = Image::from_assembly(&assembly)?
-        .with_ram_collector(interpreter::COLLECTOR_ENTRY, pager_entries)?;
+    let mut program =
+        Image::from_assembly(&assembly)?.with_ram_collector(interpreter::COLLECTOR_ENTRY)?;
     // Assembly roots 26..31 are interpreter-private; roots 0..2 are boot ABI.
     for (dst, bits) in program.roots[..3].iter_mut().zip(&converted.roots[..3]) {
         *dst = Word::from_bits(*bits)?;

@@ -1,8 +1,11 @@
 //! OBJEKT maintenance datapath, one privileged request at a time.
 //!
 //! This contains no graph walker or copy loop. The loaded collector microcode
-//! chooses the roots, marks, pager passes, and every read/write. Relocations
-//! become visible together at Commit, just as in rtl/objekt_gc.sv.
+//! chooses the roots, marks, and every read/write. The datapath keeps the work
+//! list: the first mark of a slot queues it, and Next takes the most recently
+//! queued slot. NextMarked then visits the marked slots in ascending order for
+//! copying. Relocations become visible together at Commit, just as in
+//! rtl/objekt_gc.sv.
 use rekursiv_asm::{processor::Recovery, Entry, Status, Word};
 use rekursiv_model::Model;
 
@@ -15,6 +18,12 @@ pub(crate) struct RecoveryState {
     initialized: bool,
     selected: usize,
     marked: Vec<bool>,
+    /// Marked slots not yet taken by Next, most recent last.
+    queue: Vec<usize>,
+    /// Where NextMarked resumes its ascending scan.
+    scan: usize,
+    /// Slots the last NextMarked examined, for the cycle estimate.
+    pub scanned: u64,
     bases: Vec<Option<u32>>,
     complete: Vec<bool>,
     cursor: u32,
@@ -41,6 +50,9 @@ impl RecoveryState {
             initialized: false,
             selected: 0,
             marked: vec![false; model.entries.len()],
+            queue: Vec::new(),
+            scan: 0,
+            scanned: 0,
             bases: vec![None; model.entries.len()],
             complete: vec![false; model.entries.len()],
             cursor: if upper { 0 } else { half },
@@ -51,6 +63,25 @@ impl RecoveryState {
     }
     fn entry(&self, model: &Model) -> Option<Entry> {
         model.entries[self.selected].get()
+    }
+    /// A NEW or modified object that persistence requires in RAM, or the
+    /// object of a valid prepared access.
+    fn retained(model: &Model, slot: usize, e: &Entry) -> bool {
+        (e.modified && !e.new)
+            || (e.new && model.persistent_roots[slot])
+            || (model.state.prepared.status == Status::Ok
+                && model.state.prepared.reference == e.reference)
+    }
+    fn flags(&self, model: &Model, slot: usize) -> Result<Word, Status> {
+        let Some(e) = model.entries[slot].get() else {
+            return Ok(Word::ZERO);
+        };
+        Word::raw(
+            1 | (u64::from(self.marked[slot]) << 1)
+                | (((e.reference.bits() >> 37) & 1) << 2)
+                | (u64::from(Self::retained(model, slot, &e)) << 3)
+                | (u64::from(e.new) << 4),
+        )
     }
     pub fn execute(&mut self, op: Recovery, data: Word, model: &mut Model) -> Result<Word, Status> {
         if (!self.initialized && op != Recovery::Begin) || self.committed {
@@ -72,6 +103,12 @@ impl RecoveryState {
                     return Err(Status::BoundsError);
                 }
                 self.initialized = true;
+                for (slot, entry) in model.entries.iter().enumerate() {
+                    if entry.is_some_and(|e| Self::retained(model, slot, &e)) {
+                        self.marked[slot] = true;
+                        self.queue.push(slot);
+                    }
+                }
             }
             Recovery::Root => result = self.roots.get(n as usize).copied().unwrap_or(Word::ZERO),
             Recovery::Slot => {
@@ -80,17 +117,24 @@ impl RecoveryState {
                 }
                 self.selected = n as usize;
                 self.copied = None;
-                if let Some(e) = model.entries[self.selected].get() {
-                    let persistent = (e.modified && !e.new)
-                        || (e.new && model.persistent_roots[self.selected])
-                        || (model.state.prepared.status == Status::Ok
-                            && model.state.prepared.reference == e.reference);
-                    result = Word::raw(
-                        1 | (u64::from(self.marked[self.selected]) << 1)
-                            | (((e.reference.bits() >> 37) & 1) << 2)
-                            | (u64::from(persistent) << 3)
-                            | (u64::from(e.new) << 4),
-                    )?;
+                result = self.flags(model, self.selected)?;
+            }
+            Recovery::Next => {
+                if let Some(slot) = self.queue.pop() {
+                    self.selected = slot;
+                    self.copied = None;
+                    result = self.flags(model, slot)?;
+                }
+            }
+            Recovery::NextMarked => {
+                let start = self.scan;
+                let found = (start..self.marked.len()).find(|&slot| self.marked[slot]);
+                self.scan = found.map_or(self.marked.len(), |slot| slot + 1);
+                self.scanned = (self.scan - start) as u64;
+                if let Some(slot) = found {
+                    self.selected = slot;
+                    self.copied = None;
+                    result = self.flags(model, slot)?;
                 }
             }
             Recovery::Info => {
@@ -106,7 +150,10 @@ impl RecoveryState {
                 let slot = n as usize & (model.entries.len() - 1);
                 if data.is_reference() && model.entries[slot].is_some_and(|e| e.reference == data) {
                     result = Word::raw(u64::from(!self.marked[slot]))?;
-                    self.marked[slot] = true;
+                    if !self.marked[slot] {
+                        self.marked[slot] = true;
+                        self.queue.push(slot);
+                    }
                 }
             }
             Recovery::ReadBody | Recovery::WriteBody => {

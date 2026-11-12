@@ -514,7 +514,7 @@ pub fn assembly_image(source: &str) -> Result<(Image, u16)> {
     let entry = assembly.entry.unwrap_or(0);
     let mut image = Image::from_assembly(&assembly)?;
     if image.collector_entry.is_none() {
-        image = image.with_ram_collector(128, crate::PAGER_ENTRIES)?;
+        image = image.with_ram_collector(128)?;
     }
     Ok((image, entry))
 }

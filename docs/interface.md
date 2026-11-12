@@ -751,24 +751,26 @@ issues backing-store transactions.
 | Value | Control   | D-bus operand and result                                                              |
 | ----: | --------- | ------------------------------------------------------------------------------------- |
 |     0 | None      | Ordinary local microinstruction                                                       |
-|     1 | Begin     | Walk every slot to validate source-space bounds; clear marks and relocation plan      |
+|     1 | Begin     | Walk every slot: validate source-space bounds, clear marks and the relocation plan, and mark and queue each slot whose retention flag is set |
 |     2 | Root      | Index from the root table; return the 40-bit value                                    |
 |     3 | Slot      | Pager slot index; select it and return flags                                          |
 |     4 | Info      | Selected slot field: 0 reference, 1 class, 2 size                                     |
-|     5 | Mark      | Full reference; return 1 only when a resident object's mark changes from clear to set |
+|     5 | Mark      | Full reference; mark and queue a resident object on its first mark, and return 1 only then |
 |     6 | ReadBody  | Zero-based source offset; return and buffer a 40-bit word                             |
 |     7 | Stage     | Reserve destination range for the selected marked object                              |
 |     8 | WriteBody | Zero-based destination offset; write the matching buffered word                       |
 |     9 | Commit    | Walk every slot to publish completed relocation; exchange allocation spaces           |
 |    10 | Return    | Restore processor context and retry; requires successful Commit                       |
 |    11 | Collect   | Standalone mutator request for collection, with no allocation reservation             |
+|    12 | Next      | Take the most recently queued slot, select it, and return its flags; zero when the queue is empty |
+|    13 | NextMarked | Select the next marked slot in ascending order, from slot zero after Begin, and return its flags; zero when none remains. It examines one slot per cycle |
 
 Slot flags are valid (bit 0), marked (1), scanned (2), retention root (3), and NEW (4). Retention
 roots include dirty persistent objects and NEW objects protected by committed saves or
 backing-record edges, and the valid prepared reference. ReadBody and WriteBody use the external RAM
 request/completion channel. Stage and Commit return `OUT_OF_SPACE` when their capacity conditions
-fail. Info on an invalid slot returns `NOT_RESIDENT`; invalid indices return `BOUNDS`. Mark ignores
-nonreferences, nonresident objects, and collisions without faulting or fetching. Controls 1–10
-require an active collector invocation. `gc=Collect` requires mutator mode and an enabled collector,
+fail. Slot on an invalid slot returns zero. Info on an invalid slot returns `NOT_RESIDENT`; invalid
+indices return `BOUNDS`. Mark ignores nonreferences, nonresident objects, and collisions without
+faulting or fetching. Controls 1–10, 12, and 13 require an active collector invocation. `gc=Collect` requires mutator mode and an enabled collector,
 and rejects all other control fields. Collector instructions cannot combine an OBJEKT mutator
 command or alter frozen stacks and fetch state.

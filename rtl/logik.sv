@@ -274,7 +274,7 @@ module logik #(
                 instruction.shift!=SHIFT_NONE || instruction.carry!=CARRY_ZERO || instruction.estk==ESTK_COMPACT))) local_fault=FAULT_ENCODING;
         // Collect is an effect-free mutator request, never a maintenance op.
         // On return, retried permits this word to retire once without reentry.
-        else if(instruction.recovery>11 ||
+        else if(instruction.recovery>13 ||
             (instruction.recovery==11 && (gc_active_o || !gc_enable_i ||
                 instruction != (256'd11 << 212))) ||
             (instruction.recovery!=0 && instruction.recovery!=11 && !gc_active_o) ||
@@ -305,7 +305,7 @@ module logik #(
                 else if (instruction.sequence_op != SEQ_HOLD) begin
                     if (instruction.device != 0) next_state = DEVICE_WAIT;
                     else if (instruction.alu==ALU_FLOAT) next_state=NUMERIC_WAIT;
-                    else if (instruction.object_enable || (instruction.recovery!=0 && instruction.recovery<10)) next_state = ISSUE;
+                    else if (instruction.object_enable || (instruction.recovery!=0 && (instruction.recovery<10 || instruction.recovery>=12))) next_state = ISSUE;
                     else retire = 1'b1;
                 end
             end

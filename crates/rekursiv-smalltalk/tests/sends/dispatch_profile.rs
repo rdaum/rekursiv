@@ -171,7 +171,7 @@ fn profile_bytecode_loop() -> Result<()> {
                 // The optional source snapshot permits before/after runs
                 // with identical fixtures and without changing the checkout.
                 *m.image_mut() = Program::from_assembly(&assembly)?
-                    .with_ram_collector(interpreter::COLLECTOR_ENTRY, 65_536)?;
+                    .with_ram_collector(interpreter::COLLECTOR_ENTRY)?;
                 m.cpu.pc = assembly.entry.unwrap();
                 if registered {
                     let roots = m.cpu.roots.as_mut().unwrap();

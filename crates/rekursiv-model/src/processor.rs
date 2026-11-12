@@ -130,16 +130,8 @@ impl Image {
 
     /// Install the machine collector in free control-store space. Its ordinary
     /// microinstructions use the same encoder and processor as application code.
-    pub fn with_ram_collector(
-        mut self,
-        entry: u16,
-        pager_entries: usize,
-    ) -> Result<Self, rekursiv_asm::Status> {
-        let code = rekursiv_asm::collector::program(
-            entry,
-            pager_entries,
-            20 + STACK_WORDS + 2 * CODE_WORDS + 32,
-        )?;
+    pub fn with_ram_collector(mut self, entry: u16) -> Result<Self, rekursiv_asm::Status> {
+        let code = rekursiv_asm::collector::program(entry, 20 + STACK_WORDS + 2 * CODE_WORDS + 32)?;
         let end = entry as usize + code.len();
         if end > self.code.len() || self.code[entry as usize..end].iter().any(Option::is_some) {
             return Err(rekursiv_asm::Status::BadCommand);

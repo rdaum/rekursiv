@@ -6,23 +6,25 @@ command. A standalone `gc=Collect` instruction enters the same collector before 
 executes this path autonomously. The native emulator executes the same microcode against its Rust
 maintenance datapath. Neither executor calls the graph-walking Rust collector used as a test oracle.
 
-The implementation follows the book's RAM collector on pp. 135–139. It uses the project's 40-bit
-values and control encodings. It is a stopped-mutator collector; persistent-store reclamation and
-concurrent collection remain separate work.
+The implementation started from the book's RAM collector on pp. 135–139 and keeps its roots,
+retention rules, and semispace copy. It replaces the book's repeated whole-table passes with a work
+list, so tracing cost follows the live data. It uses the project's 40-bit values and control
+encodings. It is a stopped-mutator collector; persistent-store reclamation and concurrent collection
+remain separate work.
 
 ## Loading and running
 
 ```rust
-let image = Image::program(&instructions).with_ram_collector(128, 16)?;
+let image = Image::program(&instructions).with_ram_collector(128)?;
 h.load_processor(&image)?;
 h.start_processor(0)?;
 ```
 
-`with_ram_collector` assembles 68 ordinary microinstructions at the supplied address and rejects
-overlap with existing code. The pager count must match the hardware configuration. Root bounds come
-from the image's stack and control-store capacities. The wrapper has 16 pager entries, 32 stack
-words, and 8192 control words. The collector uses NUMERIK registers R0–R4 for loop state; hardware
-preserves the mutator's complete arithmetic state.
+`with_ram_collector` assembles 40 ordinary microinstructions at the supplied address and rejects
+overlap with existing code. Root bounds come from the image's stack and control-store capacities.
+The wrapper has 16 pager entries, 32 stack words, and 8192 control words. The collector does not
+depend on the pager size. It uses NUMERIK registers R0–R4 for loop state; hardware preserves the
+mutator's complete arithmetic state.
 
 The loader sets `gc_enable_i` and `gc_entry_i` while halted. Keep these settings fixed throughout
 execution and across subsequent collections. Enable collection before allocation begins, with
@@ -71,10 +73,10 @@ try again after a device error.
 
 ## Roots and retention
 
-A valid prepared address retains its referenced object through the Slot retention flag. This root
-does not change the ROOT index layout. Commit relocates the prepared physical address with the pager
-entry. A failed collection leaves both unchanged. Before collection entry, LOGIK drains any launched
-object command and publishes its successful result.
+A valid prepared address retains its referenced object through the slot retention flag, which Begin
+acts on. This root does not change the ROOT index layout. Commit relocates the prepared physical
+address with the pager entry. A failed collection leaves both unchanged. Before collection entry,
+LOGIK drains any launched object command and publishes its successful result.
 
 The ROOT control reads machine state directly. Its index layout is:
 
@@ -111,11 +113,13 @@ Protection persists until slot replacement, so obsolete disk edges can conservat
 NEW objects. This prevents collection from losing unsaved descendants accessible through a
 persistent object without traversing disk records during collection.
 
-Microcode repeats pager passes until no new marks appear. This avoids a recursive work stack and
-handles cycles with storage bounded by pager capacity. It can require many passes for an
-unfavourably ordered chain; no constant-time tracing claim is made. Unreachable new cycles and
-unrooted clean RAM copies are discarded. All backing records remain unchanged, including records for
-discarded RAM copies.
+Tracing uses a work list held in OBJEKT. Begin marks and queues every slot whose retention flag is
+set. The first Mark of a slot queues it; a later Mark of the same slot does nothing. Microcode takes
+one queued slot at a time with Next, marks its class, and marks each word of a scanned body. Each
+live object is traced once, and a cycle ends when it reaches an object that is already marked. The
+list is a stack threaded through one link per pager slot, so its storage is bounded by pager
+capacity. Unreachable new cycles and unrooted clean RAM copies are discarded. All backing records
+remain unchanged, including records for discarded RAM copies.
 
 ## Semispaces and publication
 
@@ -124,11 +128,13 @@ initially active; allocation and refill share its bump cursor and limit. The oth
 for copying. Address zero remains usable, and zero-size objects consume no body words. Every
 published source body must lie within the active half before collection begins.
 
-Marks, staged bases, and copy-completion bits reside in OBJEKT hardware. They are separate from
-persisted `cond`, NEW, and MOD flags. STAGE reserves a destination range for one marked object.
-Microcode issues a source read and destination write for every body word. The datapath checks
-offsets and permits writes only after a successful matching read, in ascending offset order.
-Zero-size objects complete staging without RAM traffic.
+Marks, work-list links, staged bases, and copy-completion bits reside in OBJEKT hardware. They are
+separate from persisted `cond`, NEW, and MOD flags. After tracing, microcode visits the marked slots
+in ascending slot order with NextMarked, so the new layout does not depend on the order of tracing.
+STAGE reserves a destination range for one marked object. Microcode issues a source read and
+destination write for every body word. The datapath checks offsets and permits writes only after a
+successful matching read, in ascending offset order. Zero-size objects complete staging without RAM
+traffic.
 
 COMMIT requires completed copies for all marked slots and room for the interrupted request. Once
 admitted it cannot fail. It visits each pager slot in turn, moving a retained entry, a matching

@@ -68,7 +68,7 @@ The simulator installs the machine collector alongside the interpreter:
 ```rust
 let assembly = rekursiv_smalltalk::interpreter::assemble(active_context)?;
 let program = rekursiv_model::processor::Image::from_assembly(&assembly)?
-    .with_ram_collector(rekursiv_smalltalk::interpreter::COLLECTOR_ENTRY, 16)?;
+    .with_ram_collector(rekursiv_smalltalk::interpreter::COLLECTOR_ENTRY)?;
 h.load_processor(&program)?;
 h.start_processor(assembly.entry.unwrap())?;
 ```

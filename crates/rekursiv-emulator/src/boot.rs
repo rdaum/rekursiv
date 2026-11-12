@@ -44,7 +44,7 @@ pub fn microcode_with_pager(
     )?;
     let mut image = Image::from_assembly(&assembly)?;
     if image.collector_entry.is_none() {
-        image = image.with_ram_collector(COLLECTOR_ENTRY, pager_entries)?;
+        image = image.with_ram_collector(COLLECTOR_ENTRY)?;
     }
     Ok(Loaded {
         machine: Machine::new(
@@ -103,8 +103,7 @@ fn load_smalltalk(
     let converted = target::Image::convert(&source, &layout::BOOT_ROOTS)?;
     converted.verify_against(&source)?;
     let assembly = interpreter::assemble(layout::reference(context)?)?;
-    let mut program =
-        Image::from_assembly(&assembly)?.with_ram_collector(COLLECTOR_ENTRY, pager_entries)?;
+    let mut program = Image::from_assembly(&assembly)?.with_ram_collector(COLLECTOR_ENTRY)?;
     program.roots[..26].copy_from_slice(&converted.roots[..26]);
     let mut machine = Machine::new(
         program,

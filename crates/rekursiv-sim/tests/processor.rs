@@ -723,7 +723,7 @@ fn floating_point_retires_once_and_preserves_exceptions_across_collection() -> R
         0,
         &[("CLASS", class.bits() as i64)],
     )?;
-    let image = Image::from_assembly(&assembly)?.with_ram_collector(128, 16)?;
+    let image = Image::from_assembly(&assembly)?.with_ram_collector(128)?;
     h.load_processor(&image)?;
     h.start_processor(0)?;
     let mut model = Processor::default();
@@ -866,7 +866,7 @@ fn device_transactions_retire_once_and_results_survive_collection() -> Result<()
         0,
         &[("CLASS", class.bits() as i64)],
     )?;
-    let image = Image::from_assembly(&assembly)?.with_ram_collector(128, 16)?;
+    let image = Image::from_assembly(&assembly)?.with_ram_collector(128)?;
     h.load_processor(&image)?;
     h.start_processor(0)?;
     let mut model = Processor::default();
@@ -1060,7 +1060,7 @@ fn mutable_explicit_roots_retain_dynamic_objects_and_can_release_them() -> Resul
             if clear { "ra=1, d=0, ldroot" } else { "nop" },
         );
         let assembly = rekursiv_asm::text::assemble(&source, 0, &[("CLASS", class.bits() as i64)])?;
-        let mut image = Image::from_assembly(&assembly)?.with_ram_collector(128, 16)?;
+        let mut image = Image::from_assembly(&assembly)?.with_ram_collector(128)?;
         image.roots[27] = Word::signed(-7);
         h.load_processor(&image)?;
         h.start_processor(0)?;
@@ -1460,7 +1460,7 @@ fn binary64_product_and_status_survive_collection() -> Result<()> {
         0,
         &[("CLASS", class.bits() as i64)],
     )?;
-    let image = Image::from_assembly(&assembly)?.with_ram_collector(128, 16)?;
+    let image = Image::from_assembly(&assembly)?.with_ram_collector(128)?;
     h.load_processor(&image)?;
     h.start_processor(0)?;
     let mut model = Processor::default();

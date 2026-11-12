@@ -2,7 +2,8 @@
 //!
 //!   cargo run -p rekursiv-model --example boot_stream -- PROGRAM.uc OUT.mem CODE_WORDS PAGER_ENTRIES
 //!
-//! CODE_WORDS and PAGER_ENTRIES describe the board's machine. Unless the
+//! CODE_WORDS and PAGER_ENTRIES describe the board's machine; programs can use
+//! both as constants. Unless the
 //! program defines its own collector, the standard RAM collector is placed at
 //! the top of the control store, sized for that configuration.
 //!
@@ -39,17 +40,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .map_err(|e| format!("{source}: {e:?}"))?;
     let mut image = Image::from_assembly(&assembly).map_err(|e| format!("{e:?}"))?;
     if image.collector_entry.is_none() {
-        let length = rekursiv_asm::collector::program(0, pager_entries, root_count)
+        let length = rekursiv_asm::collector::program(0, root_count)
             .map_err(|e| format!("{e:?}"))?
             .len();
         let entry = code_words
             .checked_sub(length)
             .ok_or("control store too small for the collector")?;
         image = image
-            .with_ram_collector(entry as u16, pager_entries)
+            .with_ram_collector(entry as u16)
             .map_err(|e| format!("collector at {entry} overlaps the program: {e:?}"))?;
         // with_ram_collector sizes the root scan for the simulator's store.
-        let code = rekursiv_asm::collector::program(entry as u16, pager_entries, root_count)
+        let code = rekursiv_asm::collector::program(entry as u16, root_count)
             .map_err(|e| format!("{e:?}"))?;
         for (slot, instruction) in image.code[entry..entry + code.len()].iter_mut().zip(code) {
             *slot = Some(instruction);

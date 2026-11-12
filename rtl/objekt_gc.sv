@@ -1,6 +1,8 @@
-// Machine-owned maintenance datapath. LOGIK microcode supplies every root,
-// chooses each pager slot, computes the tracing fixed point, and issues each
-// copy. This module has no graph walker and never requests backing records.
+// Machine-owned maintenance datapath. LOGIK microcode supplies every root and
+// issues every mark and copy. This module keeps the work list: the first mark
+// of a slot queues it, and NEXT hands the most recently queued slot back to
+// microcode. NEXT_MARKED then finds the marked slots in ascending order for
+// copying. It has no graph walker and never requests backing records.
 //
 // Marks and relocation plans are transient, separate from persisted COND.
 // Until COMMIT, the original pager and source semispace remain authoritative.
@@ -8,8 +10,10 @@
 // Destination RAM may contain abandoned writes after an error.
 //
 // The pager table and the staged bases are RAMs, read one slot per cycle.
-// BEGIN therefore walks every slot to validate the source-space layout, and
-// COMMIT walks every slot to hand its staged base to the parent. The mutator
+// BEGIN therefore walks every slot to validate the source-space layout and to
+// mark and queue the slots that persistence requires in RAM, and COMMIT walks
+// every slot to hand its staged base to the parent. The work list is a stack
+// threaded through a link RAM, so it needs no storage beyond one link per slot. The mutator
 // is excluded throughout and a walk performs no memory transaction, so it
 // cannot fail part way: commit_o on the final cycle publishes validity and
 // exchanges the allocation spaces as one step.
@@ -41,14 +45,19 @@ module objekt_gc #(
     localparam integer ENTRIES=1<<PAGER_BITS;
     localparam integer HALF=MEMORY_WORDS/2;
     localparam logic [3:0] BEGIN_GC=1, ROOT=2, SLOT=3, INFO=4,
-        MARK=5, READ_BODY=6, STAGE=7, WRITE_BODY=8, COMMIT=9;
-    typedef enum logic [2:0] {IDLE, REQUEST, WAIT_MEMORY, RESPONSE, CHECK_LAYOUT, RELOCATE} phase_t;
+        MARK=5, READ_BODY=6, STAGE=7, WRITE_BODY=8, COMMIT=9, NEXT=12, NEXT_MARKED=13;
+    typedef enum logic [2:0] {IDLE, REQUEST, WAIT_MEMORY, RESPONSE, CHECK_LAYOUT, RELOCATE, FIND_MARKED} phase_t;
     phase_t phase;
     /* verilator lint_off UNUSEDSIGNAL */
     pager_entry_t entry;
     /* verilator lint_on UNUSEDSIGNAL */
     logic [ENTRIES-1:0] marks, staged, complete;
     logic [23:0] bases [0:ENTRIES-1];
+    logic [PAGER_BITS-1:0] links [0:ENTRIES-1];
+    logic [PAGER_BITS-1:0] gray_head;
+    logic [PAGER_BITS:0] gray_count;
+    // NEXT_MARKED resumes its ascending scan here; ENTRIES means finished.
+    logic [PAGER_BITS:0] copy_scan;
     logic [23:0] write_offset;
     logic [PAGER_BITS-1:0] selected_slot, walk_slot;
     logic initialized, copied_word, layout_valid, entry_in_source, walking, walk_last;
@@ -59,10 +68,22 @@ module objekt_gc #(
     assign entry=entry_i;
     // MARK performs a full-reference, resident-only lookup. Slot iteration is
     // separate, so collisions cannot be mistaken for an object's residency.
-    assign walking=phase==CHECK_LAYOUT || phase==RELOCATE;
+    assign walking=phase==CHECK_LAYOUT || phase==RELOCATE || phase==FIND_MARKED;
     assign walk_last=walk_slot==PAGER_BITS'(ENTRIES-1);
     assign slot_o=walking ? walk_slot : operation_i==MARK ? data_i[PAGER_BITS-1:0] :
-        operation_i==SLOT ? data_i[PAGER_BITS-1:0] : selected_slot;
+        operation_i==SLOT ? data_i[PAGER_BITS-1:0] : operation_i==NEXT ? gray_head : selected_slot;
+    // Persistence requires this object in RAM: a modified persistent object, a
+    // NEW one that a committed record depends on, or a prepared access.
+    wire retention=(entry.modified && !entry.is_new) || (entry.is_new && entry_persistent_i) ||
+        entry_prepared_i;
+    wire [39:0] slot_flags={35'b0,entry.is_new,retention,entry.reference[37],marks[slot_o],entry_valid_i};
+    wire accepted=valid_i && ready_o && initialized && !committed_o;
+    wire mark_hit=data_i[39:38]==2'b10 && data_i[36:0]!=0 && entry_valid_i && entry.reference==data_i;
+    // The first mark of a slot pushes it; NEXT pops.
+    wire push=active_i && !rst_i && ((phase==CHECK_LAYOUT && entry_valid_i && retention) ||
+        (phase==IDLE && accepted && operation_i==MARK && mark_hit && !marks[slot_o]));
+    wire pop=active_i && !rst_i && phase==IDLE && accepted && operation_i==NEXT && gray_count!=0;
+    always_ff @(posedge clk_i) if(push) links[slot_o]<=gray_head;
     assign base_o=bases[slot_o];
     // A resident body must lie inside the semispace that is about to be copied.
     assign entry_in_source=entry.base >= (space_o ? 24'(HALF) : 24'b0) &&
@@ -88,6 +109,7 @@ module objekt_gc #(
         if(rst_i) begin
             phase<=IDLE; marks<='0; staged<='0; complete<='0; write_offset<=0;
             selected_slot<='0; walk_slot<='0; layout_valid<=0; initialized<=0; committed_o<=0;
+            gray_head<='0; gray_count<='0; copy_scan<='0;
             space_o<=0; cursor_o<=0; status_o<=0; result_o<=0;
             mem_write_o<=0; mem_addr_o<=0; buffer<=0;
             copied_word<=0; copied_offset<=0;
@@ -104,6 +126,7 @@ module objekt_gc #(
                             else begin
                                 walk_slot<='0; phase<=CHECK_LAYOUT;
                                 layout_valid<=MEMORY_WORDS>=2 && MEMORY_WORDS%2==0;
+                                marks<='0; staged<='0; complete<='0; gray_count<='0; copy_scan<='0;
                             end
                         end
                         ROOT: result_o<=root_i;
@@ -111,11 +134,15 @@ module objekt_gc #(
                             if(data_i>=40'(ENTRIES)) status_o<=6;
                             else begin
                                 selected_slot<=data_i[PAGER_BITS-1:0];
-                                result_o<={35'b0,entry.is_new,
-                                    (entry.modified && !entry.is_new) || (entry.is_new && entry_persistent_i) || entry_prepared_i,
-                                    entry.reference[37],marks[slot_o],entry_valid_i};
+                                result_o<=entry_valid_i ? slot_flags : 40'b0;
                                 copied_word<=0;
                             end
+                        end
+                        // An empty list returns zero and leaves the selection.
+                        NEXT: if(gray_count!=0) begin
+                            selected_slot<=gray_head;
+                            result_o<=slot_flags;
+                            copied_word<=0;
                         end
                         INFO: if(!entry_valid_i) status_o<=4;
                             else case(data_i)
@@ -124,11 +151,10 @@ module objekt_gc #(
                                 2: result_o<={16'b0,entry.size};
                                 default: status_o<=1;
                             endcase
-                        MARK: if(data_i[39:38]==2'b10 && data_i[36:0]!=0 &&
-                            entry_valid_i && entry.reference==data_i) begin
-                            result_o<={39'b0,!marks[slot_o]};
-                            marks[slot_o]<=1;
+                        NEXT_MARKED: if(!copy_scan[PAGER_BITS]) begin
+                            walk_slot<=copy_scan[PAGER_BITS-1:0]; phase<=FIND_MARKED;
                         end
+                        MARK: if(mark_hit) result_o<={39'b0,!marks[slot_o]};
                         READ_BODY, WRITE_BODY: begin
                             if(!entry_valid_i || data_i>={16'b0,entry.size} ||
                                 {1'b0,entry.base}+{1'b0,entry.size}>25'(MEMORY_WORDS)) status_o<=6;
@@ -168,10 +194,19 @@ module objekt_gc #(
                         phase<=RESPONSE;
                         if(!layout_valid || (entry_valid_i && !entry_in_source)) status_o<=6;
                         else begin
-                            marks<='0; staged<='0; complete<='0; write_offset<=0; initialized<=1;
+                            write_offset<=0; initialized<=1;
                             cursor_o<=space_o ? 25'b0 : 25'(HALF);
                         end
                     end
+                end
+                // One slot per cycle until a marked slot or the end.
+                FIND_MARKED: begin
+                    walk_slot<=walk_slot+1'b1;
+                    copy_scan<={1'b0,walk_slot}+1'b1;
+                    if(marks[walk_slot]) begin
+                        selected_slot<=walk_slot; result_o<=slot_flags; copied_word<=0;
+                        phase<=RESPONSE;
+                    end else if(walk_last) phase<=RESPONSE;
                 end
                 RELOCATE: begin
                     walk_slot<=walk_slot+1'b1;
@@ -192,6 +227,12 @@ module objekt_gc #(
                 RESPONSE: if(response_ready_i) phase<=IDLE;
                 default: phase<=IDLE;
             endcase
+            if(push) begin
+                marks[slot_o]<=1; gray_head<=slot_o; gray_count<=gray_count+1'b1;
+            end
+            if(pop) begin
+                gray_head<=links[gray_head]; gray_count<=gray_count-1'b1;
+            end
         end
     end
 endmodule

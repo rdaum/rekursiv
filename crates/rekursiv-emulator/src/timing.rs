@@ -224,7 +224,8 @@ impl Estimate {
             }
         }
     }
-    /// Collector Begin and Commit visit every pager slot before responding.
+    /// Collector Begin and Commit visit every pager slot before responding;
+    /// NextMarked visits slots until it finds a marked one.
     pub(crate) fn table_walk(&mut self, slots: u64) {
         self.cycles.maintenance_wait += slots;
         self.work.collector_cycles += slots;

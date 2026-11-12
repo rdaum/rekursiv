@@ -52,8 +52,8 @@ fn saved_image_startup_reaches_stage_five_on_rtl() -> Result<()> {
     converted.verify_against(&source)?;
     let active = layout::reference(context)?;
     let assembly = interpreter::assemble(active)?;
-    let mut program = Program::from_assembly(&assembly)?
-        .with_ram_collector(interpreter::COLLECTOR_ENTRY, rekursiv_sim::PAGER_ENTRIES)?;
+    let mut program =
+        Program::from_assembly(&assembly)?.with_ram_collector(interpreter::COLLECTOR_ENTRY)?;
     program.roots[..26].copy_from_slice(&converted.roots[..26]);
     // The saved startup allocates a full display bitmap. Tiny unit-test heaps
     // cannot hold that one object, even after successful collection.

@@ -21,7 +21,7 @@ fn reg(rb: u8, value: u32) -> Instruction {
     }
 }
 fn image(code: &[Instruction]) -> Result<Image> {
-    Ok(Image::program(code).with_ram_collector(128, 16)?)
+    Ok(Image::program(code).with_ram_collector(128)?)
 }
 fn finish(h: &mut Harness<'_>) -> Result<usize> {
     let services = h.stats.services;
@@ -665,5 +665,53 @@ fn retry_validates_and_branches_using_the_original_condition() -> Result<()> {
     assert_eq!(h.rtl.cpu_fault_o, 0);
     assert_eq!(h.rtl.cpu_pc_o, 1);
     assert_eq!(h.stats.commands, 2);
+    Ok(())
+}
+
+/// A chain of scanned objects, each naming the next, with its head as the
+/// only root. Tracing queues each object once, so the collection costs the
+/// same whether the chain runs up or down the pager slots.
+#[test]
+fn tracing_cost_does_not_depend_on_chain_order() -> Result<()> {
+    let rt = runtime()?;
+    let mut cycles = Vec::new();
+    for descending in [false, true] {
+        let mut h = Harness::new(&rt, Timing::default(), None)?;
+        let class = Word::reference(100, true)?;
+        let refs: Vec<_> = (1..=14)
+            .map(|id| Word::reference(id, true))
+            .collect::<Result<_, _>>()?;
+        for (j, &reference) in refs.iter().enumerate() {
+            let next = if descending {
+                j.checked_sub(1)
+            } else {
+                Some(j + 1)
+            };
+            let edge = next.and_then(|n| refs.get(n)).copied().unwrap_or(Word::NIL);
+            h.install(reference, class, j as u32 * 2, &[edge, Word::NIL])?;
+        }
+        h.install(
+            Word::reference(15, false)?,
+            class,
+            28,
+            &vec![Word::ZERO; 228],
+        )?;
+        let allocation = Command::allocate(class, 16, true)?;
+        let mut image = image(&[object(allocation), Instruction::halt()])?;
+        image.roots[0] = if descending { refs[13] } else { refs[0] };
+        h.load_processor(&image)?;
+        h.oracle.collect_ram(&[image.roots[0], class], false, 16)?;
+        h.oracle.execute(allocation, false);
+        h.start_processor(0)?;
+        let before = h.stats.cycles;
+        assert_eq!(finish(&mut h)?, 1);
+        assert_eq!(h.rtl.cpu_fault_o, 0);
+        h.compare_state()?;
+        for &reference in &refs {
+            assert!(h.oracle.resolve(reference).is_ok());
+        }
+        cycles.push(h.stats.cycles - before);
+    }
+    assert_eq!(cycles[0], cycles[1]);
     Ok(())
 }

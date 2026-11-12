@@ -251,8 +251,8 @@ fn execute_machine(
     prepare(&mut converted);
     let assembly = interpreter::assemble(r(root_oop))?;
     let cycle = assembly.symbols["cycle"] as u16;
-    let program = Program::from_assembly(&assembly)?
-        .with_ram_collector(interpreter::COLLECTOR_ENTRY, rekursiv_sim::PAGER_ENTRIES)?;
+    let program =
+        Program::from_assembly(&assembly)?.with_ram_collector(interpreter::COLLECTOR_ENTRY)?;
     let rt = rekursiv_sim::runtime_with_memory(memory_words)?;
     let mut h = Harness::new(
         &rt,

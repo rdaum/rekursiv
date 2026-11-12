@@ -237,56 +237,15 @@ only. Both walks visit only the listed entries.
 
 ### Collector
 
-The repeated-pass trace re-reads every marked body on every pass and needs as many passes as the
-longest reference chain. It cannot scale to a 262,144-slot table. The collector becomes a single
-pass over a work list, copying each object as it scans it.
+The collector already traces with a work list and copies in slot order (Next and NextMarked in
+[the recovery contract](recovery.md)). For the object table:
 
-| Value | Control   | Operand and result                                                                                                                                                 |
-| ----: | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-|     1 | Begin     | Walk the table: validate source-space bounds, clear marks and plans, and mark and queue every retention root                                                       |
-|     2 | Root      | Unchanged                                                                                                                                                          |
-|     3 | Slot      | Unchanged: select a table slot by index and return its flags                                                                                                       |
-|     4 | Info      | Unchanged                                                                                                                                                          |
-|     5 | Mark      | Full reference. A resident, unmarked object is marked and queued. Returns 1 if it was newly marked                                                                 |
-|     6 | ReadBody  | Unchanged                                                                                                                                                          |
-|     7 | Stage     | Unchanged: reserve the destination range of the selected marked object                                                                                             |
-|     8 | WriteBody | Unchanged                                                                                                                                                          |
-|     9 | Commit    | Walk the table: move each marked entry to its staged base and clear its collector state; remove each unmarked entry. Then exchange spaces and invalidate the pager |
-|    10 | Return    | Unchanged                                                                                                                                                          |
-|    11 | Collect   | Unchanged                                                                                                                                                          |
-|    12 | Next      | New: remove one slot from the work list and select it. Returns its flags, or zero when the list is empty                                                           |
-
-Retention roots are what the Slot retention flag reports today: modified persistent objects, NEW
-objects with the persistent flag, and the object of a valid prepared access. Begin queues them, so
-microcode no longer scans every slot for them.
-
-The work list is a stack threaded through the gray link fields, with its head in a register. Mark
-pushes; Next pops. Every marked object is pushed exactly once, so the list needs no other storage.
-
-The collector microcode becomes:
-
-```text
-Begin
-for each root index: Root, Mark
-loop:
-    Next                      ; exit to Commit when it returns zero
-    Info class, Mark
-    Stage
-    for each body offset:
-        ReadBody
-        Mark                  ; scanned objects only
-        WriteBody
-Commit
-Return
-```
-
-Each live object is read once and written once. Mark between ReadBody and WriteBody is permitted; it
-does not disturb the copy latch. Cycles terminate because a marked object is never queued again.
-Unreachable NEW objects and unrooted clean copies are still discarded, and the store is still never
-consulted.
-
-Until Commit, table entries keep their published base. A failed collection leaves marks, staged
-bases, and links in the table; the next Begin clears them. No rollback walk is needed.
+- Slot indices range over the table. Slot, Next, and NextMarked select table slots.
+- Marks, links, staged bases, and completion flags move from OBJEKT registers into table entries.
+- Begin and Commit walk the table. Commit also invalidates the pager.
+- NextMarked scans table slots; the occupancy bitmap below lets it skip empty ones.
+- Until Commit, table entries keep their published base. A failed collection leaves marks, staged
+  bases, and links in the table; the next Begin clears them. No rollback walk is needed.
 
 ### Whole-table walks
 
@@ -306,10 +265,7 @@ at 12.6 MHz. Two measures keep this tolerable and should be built with the step:
   not appear in the model. `Model::new` takes the table size.
 - The model allocates identities with the same skip rule, so differential tests see the same
   identities as the RTL.
-- The emulator's collector datapath implements the new Mark, Next, Begin, and Commit. Its cycle
-  estimator gains pager hit and miss costs and the walk costs.
-- `rekursiv-asm` gains `Recovery::Next` and the new collector source. `PAGER_ENTRIES` disappears
-  from the collector's parameters.
+- The emulator's cycle estimator gains pager hit and miss costs and the table walk costs.
 - Tests that force pager collisions to exercise victim saves must force table collisions through
   Fetch instead. Tests that assert consecutive identities across a collision must change.
 - New tests: pager misses with no store traffic; allocation skipping an occupied slot; a full table
@@ -318,12 +274,11 @@ at 12.6 MHz. Two measures keep this tolerable and should be built with the step:
 
 ### Implementation order within the step
 
-1. Model and emulator first: table semantics, skip allocation, the work-list collector, and the new
-   microcode. The Smalltalk and Squeak suites run on the emulator, so they validate the collector
-   before any RTL exists.
-2. RTL: the raw table port on the memory channel, the table engine, the pager cache, then the
+1. The work-list collector, on the existing pager. Done.
+2. Model and emulator: table semantics and skip allocation.
+3. RTL: the raw table port on the memory channel, the table engine, the pager cache, then the
    collector and transfer engines moved onto table entries.
-3. Board: SDRAM table port, sizes 18 and 14, and measurement of walk and collection times.
+4. Board: SDRAM table port, sizes 18 and 14, and measurement of walk and collection times.
 
 ## Open questions
 

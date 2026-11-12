@@ -104,8 +104,7 @@ fn run_source(source: source::Image, force_collection: bool) -> Result<(Vec<Boun
     let cycle = assembly.symbols["cycle"] as u16;
     let mut program = Program::from_assembly(&assembly)?;
     if force_collection {
-        program = program
-            .with_ram_collector(interpreter::COLLECTOR_ENTRY, rekursiv_sim::PAGER_ENTRIES)?;
+        program = program.with_ram_collector(interpreter::COLLECTOR_ENTRY)?;
     }
     let rt = runtime()?;
     let mut h = Harness::new(

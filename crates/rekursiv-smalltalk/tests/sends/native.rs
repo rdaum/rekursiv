@@ -16,8 +16,8 @@ pub(super) fn machine(
     let mut converted = target::Image::convert(source, &[ROOT])?;
     prepare(&mut converted);
     let assembly = interpreter::assemble(r(ROOT))?;
-    let program = Program::from_assembly(&assembly)?
-        .with_ram_collector(interpreter::COLLECTOR_ENTRY, pager_entries)?;
+    let program =
+        Program::from_assembly(&assembly)?.with_ram_collector(interpreter::COLLECTOR_ENTRY)?;
     let mut m = Machine::new(
         program,
         assembly.entry.unwrap(),
