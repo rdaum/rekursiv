@@ -10,7 +10,7 @@
 module rekursiv_system #(
     parameter integer PAGER_BITS = 10,
     parameter integer MEMORY_WORDS = 16384,
-    parameter integer CODE_WORDS = 1024,
+    parameter integer CODE_WORDS = 8192,
     parameter integer BOOT_RECORDS = 1024,
     parameter BOOT_FILE = "boot.mem",
     parameter FIRMWARE = "firmware.mem"

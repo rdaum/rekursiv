@@ -9,7 +9,7 @@ mkdir -p "$here/build/sim"
 "$here/firmware/build.sh" "$here/build/sim/firmware.mem"
 (cd "$here/firmware" && cargo run -q --target x86_64-unknown-linux-gnu --example mkstore -- "$here/build/sim/store.img" 4 16384)
 "$here/sim/make_card.py" "$here/build/sim/card.img" "$here/build/sim/store.img"
-(cd "$root" && cargo run -q --locked -p rekursiv-model --example boot_stream -- "$program" "$here/build/sim/boot.mem" 1024 1024)
+(cd "$root" && cargo run -q --locked -p rekursiv-model --example boot_stream -- "$program" "$here/build/sim/boot.mem" 8192 1024)
 cd "$here"
 verilator --binary --timing -j 0 -Wno-fatal -Wno-lint -Wno-style --Mdir build/sim/obj --top-module system_tb \
     -I"$root/rtl" -I"$root" -I"$root/vendor/hardfloat/source" -I"$root/vendor/hardfloat/source/RISCV" \

@@ -1634,8 +1634,9 @@ The [MEGA65 target](#mega65-target) section gives the board resources.
   loss.
 - Expand the control store as the interpreter requires and map it and other resident arrays to
   block RAM. Preserve fetch timing, programming behavior, root inspection, and recovery.
-- Choose the pager size and table RAM, and measure pager behavior and collection pauses beyond the
-  16-entry test configuration.
+- Build the [memory hierarchy](docs/memory-hierarchy.md): SDRAM object memory, a block-RAM pager
+  that caches an object table in SDRAM, and the store as the last resort. Measure pager behavior
+  and collection pauses beyond the 16-entry test configuration.
 
 Completion requires the machine to boot from the SD card and run microcode tests on the board.
 Object memory must work across the intended SDRAM range without truncation or aliasing, and objects
