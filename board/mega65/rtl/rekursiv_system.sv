@@ -6,7 +6,8 @@
 //   program must avoid pager collisions with new or modified victims.
 // - The device channel serves only the debug display (0xf00-0xf1f).
 // - A boot sequencer replays a stream from BOOT_FILE through LOGIK's halted
-//   programming port, then starts the processor. Collection stays disabled.
+//   programming port, then starts the processor. The start record says
+//   whether collection is enabled and where the collector begins.
 module rekursiv_system #(
     parameter integer PAGER_BITS = 10,
     parameter integer MEMORY_WORDS = 16384,
@@ -34,6 +35,8 @@ module rekursiv_system #(
     wire  [63:0] record = boot_rom[boot_index];
     wire  [1:0]  kind = record[63:62];
     logic        boot_ready, start;
+    logic        gc_enable;
+    logic [15:0] gc_entry;
 
     wire boot_valid = !boot_done && kind == 2'd1;
     assign start = !boot_done && kind == 2'd2 && halted_o;
@@ -42,7 +45,13 @@ module rekursiv_system #(
         if (rst_i) begin
             boot_index <= '0;
             boot_done  <= 1'b0;
+            gc_enable  <= 1'b0;
+            gc_entry   <= '0;
         end else if (!boot_done) begin
+            if (start) begin
+                gc_enable <= record[16];
+                gc_entry  <= record[47:32];
+            end
             if (boot_valid && boot_ready) boot_index <= boot_index + 1'b1;
             if (start || kind == 2'd0 || kind == 2'd3) boot_done <= 1'b1;
         end
@@ -79,7 +88,7 @@ module rekursiv_system #(
         .boot_valid_i(boot_valid), .boot_ready_o(boot_ready),
         .boot_space_i(record[57:56]), .boot_addr_i(record[47:32]),
         .boot_lane_i(record[50:48]), .boot_data_i(record[31:0]),
-        .gc_enable_i(1'b0), .gc_entry_i(16'd0),
+        .gc_enable_i(gc_enable), .gc_entry_i(gc_entry),
         .gc_active_o(gc_active), .gc_explicit_o(gc_explicit),
         .gc_valid_o(gc_valid), .gc_ready_i(gc_ready),
         .gc_operation_o(gc_operation), .gc_data_o(gc_data), .gc_root_o(gc_root),
@@ -111,7 +120,7 @@ module rekursiv_system #(
 
     objekt #(.PAGER_BITS(PAGER_BITS), .MEMORY_WORDS(MEMORY_WORDS)) core (
         .clk_i, .rst_i, .run_i(1'b1),
-        .gc_enable_i(1'b0), .gc_active_i(gc_active), .gc_explicit_i(gc_explicit),
+        .gc_enable_i(gc_enable), .gc_active_i(gc_active), .gc_explicit_i(gc_explicit),
         .gc_valid_i(gc_valid), .gc_ready_o(gc_ready), .gc_operation_i(gc_operation),
         .gc_data_i(gc_data), .gc_root_i(gc_root),
         .gc_response_o(gc_response), .gc_response_ready_i(gc_response_ready),

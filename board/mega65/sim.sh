@@ -6,7 +6,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 program="$(realpath "${1:-$here/hello.uc}")"
 mkdir -p "$here/build"
-(cd "$root" && cargo run -q --locked -p rekursiv-model --example boot_stream -- "$program" "$here/build/boot.mem")
+(cd "$root" && cargo run -q --locked -p rekursiv-model --example boot_stream -- "$program" "$here/build/boot.mem" 1024 1024)
 cd "$here"
 verilator --binary -j 0 -Wno-fatal -Wno-lint -Wno-style --Mdir build/sim --top-module system_tb \
     -I"$root/rtl" -I"$root" -I"$root/vendor/hardfloat/source" -I"$root/vendor/hardfloat/source/RISCV" \

@@ -13,7 +13,7 @@ module system_tb;
     initial begin
         repeat (4) @(posedge clk);
         rst = 0;
-        repeat (200000) @(posedge clk);
+        repeat (2000000) @(posedge clk);
         $display("booted=%0d halted=%0d service=%0d fault=%0d pc=%0d", booted, halted, service, fault, pc);
         for (int i = 0; i < 8; i++) $display("debug[%0d] = %08x", i, debug[i]);
         $finish;
