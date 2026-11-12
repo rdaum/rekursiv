@@ -130,10 +130,12 @@ Microcode issues a source read and destination write for every body word. The da
 offsets and permits writes only after a successful matching read, in ascending offset order.
 Zero-size objects complete staging without RAM traffic.
 
-COMMIT requires completed copies for all marked slots and room for the interrupted request. On one
-edge it publishes retained bases, removes unretained mappings, refreshes a matching selected
-snapshot, and changes the allocator cursor and semispace. It preserves reference identity, class,
-size, representation, NEW, MOD, and `cond`. The identity counter never decreases.
+COMMIT requires completed copies for all marked slots and room for the interrupted request. Once
+admitted it cannot fail. It visits each pager slot in turn, moving a retained entry, a matching
+selected snapshot, and a matching prepared address to the staged base. On the final edge it removes
+unretained mappings and changes the allocator cursor and semispace. The mutator and the service port
+stay excluded throughout, so no operation observes a partly relocated table. It preserves reference
+identity, class, size, representation, NEW, MOD, and `cond`. The identity counter never decreases.
 
 No source body or published entry changes before COMMIT. A tracing error, copy error, or
 insufficient destination capacity leaves the original heap authoritative. Successful writes into the

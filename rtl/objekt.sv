@@ -15,6 +15,13 @@
 // the pager and is the only publisher of a completed transfer entry. Recovery
 // uses either the machine collector port or the halted test service port;
 // both exclude mutator commands while they own maintenance.
+//
+// The pager table is a RAM with one write port and a few same-cycle read
+// ports: the selected reference, the prepared reference, the paged key, the
+// debug slot, and one auxiliary port whose address follows the current phase.
+// Every stored reference lives in the slot named by its low identity bits, so
+// a search for a reference is a single read. Operations that inspect the whole
+// table walk it one slot per cycle on the auxiliary port.
 module objekt #(
     parameter integer PAGER_BITS = 4,
     parameter integer MEMORY_WORDS = 512
@@ -73,7 +80,8 @@ module objekt #(
         NOT_RESIDENT=4, NO_SELECTION=5, BOUNDS=6, INDEX_OVERFLOW=7, TYPE_ERROR=8, MEMORY_ERROR=9;
     `include "objekt_address.svh"
     prepared_access_t prepared_access, next_prepared, pending_prepared;
-    typedef enum logic [2:0] {IDLE, REQUEST, WAIT_MEMORY, RESPONSE, TRANSFER, EXCHANGE, DIRECTORY} resident_state_t;
+    typedef enum logic [3:0] {IDLE, REQUEST, WAIT_MEMORY, RESPONSE, TRANSFER, EXCHANGE,
+        SERVICE_SCAN, DIRECTORY_SCAN, DIRECTORY_START, DIRECTORY} resident_state_t;
     resident_state_t phase;
     logic [3:0] response_status;
     logic [39:0] response_data;
@@ -122,6 +130,52 @@ module objekt #(
     wire [170:0] transfer_entry;
     wire [3:0] transfer_status;
     wire [PAGER_BITS-1:0] transfer_slot=(pager_i==6) ? dbg_next_identity_o[PAGER_BITS-1:0] : data_i[PAGER_BITS-1:0];
+
+    // Pager table read ports. Validity is a separate bit vector.
+    logic [PAGER_BITS-1:0] aux_slot, walk_slot;
+    wire walk_last=walk_slot==PAGER_BITS'(ENTRIES-1);
+    wire [170:0] old_stored=entries[snapshot[PAGER_BITS-1:0]];
+    wire old_stored_valid=valid[snapshot[PAGER_BITS-1:0]];
+    wire [170:0] prepared_stored=entries[prepared_access.reference[PAGER_BITS-1:0]];
+    wire prepared_stored_valid=valid[prepared_access.reference[PAGER_BITS-1:0]];
+    logic [170:0] page_stored;
+    logic page_stored_valid;
+    wire [170:0] aux_stored=entries[aux_slot];
+    wire aux_valid=valid[aux_slot];
+    wire [24:0] aux_end={1'b0,aux_stored[127:104]}+{1'b0,aux_stored[63:40]};
+    // A backing-store save names a class and body words. Either can refer to
+    // a resident object; its slot follows from the reference itself.
+    wire [39:0] edge_key=store_op_o==2 ? store_class_o : store_data_o;
+    wire edge_resident=aux_valid && aux_stored[39:0]==edge_key;
+    // Halted scans: a raw write must miss every published body, and a new
+    // body cursor must lie at or above the end of every published body.
+    logic scan_cursor, scan_clear;
+    logic [24:0] scan_value;
+    wire scan_conflict=aux_valid && (scan_cursor ? aux_end>scan_value :
+        (resident_mem_addr_o>=aux_stored[127:104] && {1'b0,resident_mem_addr_o}<aux_end));
+    wire scan_cursor_set=phase==SERVICE_SCAN && walk_last && scan_cursor && scan_clear && !scan_conflict;
+    // Directory scan. FindObject reads the one slot its identity selects.
+    // NextObject probes identity+1, identity+2, ... in slot order and keeps
+    // the smallest resident identity above the request. A slot holding
+    // exactly the probed identity ends the walk early: every later slot, and
+    // every collision seen so far, holds a larger one.
+    logic directory_next;
+    logic [36:0] directory_identity;
+    wire [37:0] directory_probe=directory_next ?
+        {1'b0,directory_identity}+38'd1+38'(walk_slot) : {1'b0,directory_identity};
+    wire directory_exact=aux_valid && {1'b0,aux_stored[36:0]}==directory_probe;
+    wire directory_better=aux_valid && aux_stored[36:0]>directory_identity &&
+        (directory_best_ref==NIL || aux_stored[36:0]<directory_best_ref[36:0]);
+    always_comb begin
+        if(gc_active_i) aux_slot=gc_slot;
+        else case(phase)
+            TRANSFER, EXCHANGE: aux_slot=edge_key[PAGER_BITS-1:0];
+            SERVICE_SCAN: aux_slot=walk_slot;
+            DIRECTORY_SCAN: aux_slot=directory_probe[PAGER_BITS-1:0];
+            default: aux_slot=!run_i ? svc_ref_i[PAGER_BITS-1:0] :
+                pager_i==6 ? dbg_next_identity_o[PAGER_BITS-1:0] : vr[vr_i][PAGER_BITS-1:0];
+        endcase
+    end
     wire start_transfer=cmd_valid_i && cmd_ready_o && ((pager_i==5 && error==NOT_RESIDENT) || (pager_i==6 && error==OK));
     wire seed_transfer=svc_valid_i && svc_ready_o && svc_op_i==0 && is_ref(svc_ref_i) && is_ref(svc_class_i) && (svc_size_i!=0 || svc_repr_i==NIL);
     wire transfer_store_valid;
@@ -148,25 +202,17 @@ module objekt #(
     wire [39:0] exchange_first, exchange_second;
     logic [ENTRIES-1:0] exchange_edges;
     wire start_exchange=cmd_valid_i && cmd_ready_o && pager_i==7 && error==OK;
+    wire exchange_first_resident, exchange_second_resident;
     logic [39:0] directory_best_ref, directory_best_class;
     wire directory_valid, directory_ready, directory_done;
     wire [3:0] directory_op, directory_status;
     wire [39:0] directory_request, directory_ref, directory_class;
     logic [2:0] directory_vr;
     wire start_directory=cmd_valid_i && cmd_ready_o && (pager_i==8 || pager_i==9) && error==OK;
-    // Search only resident metadata here. The backend merges this candidate
-    // with the ordered backing index without fetching any object bodies.
-    always_comb begin
-        directory_best_ref=NIL; directory_best_class=NIL;
-        for(integer k=0;k<ENTRIES;k=k+1) begin
-            if(valid[k] && (pager_i==8 ? entries[k][36:0]>data_i[36:0] : entries[k][36:0]==data_i[36:0]) &&
-                (directory_best_ref==NIL || entries[k][36:0]<directory_best_ref[36:0])) begin
-                directory_best_ref=entries[k][39:0]; directory_best_class=entries[k][103:64];
-            end
-        end
-    end
+    // The scan above searches only resident metadata. The backend merges its
+    // candidate with the ordered backing index without fetching object bodies.
     objekt_directory directory (
-        .clk_i(clk_i),.rst_i(rst_i),.start_i(start_directory),.next_i(pager_i==8),.identity_i(data_i[36:0]),
+        .clk_i(clk_i),.rst_i(rst_i),.start_i(phase==DIRECTORY_START),.next_i(directory_next),.identity_i(directory_identity),
         .resident_ref_i(directory_best_ref),.resident_class_i(directory_best_class),
         .done_o(directory_done),.status_o(directory_status),.reference_o(directory_ref),.class_o(directory_class),
         .store_valid_o(directory_valid),.store_ready_i(store_ready_i),.store_op_o(directory_op),.store_ref_o(directory_request),
@@ -179,10 +225,11 @@ module objekt #(
     objekt_transfer #(.MEMORY_WORDS(MEMORY_WORDS)) transfer (
         .clk_i(clk_i),.rst_i(rst_i),.start_i(start_transfer),.allocate_i(pager_i==6),
         .target_i(data_i),.size_i(alloc_size_i),.scan_i(alloc_scan_i),
-        .victim_valid_i(valid[transfer_slot]),.victim_i(entries[transfer_slot]),
+        .victim_valid_i(pager_i==6 ? aux_valid : page_stored_valid),
+        .victim_i(pager_i==6 ? aux_stored : page_stored),
         .seed_i(seed_transfer),.seed_ref_i(svc_ref_i),.seed_base_i(svc_base_i),.seed_size_i(svc_size_i),
-        .cursor_set_i(gc_commit || (svc_valid_i && svc_ready_o && svc_op_i==6 && maintenance && cursor_safe)),
-        .cursor_i(gc_commit ? gc_cursor : svc_repr_i[24:0]),
+        .cursor_set_i(gc_commit || scan_cursor_set),
+        .cursor_i(gc_commit ? gc_cursor : scan_value),
         .identity_floor_valid_i(svc_valid_i && svc_ready_o && svc_op_i==8 &&
             svc_repr_i!=0 && svc_repr_i<=40'h2000000000),
         .identity_floor_i(svc_repr_i[37:0]),
@@ -204,10 +251,11 @@ module objekt #(
     objekt_exchange #(.MEMORY_WORDS(MEMORY_WORDS)) exchange (
         .clk_i(clk_i),.rst_i(rst_i),.start_i(start_exchange),
         .first_i(data_i),.second_i(vr[vr_i]),
-        .first_resident_i(valid[data_i[PAGER_BITS-1:0]] && entries[data_i[PAGER_BITS-1:0]][39:0]==data_i),
-        .second_resident_i(valid[vr[vr_i][PAGER_BITS-1:0]] && entries[vr[vr_i][PAGER_BITS-1:0]][39:0]==vr[vr_i]),
-        .first_entry_i(entries[data_i[PAGER_BITS-1:0]]),.second_entry_i(entries[vr[vr_i][PAGER_BITS-1:0]]),
+        .first_resident_i(page_stored_valid && page_stored[39:0]==data_i),
+        .second_resident_i(aux_valid && aux_stored[39:0]==vr[vr_i]),
+        .first_entry_i(page_stored),.second_entry_i(aux_stored),
         .done_o(exchange_done),.status_o(exchange_status),.first_o(exchange_first),.second_o(exchange_second),
+        .first_resident_o(exchange_first_resident),.second_resident_o(exchange_second_resident),
         .mem_valid_o(exchange_mem_valid),.mem_ready_i(mem_ready_i),.mem_address_o(exchange_mem_address),
         .mem_response_i(mem_rsp_valid_i),.mem_response_ready_o(exchange_mem_ready),
         .mem_data_i(mem_rsp_data_i),.mem_error_i(mem_rsp_error_i),
@@ -231,17 +279,17 @@ module objekt #(
     // mutator response is consumed. Host maintenance and new mutator commands
     // cannot enter while LOGIK owns collection. All physical traffic still
     // uses the one ordinary external RAM channel.
-    logic gc_commit, gc_space, gc_layout_valid, saved_victim, gc_ready;
+    logic gc_relocate, gc_commit, gc_space, saved_victim, gc_ready;
     logic [PAGER_BITS-1:0] saved_victim_slot;
     assign gc_ready_o=gc_ready && phase==IDLE && !maintenance;
     logic [PAGER_BITS-1:0] gc_slot;
     logic [ENTRIES-1:0] gc_retained;
-    logic [ENTRIES*24-1:0] gc_bases;
+    logic [23:0] gc_base;
     logic [24:0] gc_cursor;
     logic [23:0] gc_needed;
     logic [39:0] gc_needed_class;
     logic [ENTRIES-1:0] saved_edges;
-    logic saved_scan;
+    logic saved_scan, victim_scan;
     logic [39:0] gc_root;
     logic gc_mem_valid, gc_mem_ready, gc_mem_write;
     logic [23:0] gc_mem_address;
@@ -254,12 +302,6 @@ module objekt #(
         else if(gc_data_i==8) gc_root=selected ? snapshot[39:0] : 40'b0;
         else if(gc_data_i==9) gc_root=selected ? snapshot[103:64] : 40'b0;
         else if(gc_data_i<14) gc_root=class_valid[2'(gc_data_i-10)] ? classes[2'(gc_data_i-10)] : 40'b0;
-        gc_layout_valid=MEMORY_WORDS>=2 && MEMORY_WORDS%2==0;
-        for(integer k=0;k<ENTRIES;k=k+1) begin
-            if(valid[k] && (entries[k][127:104] < (gc_space ? 24'(MEMORY_WORDS/2) : 24'b0) ||
-                {1'b0,entries[k][127:104]}+{1'b0,entries[k][63:40]} >
-                (gc_space ? 25'(MEMORY_WORDS) : 25'(MEMORY_WORDS/2)))) gc_layout_valid=0;
-        end
     end
     objekt_gc #(.PAGER_BITS(PAGER_BITS),.MEMORY_WORDS(MEMORY_WORDS)) collector_datapath (
         .clk_i(clk_i),.rst_i(rst_i),.active_i(gc_active_i),
@@ -267,11 +309,10 @@ module objekt #(
         .operation_i(gc_operation_i),.data_i(gc_data_i),.root_i(gc_root),.needed_i(gc_explicit_i ? 24'b0 : gc_needed),
         .response_o(gc_response_o),.response_ready_i(gc_response_ready_i),
         .status_o(gc_status_o),.result_o(gc_result_o),.committed_o(gc_committed_o),
-        .slot_o(gc_slot),.entry_valid_i(valid[gc_slot]),.entry_i(entries[gc_slot]),
+        .slot_o(gc_slot),.entry_valid_i(aux_valid),.entry_i(aux_stored),
         .entry_persistent_i(persistent[gc_slot]),
-        .entry_prepared_i(prepared_access.status==OK && entries[gc_slot][39:0]==prepared_access.reference),
-        .layout_valid_i(gc_layout_valid),
-        .commit_o(gc_commit),.retained_o(gc_retained),.bases_o(gc_bases),.cursor_o(gc_cursor),
+        .entry_prepared_i(prepared_access.status==OK && aux_stored[39:0]==prepared_access.reference),
+        .relocate_o(gc_relocate),.commit_o(gc_commit),.retained_o(gc_retained),.base_o(gc_base),.cursor_o(gc_cursor),
         .space_o(gc_space),
         .mem_valid_o(gc_mem_valid),.mem_ready_i(mem_ready_i),.mem_write_o(gc_mem_write),
         .mem_addr_o(gc_mem_address),.mem_data_o(gc_mem_data),
@@ -315,7 +356,8 @@ module objekt #(
     // must match every tag/identity bit, not merely the direct-mapped slot index.
     // Reusing this lookup for the selected reference rejects stale snapshots
     // after a service replacement or collision.
-    task automatic lookup(input [39:0] key, output [170:0] result, output [3:0] error);
+    task automatic lookup(input [39:0] key, input [170:0] stored, input stored_valid,
+        output [170:0] result, output [3:0] error);
         logic [5:0] code;
         begin
             result=0; error=OK; code=key[37:32];
@@ -324,9 +366,9 @@ module objekt #(
                 else if(!class_valid[code[1:0]]) error=BAD_VALUE;
                 else result={3'b0,8'b0,key[31:0],24'b0,classes[code[1:0]],24'b0,key};
             end else if(!is_ref(key)) error=INVALID_REFERENCE;
-            else if(!valid[key[PAGER_BITS-1:0]]) error=NOT_RESIDENT;
-            else if(entries[key[PAGER_BITS-1:0]][39:0]!=key) error=NOT_RESIDENT;
-            else result=entries[key[PAGER_BITS-1:0]];
+            else if(!stored_valid) error=NOT_RESIDENT;
+            else if(stored[39:0]!=key) error=NOT_RESIDENT;
+            else result=stored;
         end
     endtask
 
@@ -346,14 +388,24 @@ module objekt #(
     // their old-state semantics. Bounds arithmetic widens before truncation.
     // No side effects occur until every required check passes.
     always_comb begin
-        lookup(snapshot[39:0],old_entry,old_error);
+        lookup(snapshot[39:0],old_stored,old_stored_valid,old_entry,old_error);
         if(!selected) old_error=NO_SELECTION;
-        if(prepared_i) lookup(prepared_access.reference,memory_entry,memory_error);
+        if(prepared_i) lookup(prepared_access.reference,prepared_stored,prepared_stored_valid,memory_entry,memory_error);
         else begin memory_entry=old_entry; memory_error=old_error; end
+        // The paged key selects its slot before any check. Allocation and
+        // exchange read the same port for their victim and first operand.
+        case(pager_i)
+            2: page_key=vr[vr_i];
+            3: page_key=old_entry[103:64];
+            4: page_key=old_entry[167:128];
+            default: page_key=data_i;
+        endcase
+        page_stored=entries[page_key[PAGER_BITS-1:0]];
+        page_stored_valid=valid[page_key[PAGER_BITS-1:0]];
         memory_index=prepared_i ? prepared_access.index : idx;
         next_memory_entry=memory_entry;
         next_prepared=prepared_access;
-        error=OK; page_error=OK; page_entry=0; page_key=data_i;
+        error=OK; page_error=OK; page_entry=0;
         next_snapshot=snapshot; next_selected=selected;
         next_idx_wide={idx[39],idx}; next_reg_wide={idxreg[39],idxreg};
         result_data=NIL; need_memory=0; address_wide=0;
@@ -399,13 +451,8 @@ module objekt #(
             if(next_reg_wide>41'sd549755813887 || next_reg_wide < -41'sd549755813888) error=INDEX_OVERFLOW;
         end
         if(error==OK && pager_i!=0 && pager_i<=5) begin
-            case(pager_i)
-                2: page_key=vr[vr_i];
-                3: begin page_key=old_entry[103:64]; if(old_error!=OK) error=old_error; end
-                4: begin page_key=old_entry[167:128]; if(old_error!=OK) error=old_error; end
-                default: begin end
-            endcase
-            lookup(page_key,page_entry,page_error);
+            if((pager_i==3 || pager_i==4) && old_error!=OK) error=old_error;
+            lookup(page_key,page_stored,page_stored_valid,page_entry,page_error);
             if(error==OK) error=page_error;
             if(error==OK) begin next_snapshot=page_entry; next_selected=1; result_data=page_key; end
         end
@@ -453,21 +500,32 @@ module objekt #(
             end
         end
     end
-    // Maintenance checks cover every published body. Raw writes cannot corrupt
-    // live objects, and a recovered cursor cannot overlap a surviving body.
-    logic svc_overlap, cursor_safe;
-    logic [170:0] svc_entry;
+    wire [170:0] svc_entry={svc_flags_i,svc_repr_i,svc_base_i,svc_class_i,svc_size_i,svc_ref_i};
     integer j;
+    // The single pager write port. Each writer stores a complete entry in the
+    // slot named by that entry's own reference; the phases are exclusive.
+    logic entry_write;
+    logic [PAGER_BITS-1:0] entry_write_slot;
+    logic [170:0] entry_write_data;
     always_comb begin
-        svc_entry={svc_flags_i,svc_repr_i,svc_base_i,svc_class_i,svc_size_i,svc_ref_i};
-        svc_overlap=0;
-        cursor_safe=svc_repr_i<=40'(MEMORY_WORDS);
-        for(integer k=0;k<ENTRIES;k=k+1) begin
-            if(valid[k] && ({1'b0,entries[k][127:104]}+{1'b0,entries[k][63:40]})>{1'b0,svc_repr_i[24:0]}) cursor_safe=0;
-            if(valid[k] && svc_base_i>=entries[k][127:104] &&
-               {1'b0,svc_base_i}<({1'b0,entries[k][127:104]}+{1'b0,entries[k][63:40]})) svc_overlap=1;
-        end
+        entry_write=0; entry_write_slot=aux_slot; entry_write_data=aux_stored;
+        if(gc_relocate) begin
+            entry_write=aux_valid && gc_retained[aux_slot];
+            entry_write_data[127:104]=gc_base;
+        end else case(phase)
+            IDLE: if(seed_transfer) begin
+                entry_write=1; entry_write_slot=svc_ref_i[PAGER_BITS-1:0]; entry_write_data=svc_entry;
+            end
+            WAIT_MEMORY: if(mem_rsp_valid_i && !mem_rsp_error_i && pending_mutator && pending_write) begin
+                entry_write=1; entry_write_slot=pending_slot; entry_write_data=pending_memory_entry;
+            end
+            TRANSFER: if(transfer_done && transfer_status==OK) begin
+                entry_write=1; entry_write_slot=transfer_entry[PAGER_BITS-1:0]; entry_write_data=transfer_entry;
+            end
+            default: begin end
+        endcase
     end
+    always_ff @(posedge clk_i) if(entry_write && !rst_i) entries[entry_write_slot]<=entry_write_data;
     always_ff @(posedge clk_i) begin
         if(rst_i) begin
             phase<=IDLE; maintenance<=0; valid<=0; persistent<=0; class_valid<=0; selected<=0; snapshot<=0;
@@ -477,6 +535,8 @@ module objekt #(
             resident_mem_write_o<=0;resident_mem_addr_o<=0;resident_mem_data_o<=0;
             pending_idx<=0;pending_reg<=0;pending_selected<=0;pending_load_vr<=0;
             pending_mutator<=0;pending_write<=0;pending_vr<=0; directory_vr<=0;pending_data<=0;pending_snapshot<=0;pending_slot<=0; saved_victim_slot<=0; saved_edges<=0; saved_scan<=0; exchange_edges<='0;
+            victim_scan<=0; walk_slot<='0; scan_cursor<=0; scan_clear<=0; scan_value<=0;
+            directory_next<=0; directory_identity<=0; directory_best_ref<=NIL; directory_best_class<=NIL;
             for(j=0;j<8;j=j+1) vr[j]<=NIL;
             for(j=0;j<4;j=j+1) classes[j]<=0;
         end else begin
@@ -485,49 +545,51 @@ module objekt #(
             // Edges are accumulated privately and become roots only on save
             // commit. Opaque payloads contribute no edges; classes always do.
             if(phase==TRANSFER && store_valid_o && store_ready_i && store_op_o==2) begin
-                saved_scan<=entries[saved_victim_slot][37];
-                for(integer k=0;k<ENTRIES;k=k+1)
-                    saved_edges[k]<=valid[k] && entries[k][39:0]==store_class_o;
+                saved_scan<=victim_scan;
+                saved_edges<='0;
+                if(edge_resident) saved_edges[aux_slot]<=1;
             end
-            if(phase==TRANSFER && store_valid_o && store_ready_i && store_op_o==3 && saved_scan)
-                for(integer k=0;k<ENTRIES;k=k+1)
-                    if(valid[k] && entries[k][39:0]==store_data_o) saved_edges[k]<=1;
+            if(phase==TRANSFER && store_valid_o && store_ready_i && store_op_o==3 && saved_scan && edge_resident)
+                saved_edges[aux_slot]<=1;
             if(saved_victim) begin
                 persistent<=persistent | saved_edges;
                 persistent[saved_victim_slot]<=1;
             end
             if(start_exchange) exchange_edges<='0;
-            if(phase==EXCHANGE && store_valid_o && store_ready_i) begin
-                for(integer k=0;k<ENTRIES;k=k+1) begin
-                    if(valid[k] && ((store_op_o==2 && entries[k][39:0]==store_class_o) ||
-                        (store_op_o==3 && store_ref_o[37] && entries[k][39:0]==store_data_o)))
-                        exchange_edges[k]<=1;
-                end
-            end
-            if(gc_commit) begin
+            if(phase==EXCHANGE && store_valid_o && store_ready_i && edge_resident &&
+                (store_op_o==2 || (store_op_o==3 && store_ref_o[37]))) exchange_edges[aux_slot]<=1;
+            // Collector commit visits one slot per cycle. The write port moves
+            // a retained entry to its staged base; the registers that cache
+            // that slot follow on the same edge. Validity changes only on the
+            // final cycle, so each visit still sees the pre-commit table.
+            if(gc_relocate) begin
                 // A valid prepared reference is a root. Relocate its address
                 // with the pager; leave deferred bounds/selection errors intact.
-                if(prepared_access.status==OK) begin
-                    if(gc_retained[prepared_access.reference[PAGER_BITS-1:0]])
-                        prepared_access.address<=gc_bases[prepared_access.reference[PAGER_BITS-1:0]*24 +: 24]+prepared_access.index[23:0]-24'd1;
+                if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==gc_slot) begin
+                    if(gc_retained[gc_slot]) prepared_access.address<=gc_base+prepared_access.index[23:0]-24'd1;
                     else prepared_access.status<=NOT_RESIDENT;
                 end
-                valid<=valid & gc_retained;
-                for(integer k=0;k<ENTRIES;k=k+1)
-                    if(valid[k] && gc_retained[k]) entries[k][127:104]<=gc_bases[k*24 +: 24];
-                if(selected && is_ref(snapshot[39:0]) && valid[snapshot[PAGER_BITS-1:0]] &&
-                    entries[snapshot[PAGER_BITS-1:0]][39:0]==snapshot[39:0]) begin
-                    if(gc_retained[snapshot[PAGER_BITS-1:0]]) snapshot[127:104]<=gc_bases[snapshot[PAGER_BITS-1:0]*24 +: 24];
+                if(selected && is_ref(snapshot[39:0]) && snapshot[PAGER_BITS-1:0]==gc_slot &&
+                    aux_valid && aux_stored[39:0]==snapshot[39:0]) begin
+                    if(gc_retained[gc_slot]) snapshot[127:104]<=gc_base;
                     else selected<=0;
                 end
             end
+            if(gc_commit) valid<=valid & gc_retained;
             case(phase)
                 IDLE: begin
                     if(cmd_valid_i && cmd_ready_o) begin
                         response_status<=error; response_data<=(error==OK) ? result_data : NIL;
-                        if(start_directory) begin phase<=DIRECTORY; directory_vr<=vr_i; end
+                        if(start_directory) begin
+                            phase<=DIRECTORY_SCAN; directory_vr<=vr_i; walk_slot<='0;
+                            directory_next<=pager_i==8; directory_identity<=data_i[36:0];
+                            directory_best_ref<=NIL; directory_best_class<=NIL;
+                        end
                         else if(start_exchange) phase<=EXCHANGE;
-                        else if(start_transfer) begin phase<=TRANSFER; saved_victim_slot<=transfer_slot; end
+                        else if(start_transfer) begin
+                            phase<=TRANSFER; saved_victim_slot<=transfer_slot;
+                            victim_scan<=pager_i==6 ? aux_stored[37] : page_stored[37];
+                        end
                         else if(error!=OK) phase<=RESPONSE;
                         else if(need_memory) begin
                             pending_idx<=next_idx_wide[39:0];pending_reg<=next_reg_wide[39:0];
@@ -552,7 +614,6 @@ module objekt #(
                                 if(!is_ref(svc_ref_i) || !is_ref(svc_class_i)) response_status<=INVALID_REFERENCE;
                                 else if(svc_size_i==0 && svc_repr_i!=NIL) response_status<=BAD_VALUE;
                                 else begin
-                                    entries[svc_ref_i[PAGER_BITS-1:0]]<=svc_entry;
                                     if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==svc_ref_i[PAGER_BITS-1:0]) prepared_access.status<=NOT_RESIDENT;
                                     valid[svc_ref_i[PAGER_BITS-1:0]]<=1;
                                     persistent[svc_ref_i[PAGER_BITS-1:0]]<=!svc_flags_i[0];
@@ -561,7 +622,7 @@ module objekt #(
                             end
                             1: begin
                                 if(!is_ref(svc_ref_i)) response_status<=INVALID_REFERENCE;
-                                else if(!valid[svc_ref_i[PAGER_BITS-1:0]] || entries[svc_ref_i[PAGER_BITS-1:0]][39:0]!=svc_ref_i) response_status<=NOT_RESIDENT;
+                                else if(!aux_valid || aux_stored[39:0]!=svc_ref_i) response_status<=NOT_RESIDENT;
                                 else begin
                                     valid[svc_ref_i[PAGER_BITS-1:0]]<=0;
                                     if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==svc_ref_i[PAGER_BITS-1:0]) prepared_access.status<=NOT_RESIDENT;
@@ -576,11 +637,11 @@ module objekt #(
                             end
                             3: begin
                                 if({8'b0,svc_base_i}>=MEMORY_WORDS) response_status<=BOUNDS;
-                                else if(svc_overlap) response_status<=BAD_COMMAND;
                                 else begin
                                     pending_mutator<=0;pending_write<=1;
                                     resident_mem_addr_o<=svc_base_i;resident_mem_data_o<=svc_repr_i;resident_mem_write_o<=1;
-                                    phase<=REQUEST;
+                                    scan_cursor<=0; scan_clear<=1; walk_slot<='0;
+                                    phase<=SERVICE_SCAN;
                                 end
                             end
                             4: begin
@@ -597,7 +658,11 @@ module objekt #(
                             end
                             6: begin
                                 if(!maintenance) response_status<=BAD_COMMAND;
-                                else if(!cursor_safe) response_status<=BOUNDS;
+                                else begin
+                                    scan_cursor<=1; scan_value<=svc_repr_i[24:0]; walk_slot<='0;
+                                    scan_clear<=svc_repr_i<=40'(MEMORY_WORDS);
+                                    phase<=SERVICE_SCAN;
+                                end
                             end
                             7: begin
                                 if(!maintenance) response_status<=BAD_COMMAND;
@@ -609,6 +674,25 @@ module objekt #(
                         endcase
                     end
                 end
+                // A raw write proceeds to memory only after every slot is
+                // clear; an accepted cursor takes effect on the final cycle.
+                SERVICE_SCAN: begin
+                    walk_slot<=walk_slot+1'b1;
+                    if(scan_conflict) scan_clear<=0;
+                    if(walk_last) begin
+                        if(!scan_clear || scan_conflict) begin
+                            response_status<=scan_cursor ? BOUNDS : BAD_COMMAND; phase<=RESPONSE;
+                        end else phase<=scan_cursor ? RESPONSE : REQUEST;
+                    end
+                end
+                DIRECTORY_SCAN: begin
+                    walk_slot<=walk_slot+1'b1;
+                    if(directory_next ? directory_better : directory_exact) begin
+                        directory_best_ref<=aux_stored[39:0]; directory_best_class<=aux_stored[103:64];
+                    end
+                    if(!directory_next || directory_exact || walk_last) phase<=DIRECTORY_START;
+                end
+                DIRECTORY_START: phase<=DIRECTORY;
                 REQUEST: if(mem_ready_i) phase<=WAIT_MEMORY;
                 // Commit the private retirement record only after successful
                 // memory completion. First-field writes publish both the body
@@ -620,10 +704,8 @@ module objekt #(
                         idx<=pending_idx;idxreg<=pending_reg;snapshot<=pending_snapshot;selected<=pending_selected;
                         prepared_access<=pending_prepared;
                         if(pending_load_vr) vr[pending_vr]<=pending_data;
-                        if(pending_write) begin
-                            entries[pending_slot]<=pending_memory_entry;
-                            response_data<=pending_data;
-                        end else response_data<=mem_rsp_data_i;
+                        if(pending_write) response_data<=pending_data;
+                        else response_data<=mem_rsp_data_i;
                     end
                     if(!mem_rsp_error_i && !pending_mutator && !pending_write) response_data<=mem_rsp_data_i;
                     phase<=rsp_ready_i ? IDLE : RESPONSE;
@@ -642,7 +724,6 @@ module objekt #(
                     response_data<=(transfer_status==OK) ? transfer_entry[39:0] : NIL;
                     if(transfer_status==OK) begin
                         if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==transfer_entry[PAGER_BITS-1:0]) prepared_access.status<=NOT_RESIDENT;
-                        entries[transfer_entry[PAGER_BITS-1:0]]<=transfer_entry;
                         valid[transfer_entry[PAGER_BITS-1:0]]<=1;
                         persistent[transfer_entry[PAGER_BITS-1:0]]<=!transfer_entry[168];
                         snapshot<=transfer_entry;selected<=1;
@@ -655,9 +736,8 @@ module objekt #(
                     if(exchange_status==OK && exchange_first!=exchange_second) begin
                         if(prepared_access.status==OK && (prepared_access.reference==exchange_first || prepared_access.reference==exchange_second)) prepared_access.status<=NOT_RESIDENT;
                         persistent<=persistent | exchange_edges;
-                        for(integer k=0;k<ENTRIES;k=k+1)
-                            if(valid[k] && (entries[k][39:0]==exchange_first || entries[k][39:0]==exchange_second))
-                                valid[k]<=0;
+                        if(exchange_first_resident) valid[exchange_first[PAGER_BITS-1:0]]<=0;
+                        if(exchange_second_resident) valid[exchange_second[PAGER_BITS-1:0]]<=0;
                         if(selected && (snapshot[39:0]==exchange_first || snapshot[39:0]==exchange_second))
                             selected<=0;
                     end

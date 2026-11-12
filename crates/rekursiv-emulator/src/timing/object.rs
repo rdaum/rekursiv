@@ -1,13 +1,31 @@
 //! Costs of OBJEKT's resident, transfer, directory, and exchange state machines.
 use super::{Estimate, Pending};
-use rekursiv_asm::{Command, Pager, Status, StoreOp};
+use rekursiv_asm::{Command, Pager, Status, StoreOp, ID_MASK};
 use rekursiv_model::{Model, Outcome};
 
 pub(crate) enum ObjectPath {
     Resident,
     Transfer,
-    Directory,
+    /// Carries the cycles OBJEKT spends scanning resident metadata.
+    Directory(u64),
     Exchange,
+}
+/// FindObject reads the one slot its identity selects. NextObject probes the
+/// slots of the following identities and stops at the first exact match.
+fn directory_scan(model: &Model, c: Command) -> u64 {
+    if c.pager == Pager::FindObject {
+        return 1;
+    }
+    let slots = model.entries.len() as u64;
+    let key = c.data.bits() & ID_MASK;
+    (1..=slots)
+        .find(|step| {
+            let probe = key + step;
+            model.entries[(probe % slots) as usize]
+                .get()
+                .is_some_and(|e| e.reference.bits() & ID_MASK == probe)
+        })
+        .unwrap_or(slots)
 }
 impl ObjectPath {
     pub(crate) fn capture(model: &Model, c: Command) -> Self {
@@ -16,7 +34,7 @@ impl ObjectPath {
             Pager::Fetch if c.data.is_reference() && model.resolve(c.data).is_err() => {
                 Self::Transfer
             }
-            Pager::NextObject | Pager::FindObject => Self::Directory,
+            Pager::NextObject | Pager::FindObject => Self::Directory(directory_scan(model, c)),
             Pager::Exchange => Self::Exchange,
             _ => Self::Resident,
         }
@@ -52,7 +70,12 @@ impl Estimate {
                     service += 1;
                 }
             }
-            ObjectPath::Directory => service += 1, // DONE/publication
+            ObjectPath::Directory(scan) => {
+                service += 1; // DONE/publication
+                if !matches!(status, Status::BadCommand | Status::BadValue) {
+                    service += scan + 1; // resident scan, then engine start
+                }
+            }
             ObjectPath::Exchange => {
                 // SELECT_META for each key, then DONE/publication. Equal keys
                 // exit after the first selection, before opening a save batch.

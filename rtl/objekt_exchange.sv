@@ -18,6 +18,7 @@ module objekt_exchange #(
     input logic [170:0] first_entry_i, second_entry_i,
     output logic done_o, output logic [3:0] status_o,
     output logic [39:0] first_o, second_o,
+    output logic first_resident_o, second_resident_o,
     output logic mem_valid_o, input logic mem_ready_i,
     output logic [23:0] mem_address_o,
     input logic mem_response_i, output logic mem_response_ready_o,
@@ -53,6 +54,10 @@ module objekt_exchange #(
     assign resident=which ? second_resident : first_resident;
     assign first_o=first.reference;
     assign second_o=second.reference;
+    // Residency sampled at start. The pager cannot change during an exchange,
+    // so the parent uses these to invalidate exactly the two named slots.
+    assign first_resident_o=first_resident;
+    assign second_resident_o=second_resident;
     assign done_o=phase==DONE && !rst_i;
     assign mem_valid_o=phase==MEMORY_READ && !rst_i;
     assign mem_response_ready_o=phase==MEMORY_WAIT && !rst_i;

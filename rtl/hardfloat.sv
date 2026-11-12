@@ -4,6 +4,7 @@
 /* verilator lint_off UNUSED */
 /* verilator lint_off VARHIDDEN */
 /* verilator lint_off GENUNNAMED */
+/* verilator lint_off SYNCASYNCNET */
 `include "vendor/hardfloat/source/HardFloat_primitives.v"
 `include "vendor/hardfloat/source/HardFloat_rawFN.v"
 `include "vendor/hardfloat/source/isSigNaNRecFN.v"
@@ -16,6 +17,7 @@
 `include "vendor/hardfloat/source/recFNToIN.v"
 `include "vendor/hardfloat/source/compareRecFN.v"
 `include "vendor/hardfloat/source/RISCV/HardFloat_specialize.v"
+/* verilator lint_on SYNCASYNCNET */
 /* verilator lint_on GENUNNAMED */
 /* verilator lint_on VARHIDDEN */
 /* verilator lint_on UNUSED */

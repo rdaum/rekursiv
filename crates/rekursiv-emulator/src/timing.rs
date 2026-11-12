@@ -224,6 +224,11 @@ impl Estimate {
             }
         }
     }
+    /// Collector Begin and Commit visit every pager slot before responding.
+    pub(crate) fn table_walk(&mut self, slots: u64) {
+        self.cycles.maintenance_wait += slots;
+        self.work.collector_cycles += slots;
+    }
     pub(crate) fn join(&mut self) {
         if let Some(p) = self.pending.take() {
             let hidden = (self.cycles.total() - p.start).min(p.service);

@@ -190,3 +190,41 @@ fn directory_rejects_malformed_device_metadata_without_publishing_vr() -> Result
     }
     Ok(())
 }
+
+#[test]
+fn resident_enumeration_orders_identities_across_pager_slots() -> Result<()> {
+    let rt = runtime()?;
+    let mut h = Harness::new(&rt, Timing::default(), None)?;
+    // Resident-only objects whose identities share no order with their
+    // direct-mapped slots: 22 and 40 lie beyond one table's worth of slots,
+    // and the last identity maps to slot 1.
+    let residents = [5, 22, 31, 40, (1 << 20) + 1];
+    for id in residents {
+        h.install(r(id), r(100 + id), 0, &[])?;
+        h.store.records.remove(&id);
+        h.oracle.store.records.remove(&id);
+    }
+    let cursors = (0..=48).chain([1 << 20, (1 << 20) + 1, ID_MASK - 1, ID_MASK]);
+    for cursor in cursors {
+        let next = residents.into_iter().find(|id| *id > cursor);
+        let response = h.execute(request(Pager::NextObject, Word::raw(cursor)?))?;
+        assert_eq!(
+            response,
+            Response::ok(next.map_or(Word::NIL, r)),
+            "after {cursor}"
+        );
+        assert_eq!(
+            h.oracle.state.vr[4],
+            next.map_or(Word::NIL, |id| r(100 + id))
+        );
+        let found = residents.contains(&cursor).then_some(cursor);
+        let response = h.execute(request(Pager::FindObject, Word::raw(cursor)?))?;
+        assert_eq!(
+            response,
+            Response::ok(found.map_or(Word::NIL, r)),
+            "find {cursor}"
+        );
+    }
+    assert!(h.transfers.is_empty());
+    Ok(())
+}

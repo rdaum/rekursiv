@@ -68,7 +68,7 @@ fn main() -> Result<()> {
         let end = labels.get(i + 1).map_or(counts.len(), |(pc, _)| *pc);
         regions.push((counts[*start..end].iter().sum::<u64>(), name));
     }
-    regions.sort_by(|a, b| b.0.cmp(&a.0));
+    regions.sort_by_key(|a| std::cmp::Reverse(a.0));
     println!(
         "bytecodes={} instructions={} instructions/bytecode={:.2}",
         m.stats.guest_bytecodes,

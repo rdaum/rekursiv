@@ -481,6 +481,11 @@ impl Machine {
                 .unwrap()
                 .execute(instruction.recovery, data, &mut self.objekt)
                 .map_err(|status| self.fail(4, Some(status)))?;
+            if matches!(instruction.recovery, Recovery::Begin | Recovery::Commit) {
+                if let Some(timing) = &mut self.cycle_estimate {
+                    timing.table_walk(self.objekt.entries.len() as u64);
+                }
+            }
             if self.objekt_metrics_enabled {
                 match instruction.recovery {
                     Recovery::ReadBody => self.stats.objekt.gc_reads += 1,

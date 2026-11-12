@@ -5,8 +5,14 @@
 // Marks and relocation plans are transient, separate from persisted COND.
 // Until COMMIT, the original pager and source semispace remain authoritative.
 // A read/write error can therefore abandon the entire plan without rollback.
-// COMMIT publishes all bases and validity bits together while the mutator is
-// excluded. Destination RAM may contain abandoned writes after an error.
+// Destination RAM may contain abandoned writes after an error.
+//
+// The pager table and the staged bases are RAMs, read one slot per cycle.
+// BEGIN therefore walks every slot to validate the source-space layout, and
+// COMMIT walks every slot to hand its staged base to the parent. The mutator
+// is excluded throughout and a walk performs no memory transaction, so it
+// cannot fail part way: commit_o on the final cycle publishes validity and
+// exchanges the allocation spaces as one step.
 module objekt_gc #(
     parameter integer PAGER_BITS=4, parameter integer MEMORY_WORDS=512
 )(
@@ -20,10 +26,9 @@ module objekt_gc #(
     input logic entry_valid_i, input logic [170:0] entry_i,
     input logic entry_persistent_i,
     input logic entry_prepared_i,
-    input logic layout_valid_i,
-    output logic commit_o,
+    output logic relocate_o, commit_o,
     output logic [(1<<PAGER_BITS)-1:0] retained_o,
-    output logic [(1<<PAGER_BITS)*24-1:0] bases_o,
+    output logic [23:0] base_o,
     output logic [24:0] cursor_o,
     output logic space_o, committed_o,
     output logic mem_valid_o, input logic mem_ready_i,
@@ -37,15 +42,16 @@ module objekt_gc #(
     localparam integer HALF=MEMORY_WORDS/2;
     localparam logic [3:0] BEGIN_GC=1, ROOT=2, SLOT=3, INFO=4,
         MARK=5, READ_BODY=6, STAGE=7, WRITE_BODY=8, COMMIT=9;
-    typedef enum logic [1:0] {IDLE, REQUEST, WAIT_MEMORY, RESPONSE} phase_t;
+    typedef enum logic [2:0] {IDLE, REQUEST, WAIT_MEMORY, RESPONSE, CHECK_LAYOUT, RELOCATE} phase_t;
     phase_t phase;
     /* verilator lint_off UNUSEDSIGNAL */
     pager_entry_t entry;
     /* verilator lint_on UNUSEDSIGNAL */
     logic [ENTRIES-1:0] marks, staged, complete;
+    logic [23:0] bases [0:ENTRIES-1];
     logic [23:0] write_offset;
-    logic [PAGER_BITS-1:0] selected_slot;
-    logic initialized, copied_word;
+    logic [PAGER_BITS-1:0] selected_slot, walk_slot;
+    logic initialized, copied_word, layout_valid, entry_in_source, walking, walk_last;
     logic [23:0] copied_offset;
     logic [39:0] buffer;
     logic [25:0] end_address;
@@ -53,8 +59,14 @@ module objekt_gc #(
     assign entry=entry_i;
     // MARK performs a full-reference, resident-only lookup. Slot iteration is
     // separate, so collisions cannot be mistaken for an object's residency.
-    assign slot_o=operation_i==MARK ? data_i[PAGER_BITS-1:0] :
+    assign walking=phase==CHECK_LAYOUT || phase==RELOCATE;
+    assign walk_last=walk_slot==PAGER_BITS'(ENTRIES-1);
+    assign slot_o=walking ? walk_slot : operation_i==MARK ? data_i[PAGER_BITS-1:0] :
         operation_i==SLOT ? data_i[PAGER_BITS-1:0] : selected_slot;
+    assign base_o=bases[slot_o];
+    // A resident body must lie inside the semispace that is about to be copied.
+    assign entry_in_source=entry.base >= (space_o ? 24'(HALF) : 24'b0) &&
+        {1'b0,entry.base}+{1'b0,entry.size} <= (space_o ? 25'(MEMORY_WORDS) : 25'(HALF));
     assign ready_o=active_i && phase==IDLE && !rst_i;
     assign response_o=phase==RESPONSE && active_i && !rst_i;
     assign mem_valid_o=phase==REQUEST && active_i && !rst_i;
@@ -63,16 +75,19 @@ module objekt_gc #(
     assign retained_o=marks;
     assign destination_end=space_o ? 25'(HALF) : 25'(MEMORY_WORDS);
     assign end_address={1'b0,cursor_o}+{2'b0,entry.size};
-    // Publication and allocator exchange occur on the same edge as COMMIT
-    // acceptance, never at an earlier per-object copy completion.
-    assign commit_o=valid_i && ready_o && operation_i==COMMIT && initialized &&
-        !committed_o && (marks & ~complete)=='0 &&
+    // COMMIT is admitted only when every marked object is copied and the
+    // destination leaves room for the pending request. Publication and the
+    // allocator exchange occur on the final relocation edge, never at an
+    // earlier per-object copy completion.
+    wire commit_ready=initialized && !committed_o && (marks & ~complete)=='0 &&
         ({1'b0,cursor_o}+{2'b0,needed_i}) <= {1'b0,destination_end};
+    assign relocate_o=phase==RELOCATE && active_i && !rst_i;
+    assign commit_o=relocate_o && walk_last;
 
     always_ff @(posedge clk_i) begin
         if(rst_i) begin
-            phase<=IDLE; marks<='0; staged<='0; complete<='0; write_offset<=0; bases_o<='0;
-            selected_slot<='0; initialized<=0; committed_o<=0;
+            phase<=IDLE; marks<='0; staged<='0; complete<='0; write_offset<=0;
+            selected_slot<='0; walk_slot<='0; layout_valid<=0; initialized<=0; committed_o<=0;
             space_o<=0; cursor_o<=0; status_o<=0; result_o<=0;
             mem_write_o<=0; mem_addr_o<=0; buffer<=0;
             copied_word<=0; copied_offset<=0;
@@ -85,10 +100,10 @@ module objekt_gc #(
                     if((!initialized && operation_i!=BEGIN_GC) || committed_o) status_o<=1;
                     else case(operation_i)
                         BEGIN_GC: begin
-                            if(initialized || !layout_valid_i) status_o<=6;
+                            if(initialized) status_o<=6;
                             else begin
-                                marks<='0; staged<='0; complete<='0; write_offset<=0; initialized<=1;
-                                cursor_o<=space_o ? 25'b0 : 25'(HALF);
+                                walk_slot<='0; phase<=CHECK_LAYOUT;
+                                layout_valid<=MEMORY_WORDS>=2 && MEMORY_WORDS%2==0;
                             end
                         end
                         ROOT: result_o<=root_i;
@@ -120,8 +135,7 @@ module objekt_gc #(
                             else if(operation_i==WRITE_BODY && (!staged[selected_slot] ||
                                 !copied_word || copied_offset!=data_i[23:0] || write_offset!=data_i[23:0])) status_o<=1;
                             else begin
-                                mem_addr_o<=(operation_i==READ_BODY ? entry.base :
-                                    bases_o[selected_slot*24 +: 24])+data_i[23:0];
+                                mem_addr_o<=(operation_i==READ_BODY ? entry.base : base_o)+data_i[23:0];
                                 mem_write_o<=operation_i==WRITE_BODY;
                                 copied_offset<=data_i[23:0];
                                 if(operation_i==WRITE_BODY) copied_word<=0;
@@ -132,18 +146,36 @@ module objekt_gc #(
                             if(!entry_valid_i || !marks[selected_slot] || staged[selected_slot]) status_o<=1;
                             else if(end_address>{1'b0,destination_end}) status_o<=11;
                             else begin
-                                bases_o[selected_slot*24 +: 24]<=cursor_o[23:0];
+                                // The only write to the staged bases, and it
+                                // precedes every read of its slot: no reset.
+                                bases[selected_slot]<=cursor_o[23:0];
                                 cursor_o<=end_address[24:0]; staged[selected_slot]<=1;
                                 write_offset<=0; complete[selected_slot]<=entry.size==0;
                             end
                         end
                         COMMIT: begin
                             if((marks & ~complete)!='0) status_o<=1;
-                            else if(!commit_o) status_o<=11;
-                            else begin committed_o<=1; space_o<=!space_o; end
+                            else if(!commit_ready) status_o<=11;
+                            else begin walk_slot<='0; phase<=RELOCATE; end
                         end
                         default: status_o<=1;
                     endcase
+                end
+                CHECK_LAYOUT: begin
+                    walk_slot<=walk_slot+1'b1;
+                    if(entry_valid_i && !entry_in_source) layout_valid<=0;
+                    if(walk_last) begin
+                        phase<=RESPONSE;
+                        if(!layout_valid || (entry_valid_i && !entry_in_source)) status_o<=6;
+                        else begin
+                            marks<='0; staged<='0; complete<='0; write_offset<=0; initialized<=1;
+                            cursor_o<=space_o ? 25'b0 : 25'(HALF);
+                        end
+                    end
+                end
+                RELOCATE: begin
+                    walk_slot<=walk_slot+1'b1;
+                    if(walk_last) begin committed_o<=1; space_o<=!space_o; phase<=RESPONSE; end
                 end
                 REQUEST: if(mem_ready_i) phase<=WAIT_MEMORY;
                 WAIT_MEMORY: if(mem_response_i) begin

@@ -10,5 +10,7 @@ typedef struct packed {
     logic [23:0] base;
     logic [39:0] class_reference;
     logic [23:0] size;
+    /* verilator lint_off SYMRSVDWORD */
     logic [39:0] reference;
+    /* verilator lint_on SYMRSVDWORD */
 } pager_entry_t;

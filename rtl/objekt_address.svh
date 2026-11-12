@@ -3,7 +3,9 @@
 // deferred until a prepared memory operation consumes this register. It is safe
 // to prepare one past the last element while completing a loop's final access.
 typedef struct packed {
+    /* verilator lint_off SYMRSVDWORD */
     logic [39:0] reference;
+    /* verilator lint_on SYMRSVDWORD */
     logic signed [39:0] index;
     logic [23:0] address;
     logic [3:0] status;

@@ -23,6 +23,13 @@ Each memory word has 40 bits. Each pager entry contains a valid bit and 171 meta
 40, size 24, class 40, base 24, representation 40, and three flags. The slot comes from the low
 identity bits; hits compare the complete 40-bit reference, including its scan bit.
 
+The entry table is a RAM with one write port and same-cycle read ports, so ordinary commands keep
+their timing at any pager width. A stored reference can only occupy the slot its identity selects.
+Operations that must inspect every entry walk the table one slot per cycle: `2**PAGER_BITS` cycles
+for a raw service write, SetBodyCursor, collector Begin, and collector Commit, and up to that many
+for NextObject. Each walk runs while its operation holds the core exclusively and completes before
+the operation's response.
+
 | Value            | Bits and restrictions                                                              |
 | ---------------- | ---------------------------------------------------------------------------------- |
 | Raw              | Bit 39 is zero; bits 38:0 contain an unsigned payload                              |
@@ -249,7 +256,8 @@ setup. ReadMemory returns the physical word. Other successful service operations
 
 BeginRecovery rejects an already held lock. SetBodyCursor and EndRecovery require the lock.
 SetBodyCursor rejects values above memory capacity or below the end of any valid resident body. It
-never decreases the identity high-water mark. The [recovery contract](recovery.md) defines the
+never decreases the identity high-water mark. A raw write and SetBodyCursor each check every pager
+slot before taking effect; the write reaches memory, and the cursor changes, only after a clean walk. The [recovery contract](recovery.md) defines the
 required copy and publication order.
 
 ## Errors and precedence
@@ -379,8 +387,12 @@ stored reference. They ignore the input reference's scan flag. The response cont
 reference, and `vr_i` selects a value register to receive its class. An absent identity or exhausted
 enumeration succeeds with machine nil in both places.
 
-`rtl/objekt_directory.sv` combines resident metadata with committed backing-store metadata. Resident
-metadata wins when both sources contain the same identity. The engine never reads bodies, refills
+OBJEKT first scans resident metadata. FindObject reads the single slot its identity selects.
+NextObject probes the slots of the following identities in order and keeps the smallest resident
+identity above the request. It stops early at a slot that holds exactly the probed identity, since
+no later slot can hold a smaller one; otherwise it visits every slot.
+`rtl/objekt_directory.sv` then combines that resident candidate with committed backing-store metadata.
+Resident metadata wins when both sources contain the same identity. The engine never reads bodies, refills
 RAM, or changes the selected object, pager entries, or allocation counters. It can enumerate objects
 larger than RAM. Class filtering and language identity-number conversion belong in microcode.
 
@@ -726,7 +738,7 @@ issues backing-store transactions.
 | Value | Control   | D-bus operand and result                                                              |
 | ----: | --------- | ------------------------------------------------------------------------------------- |
 |     0 | None      | Ordinary local microinstruction                                                       |
-|     1 | Begin     | Validate source-space bounds; clear marks and relocation plan                         |
+|     1 | Begin     | Walk every slot to validate source-space bounds; clear marks and relocation plan      |
 |     2 | Root      | Index from the root table; return the 40-bit value                                    |
 |     3 | Slot      | Pager slot index; select it and return flags                                          |
 |     4 | Info      | Selected slot field: 0 reference, 1 class, 2 size                                     |
@@ -734,7 +746,7 @@ issues backing-store transactions.
 |     6 | ReadBody  | Zero-based source offset; return and buffer a 40-bit word                             |
 |     7 | Stage     | Reserve destination range for the selected marked object                              |
 |     8 | WriteBody | Zero-based destination offset; write the matching buffered word                       |
-|     9 | Commit    | Publish completed relocation and exchange allocation spaces                           |
+|     9 | Commit    | Walk every slot to publish completed relocation; exchange allocation spaces           |
 |    10 | Return    | Restore processor context and retry; requires successful Commit                       |
 |    11 | Collect   | Standalone mutator request for collection, with no allocation reservation             |
 

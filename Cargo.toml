@@ -18,3 +18,12 @@ edition = "2021"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Optimized tests with debug assertions and overflow checks kept. Guest-image
+# and RTL regressions run several times faster than in the dev profile, and
+# this compiles much sooner than release because it skips LTO.
+#   cargo test --profile quick
+[profile.quick]
+inherits = "dev"
+opt-level = 2
+debug = "line-tables-only"
