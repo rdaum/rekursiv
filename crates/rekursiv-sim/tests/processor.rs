@@ -29,6 +29,15 @@ fn object(command: Command) -> Instruction {
     }
 }
 
+/// Control-store debug reads are registered: the result follows one clock
+/// after the address.
+fn code_valid(h: &mut Harness<'_>, address: usize) -> Result<u8> {
+    h.rtl.cpu_dbg_addr_i = address as u16;
+    h.tick()?;
+    h.rtl.eval();
+    Ok(h.rtl.cpu_dbg_code_valid_o)
+}
+
 #[test]
 fn control_store_validity_requires_every_lane_and_reset_invalidates_all_words() -> Result<()> {
     let rt = runtime()?;
@@ -40,16 +49,12 @@ fn control_store_validity_requires_every_lane_and_reset_invalidates_all_words() 
     for lane in [7, 0, 3, 3, 1, 6, 2, 5] {
         for address in addresses {
             h.program_lane(0, address, lane, lanes[lane])?;
-            h.rtl.cpu_dbg_addr_i = address as u16;
-            h.rtl.eval();
-            assert_eq!(h.rtl.cpu_dbg_code_valid_o, 0);
+            assert_eq!(code_valid(&mut h, address)?, 0);
         }
     }
     for address in addresses {
         h.program_lane(0, address, 4, lanes[4])?;
-        h.rtl.cpu_dbg_addr_i = address as u16;
-        h.rtl.eval();
-        assert_eq!(h.rtl.cpu_dbg_code_valid_o, 1);
+        assert_eq!(code_valid(&mut h, address)?, 1);
     }
     h.start_processor(8191)?;
     for _ in 0..8 {
@@ -59,9 +64,7 @@ fn control_store_validity_requires_every_lane_and_reset_invalidates_all_words() 
     assert_eq!(h.rtl.cpu_fault_o, 0);
     h.reset()?;
     for address in addresses {
-        h.rtl.cpu_dbg_addr_i = address as u16;
-        h.rtl.eval();
-        assert_eq!(h.rtl.cpu_dbg_code_valid_o, 0);
+        assert_eq!(code_valid(&mut h, address)?, 0);
     }
     h.program_lane(0, 8191, 4, lanes[4])?;
     h.start_processor(8191)?;

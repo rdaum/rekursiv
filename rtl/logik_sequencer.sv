@@ -26,6 +26,9 @@ module logik_sequencer #(
     input logic use_issued_condition_i, issued_condition_i,
     output logic condition_o, target_fault_o,
     output logic [15:0] pc_o, upcor_o, mark_o,
+    // The PC after this clock edge. The control store is addressed with it so
+    // that a block-RAM fetch delivers the instruction as the new PC begins.
+    output logic [15:0] next_pc_o,
     output logic last_condition_o
 );
     `include "rekursiv_control.svh"
@@ -123,6 +126,15 @@ module logik_sequencer #(
             if (load_mark_i) mark <= pc;
             last_condition <= condition_o;
         end
+    end
+
+    always_comb begin
+        if (rst_i) next_pc_o = '0;
+        else if (save_i) next_pc_o = handler_i;
+        else if (restore_i) next_pc_o = saved_pc;
+        else if (start_i) next_pc_o = entry_i;
+        else if (retire_i) next_pc_o = target[15:0];
+        else next_pc_o = pc;
     end
 
     assign pc_o = pc;

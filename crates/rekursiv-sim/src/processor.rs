@@ -1,6 +1,6 @@
 //! Loading and observing an autonomous RTL processor. The host does not choose its next instruction.
 use crate::{Harness, Result};
-use eyre::ensure;
+use eyre::{ensure, eyre};
 use rekursiv_asm::{Ports, Status, Word};
 use rekursiv_model::processor::{Image, Processor, STACK_WORDS};
 
@@ -31,8 +31,11 @@ impl Harness<'_> {
                 words.push(Word::from_bits(self.rtl.cpu_dbg_estk_o)?);
             }
         }
+        // Control-store reads are registered: clock once per address. The
+        // processor is stopped, so the extra cycles change no machine state.
         for address in 0..rekursiv_model::processor::CODE_WORDS {
             self.rtl.cpu_dbg_addr_i = address as u16;
+            self.tick()?;
             self.rtl.eval();
             if self.rtl.cpu_dbg_code_valid_o != 0 {
                 words.push(Word::from_bits(self.rtl.cpu_dbg_code_data_o)?);
@@ -103,6 +106,7 @@ impl Harness<'_> {
             address <= u16::MAX as usize && lane < 8 && space < 4,
             "invalid programming address"
         );
+        self.wait_for_programming()?;
         self.rtl.cpu_boot_space_i = space;
         self.rtl.cpu_boot_addr_i = address as u16;
         self.rtl.cpu_boot_lane_i = lane as u8;
@@ -117,8 +121,27 @@ impl Harness<'_> {
         self.rtl.cpu_boot_valid_i = 0;
         Ok(())
     }
+    /// After reset the control store clears its lane-valid bits, one word per
+    /// cycle; programming and start wait until that sweep has finished.
+    fn wait_for_programming(&mut self) -> Result<()> {
+        ensure!(
+            self.rtl.cpu_halted_o != 0,
+            "processor must be halted before programming"
+        );
+        for _ in 0..=rekursiv_model::processor::CODE_WORDS {
+            self.rtl.cpu_boot_valid_i = 0;
+            self.rtl.cpu_start_i = 0;
+            self.rtl.eval();
+            if self.rtl.cpu_boot_ready_o != 0 {
+                return Ok(());
+            }
+            self.tick()?;
+        }
+        Err(eyre!("control store did not finish clearing"))
+    }
     pub fn start_processor(&mut self, entry: u16) -> Result<()> {
         ensure!(self.rtl.cpu_halted_o != 0, "processor is already active");
+        self.wait_for_programming()?;
         self.rtl.cpu_enable_i = 1;
         self.rtl.cpu_entry_i = entry;
         self.rtl.cpu_start_i = 1;

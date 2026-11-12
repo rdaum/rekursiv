@@ -97,7 +97,8 @@ module logik #(
     logic [39:0] response_data, saved_symbol, saved_object, saved_bus, saved_type;
     logic [3:0] saved_status;
     logic saved_issued_condition;
-    logic [15:0] stack_root_address, store_root_address;
+    logic [15:0] stack_root_address, store_root_address, next_pc;
+    logic store_clearing;
     logic [39:0] stack_root, code_literal, code_type, extra_root, runtime_root;
     localparam integer STACK_ROOT=20, CODE_ROOT=STACK_ROOT+STACK_WORDS;
     localparam integer EXTRA_ROOT=CODE_ROOT+2*CODE_WORDS;
@@ -135,8 +136,8 @@ module logik #(
         endcase
     end
 
-    assign start = state == HALTED && start_i && !boot_valid_i;
-    assign boot_ready_o = state == HALTED && !rst_i && !start_i;
+    assign start = state == HALTED && start_i && !boot_valid_i && !store_clearing;
+    assign boot_ready_o = state == HALTED && !rst_i && !start_i && !store_clearing;
     assign halted_o = state == HALTED;
     assign service_o = state == SERVICE_BREAK;
     assign service_code_o = service_code;
@@ -157,7 +158,8 @@ module logik #(
         .boot_write_i(boot_valid_i && boot_ready_o),
         .boot_space_i(boot_space_i), .boot_address_i(boot_addr_i),
         .boot_lane_i(boot_lane_i), .boot_data_i(boot_data_i), .boot_fault_o(boot_fault),
-        .pc_i(pc_o), .instruction_o(instruction), .instruction_valid_o(instruction_valid),
+        .fetch_address_i(next_pc), .clearing_o(store_clearing), .root_select_i(gc_active_o),
+        .instruction_o(instruction), .instruction_valid_o(instruction_valid),
         .apc_operation_i(instruction.apc), .bus_i(bus_value),
         .fetch_nam_i(instruction.fetch_nam), .fetch_map_i(instruction.fetch_map),
         .fetch_fault_o(fetch_fault), .apc_o(apc_o), .dispatch_o(ucar_o), .operand_o(namarg_o),
@@ -217,7 +219,7 @@ module logik #(
         .flags_i(flags_o), .object_ok_i(object_status == 0), .irq_i(irq_i),
         .use_issued_condition_i(state == ISSUE || state == WAIT_RESPONSE || state == NUMERIC_WAIT || state == DEVICE_WAIT || (!gc_active_o && retried)),
         .issued_condition_i((!gc_active_o && retried) ? saved_issued_condition : issued_condition), .condition_o(condition_value),
-        .target_fault_o(target_fault), .pc_o(pc_o), .upcor_o(upcor_o), .mark_o(mark_o),
+        .target_fault_o(target_fault), .pc_o(pc_o), .next_pc_o(next_pc), .upcor_o(upcor_o), .mark_o(mark_o),
         .last_condition_o(lastcc_o)
     );
 

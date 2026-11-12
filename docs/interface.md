@@ -509,7 +509,20 @@ words per stack. LOGIK parameters permit other capacities; control-store capacit
 through 65535 words. NAM capacity ranges from 2 through 65536 words. Stack capacity ranges from 2
 through 65536 words for the supplied debug interface. Addresses remain 16 bits for microcode and 24
 bits for abstract code and stacks. Capacity checks occur before address narrowing; invalid addresses
-do not wrap into valid memory. These resident arrays are not yet optimized for an FPGA's block RAM.
+do not wrap into valid memory.
+
+The control store is a two-port RAM with registered reads, which maps to FPGA block RAM: 8,192 words
+use 64 RAMB36 blocks on an Artix-7. Fetch reads at the sequencer's next PC, so each instruction is
+ready on the cycle its PC begins and fetch timing is unchanged. The second port takes programming
+writes and serves the collector's code roots and the debug read port; both reads arrive one cycle
+after their address. A collector Root instruction always spends a cycle in EXECUTE before ISSUE with
+the same address, so its value is ready when OBJEKT accepts the operation. The debug port is for
+halted inspection; the harness clocks once per control-store read. NAM, CSMAP and the stacks keep
+their combinational reads.
+
+Each control word's lane-valid bits are held in a separate small RAM. After reset the store clears
+that RAM, one word per cycle: `CODE_WORDS` cycles. Until it finishes, every control word reads as
+invalid, `boot_ready_o` stays low, and `start_i` is ignored.
 
 The programming port accepts writes only while halted, with `boot_valid_i && boot_ready_o`.
 `boot_space_i` selects control store (0), NAM (1), CSMAP (2), or the 32-word explicit root table

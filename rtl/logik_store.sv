@@ -5,6 +5,14 @@
 // NAM, one for CSMAP. Reset invalidates images without resetting the large data
 // arrays. This permits memory inference and prevents execution of stale data.
 //
+// The control store is a two-port RAM with registered reads, so it maps to FPGA
+// block RAM. Port A fetches at the sequencer's next PC: the instruction for a PC
+// is ready on the cycle that PC begins, so fetch timing is unchanged. Port B
+// takes programming writes and serves the collector's code roots and the debug
+// reads, each one cycle after its address. Per-word lane-valid bits live in a
+// small separate RAM. Reset clears that RAM with a sweep of one word per cycle;
+// clearing_o holds off programming and start until the sweep finishes.
+//
 // Book pp. 66-68 and 174 describe a pipelined fetch. fetch_nam_i captures an
 // opcode and operand from OLD APC. fetch_map_i captures the entry for the OLD
 // opcode. Both can retire together; there is deliberately no opcode forwarding.
@@ -21,7 +29,9 @@ module logik_store #(
     input logic [2:0] boot_lane_i,
     input logic [31:0] boot_data_i,
     output logic boot_fault_o,
-    input logic [15:0] pc_i,
+    input logic [15:0] fetch_address_i,
+    output logic clearing_o,
+    input logic root_select_i,
     output logic [255:0] instruction_o,
     output logic instruction_valid_o,
     input logic [1:0] apc_operation_i,
@@ -41,16 +51,10 @@ module logik_store #(
     `include "rekursiv_control.svh"
     localparam integer CODE_BITS = $clog2(CODE_WORDS);
     localparam integer NAM_BITS = $clog2(NAM_WORDS);
-    localparam integer VALID_BANKS = (CODE_WORDS + 255) / 256;
-    localparam integer VALID_BANK_BITS = VALID_BANKS > 1 ? $clog2(VALID_BANKS) : 1;
-
     logic [255:0] control_store [0:CODE_WORDS-1];
+    logic [7:0] lanes_written [0:CODE_WORDS-1];
     object_word_t nam [0:NAM_WORDS-1];
     micro_address_t opcode_map [0:1023];
-    logic [8*CODE_WORDS-1:0] control_valid;
-    // Small packed banks avoid both a giant simulator concatenation and an
-    // enormous unpacked-array address decoder during synthesis.
-    wire [255:0] control_complete [0:VALID_BANKS-1];
     logic [2*NAM_WORDS-1:0] nam_valid;
     logic [1023:0] map_valid;
     stack_address_t apc;
@@ -65,12 +69,52 @@ module logik_store #(
     object_word_t extra_roots [0:31];
     logic [63:0] roots_valid;
     logic write_control, write_nam, write_map, write_root;
-    logic pc_in_range;
 
-    assign pc_in_range = {16'b0, pc_i} < CODE_WORDS;
-    assign instruction_o = pc_in_range ? control_store[pc_i[CODE_BITS-1:0]] : 256'b0;
-    assign instruction_valid_o = pc_in_range &&
-        control_complete[VALID_BANK_BITS'(pc_i >> 8)][pc_i[7:0]];
+    // Port A: fetch.
+    logic [255:0] fetch_word;
+    logic [7:0] fetch_lanes;
+    logic fetch_in_range;
+    always_ff @(posedge clk_i) begin
+        fetch_word <= control_store[fetch_address_i[CODE_BITS-1:0]];
+        fetch_lanes <= lanes_written[fetch_address_i[CODE_BITS-1:0]];
+        fetch_in_range <= {16'b0, fetch_address_i} < CODE_WORDS;
+    end
+    assign instruction_o = fetch_in_range ? fetch_word : 256'b0;
+    assign instruction_valid_o = fetch_in_range && &fetch_lanes && !clearing_o;
+
+    // Port B: programming writes, then collector roots or debug reads.
+    wire program_control = boot_write_i && write_control;
+    wire [15:0] port_b_address = program_control ? boot_address_i :
+        root_select_i ? root_address_i : debug_address_i;
+    logic [255:0] port_b_word;
+    logic [7:0] port_b_lanes;
+    logic port_b_in_range;
+    always_ff @(posedge clk_i) begin
+        for (int b = 0; b < 32; b++)
+            if (program_control && b / 4 == int'(boot_lane_i))
+                control_store[port_b_address[CODE_BITS-1:0]][8*b +: 8] <= boot_data_i[8*(b%4) +: 8];
+        port_b_word <= control_store[port_b_address[CODE_BITS-1:0]];
+        port_b_lanes <= lanes_written[port_b_address[CODE_BITS-1:0]];
+        port_b_in_range <= {16'b0, port_b_address} < CODE_WORDS;
+    end
+    // Every word reads as invalid until the reset sweep has finished.
+    wire port_b_valid = port_b_in_range && &port_b_lanes && !clearing_o;
+
+    // Lane-valid bits: one write port shared by the reset sweep and programming.
+    logic [CODE_BITS-1:0] clear_index;
+    always_ff @(posedge clk_i) begin
+        if (rst_i) begin
+            clearing_o <= 1'b1;
+            clear_index <= '0;
+        end else if (clearing_o) begin
+            lanes_written[clear_index] <= '0;
+            clear_index <= clear_index + 1'b1;
+            if (clear_index == CODE_BITS'(CODE_WORDS - 1)) clearing_o <= 1'b0;
+        end else if (program_control) begin
+            lanes_written[boot_address_i[CODE_BITS-1:0]] <=
+                lanes_written[boot_address_i[CODE_BITS-1:0]] | (8'b1 << boot_lane_i);
+        end
+    end
 
     always_comb begin
         write_control = boot_space_i == 0 && {16'b0, boot_address_i} < CODE_WORDS;
@@ -96,31 +140,6 @@ module logik_store #(
         if (fetch_map_i && !map_valid[opcode]) fetch_fault_o = 1'b1;
     end
 
-    // Each control word owns eight lane-valid bits. Keep its write mux local:
-    // a variable bit write into the complete 65,536-bit validity vector makes
-    // process lowering build enormous intermediate masks at CODE_WORDS=8192.
-    // Constant slices describe the same reset and partial-programming behavior
-    // without a whole-vector read/modify/write expression.
-    // Bound each generate loop for frontends with an unrolling limit.
-    for (genvar bank = 0; bank < CODE_WORDS; bank += 256) begin : control_valid_banks
-        if (CODE_WORDS - bank < 256) begin : padding
-            assign control_complete[bank/256][255:CODE_WORDS-bank] = '0;
-        end
-        for (genvar word_index = 0; word_index < 256 && bank + word_index < CODE_WORDS;
-             word_index++) begin : words
-            localparam integer WORD_ADDRESS = bank + word_index;
-            // Test all lanes before address selection. Fetch, debug, and GC
-            // then need a one-bit-per-word mux instead of an eight-bit mux.
-            assign control_complete[bank/256][word_index] = &control_valid[WORD_ADDRESS*8 +: 8];
-            always_ff @(posedge clk_i) begin
-                if (rst_i) control_valid[WORD_ADDRESS*8 +: 8] <= '0;
-                else if (boot_write_i && write_control && boot_address_i == 16'(WORD_ADDRESS))
-                    control_valid[WORD_ADDRESS*8 +: 8] <=
-                        control_valid[WORD_ADDRESS*8 +: 8] | (8'b1 << boot_lane_i);
-            end
-        end
-    end
-
     always_ff @(posedge clk_i) begin
         if (rst_i) begin
             nam_valid <= '0;
@@ -135,7 +154,7 @@ module logik_store #(
             // control bits without needing to duplicate the entire control word.
             if (boot_write_i) begin
                 if (write_control) begin
-                    control_store[boot_address_i[CODE_BITS-1:0]][boot_lane_i*32 +: 32] <= boot_data_i;
+                    // Written through port B above.
                 end else if (write_nam) begin
                     if (boot_lane_i == 0) nam[boot_address_i[NAM_BITS-1:0]][31:0] <= boot_data_i;
                     else nam[boot_address_i[NAM_BITS-1:0]][39:32] <= boot_data_i[7:0];
@@ -167,17 +186,15 @@ module logik_store #(
         end
     end
 
-    // Halted GC uses these read-only outputs to retain tagged constants embedded
-    // in microcode. Raw NAM opcode words are not roots: their high bits are code.
-    assign debug_valid_o = {16'b0, debug_address_i} < CODE_WORDS &&
-        control_complete[VALID_BANK_BITS'(debug_address_i >> 8)][debug_address_i[7:0]];
-    assign inspected_word = debug_valid_o ? control_store[debug_address_i[CODE_BITS-1:0]] : 256'b0;
+    // The collector and debug reads use tagged constants embedded in microcode.
+    // Raw NAM opcode words are not roots: their high bits are code. Both reads
+    // come from port B, one cycle after their address.
+    assign debug_valid_o = port_b_valid;
+    assign inspected_word = port_b_valid ? port_b_word : 256'b0;
     assign debug_literal_o = inspected_word.immediate;
     assign debug_type_o = inspected_word.object_enable && inspected_word.check_type ?
         inspected_word.expected_type : 40'b0;
-    assign root_word={16'b0,root_address_i}<CODE_WORDS &&
-        control_complete[VALID_BANK_BITS'(root_address_i >> 8)][root_address_i[7:0]] ?
-        control_store[root_address_i[CODE_BITS-1:0]] : 256'b0;
+    assign root_word = inspected_word;
     assign root_literal_o=root_word.immediate;
     assign root_type_o=root_word.object_enable && root_word.check_type ? root_word.expected_type : 40'b0;
     assign root_extra_o=root_address_i<32 && roots_valid[root_address_i[4:0]*2 +: 2]==2'b11 ?
