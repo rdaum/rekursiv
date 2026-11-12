@@ -158,14 +158,181 @@ These change documented behaviour and need matching changes in `docs/interface.m
 3. **Heap-pressure eviction.**
 4. **Body cache and store cache,** if measurements justify them.
 
+## Revised contracts for the object table
+
+This section is the proposal for build step 2. It is written against today's
+[interface](interface.md) and [recovery](recovery.md) contracts and replaces the matching parts of
+both when the step lands. Nothing in it is implemented.
+
+### Configuration
+
+OBJEKT gains `TABLE_BITS` beside `PAGER_BITS`, with `PAGER_BITS <= TABLE_BITS`. The board uses 18
+and 14. Tests use small values, such as 4 and 2, so that table collisions and pager misses both
+occur in short programs. The pager must also work with one or two entries.
+
+### Object table entry
+
+One entry per table slot, in four raw 64-bit memory words. The table is the only record of residency
+and holds all per-object state that is flip-flops beside the pager today.
+
+| Field               |             Bits | Replaces                                                     |
+| ------------------- | ---------------: | ------------------------------------------------------------ |
+| reference           |               40 | Pager entry; zero means the slot is empty                    |
+| class               |               40 | Pager entry                                                  |
+| size                |               24 | Pager entry                                                  |
+| base                |               24 | Pager entry                                                  |
+| new, modified, cond |                3 | Pager entry flags                                            |
+| persistent          |                1 | `persistent` vector                                          |
+| mark                |                1 | Collector `marks` vector                                     |
+| complete            |                1 | Collector `staged` and `complete` vectors                    |
+| staged base         |               24 | Collector `bases` RAM                                        |
+| gray link           |     `TABLE_BITS` | New: next slot in the collector's work list                  |
+| edge, edge link     | 1 + `TABLE_BITS` | `saved_edges` and `exchange_edges` vectors                   |
+| referenced          |                1 | New: set when the pager loads the entry; for eviction policy |
+
+The cached representation is not stored. A pager refill reads the body's first word.
+
+### Pager
+
+A pager entry is a copy of a table entry's reference, class, size, base, representation, and flags,
+plus an epoch byte. An entry is valid when its epoch equals the pager's current epoch, so a
+whole-pager invalidation is one increment. A sweep rewrites the entries when the epoch wraps.
+
+- Any command that names an object looks in the pager first. A miss reads the table entry. If the
+  table holds the reference, OBJEKT reads the first body word, writes the pager entry, sets the
+  referenced flag if it was clear, and continues. No error and no store traffic result.
+- A pager entry that is overwritten is simply dropped. Flag changes were already written through.
+- Changes to the modified, cond, and persistent flags, and to base, write through to the table on
+  the same commit as the pager entry.
+- The selected snapshot and the prepared access are authoritative copies. OBJEKT updates or
+  invalidates them when the object they name changes, moves, or leaves memory. Commands on the
+  selected object read neither the pager nor the table.
+
+### Commands
+
+| Command                   | Change                                                                                                                      |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Page (all sources), Probe | One more cycle on a pager hit; a refill on a pager miss. `NotResident` only when the table has no matching entry.           |
+| Fetch                     | Transfers from the store only when the object is not in the table.                                                          |
+| Field read and write      | Unchanged on the selected or prepared object. The first write to a clean object also writes the modified flag to the table. |
+| Allocate                  | Takes the next identity whose table slot is empty (see below). Never saves a victim.                                        |
+| Exchange                  | Residency of both operands comes from the table.                                                                            |
+| NextObject, FindObject    | The resident scan reads table slots instead of pager slots.                                                                 |
+
+**Allocation.** The identity allocator advances until the candidate's table slot is empty. Each
+probe is one table read. If it probes `2**TABLE_BITS` slots without finding one, the table is full
+of live objects and Allocate returns `OutOfSpace`, which enters collection like body exhaustion.
+Skipped identities are never issued. The halted ReserveIdentities floor still applies.
+
+**Refill.** Fetch of an object that is not in the table reserves body space and streams the record
+from the store, as today. If its table slot holds another object, that object is the victim: OBJEKT
+saves it first when it is new or modified, exactly as the transfer engine does today for a pager
+collision, then replaces it. This is the only path on which an ordinary command saves a victim.
+
+**Edges.** While a victim save or an exchange streams a record, each class and scanned body word
+that names a resident NEW object must become a persistence dependency when the save commits. OBJEKT
+sets the target's edge flag and links it into an edge list on first sight. A committed save walks
+the list, setting persistent and clearing edge. A failed or abandoned save walks it clearing edge
+only. Both walks visit only the listed entries.
+
+### Collector
+
+The repeated-pass trace re-reads every marked body on every pass and needs as many passes as the
+longest reference chain. It cannot scale to a 262,144-slot table. The collector becomes a single
+pass over a work list, copying each object as it scans it.
+
+| Value | Control   | Operand and result                                                                                                                                                 |
+| ----: | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+|     1 | Begin     | Walk the table: validate source-space bounds, clear marks and plans, and mark and queue every retention root                                                       |
+|     2 | Root      | Unchanged                                                                                                                                                          |
+|     3 | Slot      | Unchanged: select a table slot by index and return its flags                                                                                                       |
+|     4 | Info      | Unchanged                                                                                                                                                          |
+|     5 | Mark      | Full reference. A resident, unmarked object is marked and queued. Returns 1 if it was newly marked                                                                 |
+|     6 | ReadBody  | Unchanged                                                                                                                                                          |
+|     7 | Stage     | Unchanged: reserve the destination range of the selected marked object                                                                                             |
+|     8 | WriteBody | Unchanged                                                                                                                                                          |
+|     9 | Commit    | Walk the table: move each marked entry to its staged base and clear its collector state; remove each unmarked entry. Then exchange spaces and invalidate the pager |
+|    10 | Return    | Unchanged                                                                                                                                                          |
+|    11 | Collect   | Unchanged                                                                                                                                                          |
+|    12 | Next      | New: remove one slot from the work list and select it. Returns its flags, or zero when the list is empty                                                           |
+
+Retention roots are what the Slot retention flag reports today: modified persistent objects, NEW
+objects with the persistent flag, and the object of a valid prepared access. Begin queues them, so
+microcode no longer scans every slot for them.
+
+The work list is a stack threaded through the gray link fields, with its head in a register. Mark
+pushes; Next pops. Every marked object is pushed exactly once, so the list needs no other storage.
+
+The collector microcode becomes:
+
+```text
+Begin
+for each root index: Root, Mark
+loop:
+    Next                      ; exit to Commit when it returns zero
+    Info class, Mark
+    Stage
+    for each body offset:
+        ReadBody
+        Mark                  ; scanned objects only
+        WriteBody
+Commit
+Return
+```
+
+Each live object is read once and written once. Mark between ReadBody and WriteBody is permitted; it
+does not disturb the copy latch. Cycles terminate because a marked object is never queued again.
+Unreachable NEW objects and unrooted clean copies are still discarded, and the store is still never
+consulted.
+
+Until Commit, table entries keep their published base. A failed collection leaves marks, staged
+bases, and links in the table; the next Begin clears them. No rollback walk is needed.
+
+### Whole-table walks
+
+Begin, Commit, the halted raw-write overlap check, SetBodyCursor, and a sparse NextObject visit
+every slot. At two memory accesses per slot, a 262,144-slot walk is roughly 5 million cycles: 0.4 s
+at 12.6 MHz. Two measures keep this tolerable and should be built with the step:
+
+- OBJEKT tracks the lowest base and highest end of all published bodies. A raw write or a cursor
+  outside that range needs no walk. The halted loader installs bodies in ascending order, so its
+  writes stay outside the range.
+- An occupancy bitmap in block RAM (one bit per slot, 8 RAMB36 for the board) lets every walk skip
+  empty slots 32 at a time. Walks then cost in proportion to the number of resident objects.
+
+### Model, emulator, and tests
+
+- The Rust model's entry array models the object table and gains the persistent flag. The pager does
+  not appear in the model. `Model::new` takes the table size.
+- The model allocates identities with the same skip rule, so differential tests see the same
+  identities as the RTL.
+- The emulator's collector datapath implements the new Mark, Next, Begin, and Commit. Its cycle
+  estimator gains pager hit and miss costs and the walk costs.
+- `rekursiv-asm` gains `Recovery::Next` and the new collector source. `PAGER_ENTRIES` disappears
+  from the collector's parameters.
+- Tests that force pager collisions to exercise victim saves must force table collisions through
+  Fetch instead. Tests that assert consecutive identities across a collision must change.
+- New tests: pager misses with no store traffic; allocation skipping an occupied slot; a full table
+  entering collection; the work-list collector on chains, cycles, and wide fan-out; edge-list commit
+  and abandon.
+
+### Implementation order within the step
+
+1. Model and emulator first: table semantics, skip allocation, the work-list collector, and the new
+   microcode. The Smalltalk and Squeak suites run on the emulator, so they validate the collector
+   before any RTL exists.
+2. RTL: the raw table port on the memory channel, the table engine, the pager cache, then the
+   collector and transfer engines moved onto table entries.
+3. Board: SDRAM table port, sizes 18 and 14, and measurement of walk and collection times.
+
 ## Open questions
 
-- The collector microcode iterates slots to find a tracing fixed point. Over 262,144 slots that may
-  be too slow, and it may need a mark stack or a scan pointer. This needs reading and measuring
-  before step 3.
 - Whether the SDRAM controller should run on a faster clock than the machine. A 100 MHz controller
   would cut access time in machine cycles but adds a clock crossing.
 - Table size and associativity. A two- or four-way table would make refill collisions rarer at the
   cost of wider bursts.
 - NextObject's resident scan becomes a table scan. Its early exit keeps dense enumeration cheap, but
-  a sparse scan visits every slot.
+  a sparse scan visits every occupied slot, so enumerating every object costs the square of the
+  resident count. An index ordered by identity would fix that if a runtime needs fast enumeration.
+- Whether Mark should consult a mark bitmap in block RAM before reading the table, to make marking
+  an already-marked object cheap.
