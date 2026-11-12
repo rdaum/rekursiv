@@ -13,7 +13,7 @@ mkdir -p "$here/build/sim"
 cd "$here"
 verilator --binary --timing -j 0 -Wno-fatal -Wno-lint -Wno-style --Mdir build/sim/obj --top-module system_tb \
     -I"$root/rtl" -I"$root" -I"$root/vendor/hardfloat/source" -I"$root/vendor/hardfloat/source/RISCV" \
-    system_tb.sv sim/sd_card_model.sv rtl/rekursiv_system.sv rtl/disk_processor.sv rtl/sd_spi.sv \
+    system_tb.sv sim/sd_card_model.sv sim/sdram_model.sv rtl/rekursiv_system.sv rtl/object_memory.sv rtl/sdram.sv rtl/disk_processor.sv rtl/sd_spi.sv \
     "$root"/vendor/picorv32/picorv32.v "$root"/rtl/hardfloat.sv "$root"/rtl/logik*.sv \
     "$root"/rtl/numerik*.sv "$root"/rtl/objekt*.sv > build/sim/verilator.log 2>&1 || { tail -30 build/sim/verilator.log; exit 1; }
 build/sim/obj/Vsystem_tb "${@:2}"

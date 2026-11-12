@@ -1,7 +1,7 @@
 // The machine for the first MEGA65 bring-up: LOGIK and OBJEKT with board
 // implementations of their external channels.
 //
-// - Object memory is block RAM.
+// - Object memory is the board's SDRAM: 2^23 words.
 // - The disk processor serves the backing store from the SD card.
 // - The device channel serves only the debug display (0xf00-0xf1f).
 // - A boot sequencer replays a stream from BOOT_FILE through LOGIK's halted
@@ -9,7 +9,7 @@
 //   whether collection is enabled and where the collector begins.
 module rekursiv_system #(
     parameter integer PAGER_BITS = 10,
-    parameter integer MEMORY_WORDS = 16384,
+    parameter integer MEMORY_WORDS = 8388608,
     parameter integer CODE_WORDS = 8192,
     parameter integer BOOT_RECORDS = 1024,
     parameter BOOT_FILE = "boot.mem",
@@ -21,6 +21,21 @@ module rekursiv_system #(
     output logic        sd_cs_n_o,
     output logic        sd_mosi_o,
     input  logic        sd_miso_i,
+    output logic        sdram_cke_o,
+    output logic        sdram_cs_n_o,
+    output logic        sdram_ras_n_o,
+    output logic        sdram_cas_n_o,
+    output logic        sdram_we_n_o,
+    output logic [1:0]  sdram_ba_o,
+    output logic [12:0] sdram_a_o,
+    output logic        sdram_dqml_o,
+    output logic        sdram_dqmh_o,
+    output logic [15:0] sdram_dq_o,
+    output logic        sdram_dq_oe_o,
+    input  logic [15:0] sdram_dq_i,
+    output logic        memory_tested_o,
+    output logic        memory_failed_o,
+    output logic [22:0] memory_failed_address_o,
     output logic [31:0] disk_display_o [8],
     output logic [31:0] debug_o [8],
     output logic        booted_o,
@@ -43,8 +58,10 @@ module rekursiv_system #(
     logic        gc_enable;
     logic [15:0] gc_entry;
 
-    wire boot_valid = !boot_done && kind == 2'd1;
-    assign start = !boot_done && kind == 2'd2 && halted_o;
+    // The boot stream waits for the memory check.
+    wire boot_enable = memory_tested_o && !memory_failed_o && !boot_done;
+    wire boot_valid = boot_enable && kind == 2'd1;
+    assign start = boot_enable && kind == 2'd2 && halted_o;
 
     always_ff @(posedge clk_i) begin
         if (rst_i) begin
@@ -52,7 +69,7 @@ module rekursiv_system #(
             boot_done  <= 1'b0;
             gc_enable  <= 1'b0;
             gc_entry   <= '0;
-        end else if (!boot_done) begin
+        end else if (boot_enable) begin
             if (start) begin
                 gc_enable <= record[16];
                 gc_entry  <= record[47:32];
@@ -170,29 +187,19 @@ module rekursiv_system #(
     /* verilator lint_on PINCONNECTEMPTY */
 
     // ---------------------------------------------------------------------
-    // Object memory: one request at a time, completed on the next edge.
+    // Object memory: SDRAM, checked at power-up before the machine boots.
     // ---------------------------------------------------------------------
-    logic [39:0] object_memory [MEMORY_WORDS];
-    logic        mem_pending;
-    wire         mem_accept = mem_valid && mem_ready;
-    wire         mem_in_range = {8'd0, mem_addr} < 32'(MEMORY_WORDS);
-
-    assign mem_ready     = !mem_pending;
-    assign mem_rsp_valid = mem_pending;
-
-    always_ff @(posedge clk_i) begin
-        if (mem_accept && mem_in_range) begin
-            if (mem_write) object_memory[mem_addr[$clog2(MEMORY_WORDS)-1:0]] <= mem_data;
-            mem_rsp_data <= object_memory[mem_addr[$clog2(MEMORY_WORDS)-1:0]];
-        end
-    end
-    always_ff @(posedge clk_i) begin
-        if (rst_i) mem_pending <= 1'b0;
-        else if (mem_accept) begin
-            mem_pending   <= 1'b1;
-            mem_rsp_error <= !mem_in_range;
-        end else if (mem_rsp_valid && mem_rsp_ready) mem_pending <= 1'b0;
-    end
+    object_memory #(.MEMORY_WORDS(MEMORY_WORDS)) object_ram (
+        .clk_i, .rst_i,
+        .mem_valid_i(mem_valid), .mem_ready_o(mem_ready), .mem_write_i(mem_write),
+        .mem_addr_i(mem_addr), .mem_data_i(mem_data),
+        .mem_rsp_valid_o(mem_rsp_valid), .mem_rsp_ready_i(mem_rsp_ready),
+        .mem_rsp_data_o(mem_rsp_data), .mem_rsp_error_o(mem_rsp_error),
+        .test_done_o(memory_tested_o), .test_failed_o(memory_failed_o),
+        .test_address_o(memory_failed_address_o),
+        .sdram_cke_o, .sdram_cs_n_o, .sdram_ras_n_o, .sdram_cas_n_o, .sdram_we_n_o,
+        .sdram_ba_o, .sdram_a_o, .sdram_dqml_o, .sdram_dqmh_o,
+        .sdram_dq_o, .sdram_dq_oe_o, .sdram_dq_i);
 
     // ---------------------------------------------------------------------
     // Backing store: the disk processor.

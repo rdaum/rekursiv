@@ -39,6 +39,18 @@ module mega65_top (
     output logic       sd2_reset_o,
     output logic       sd2_mosi_o,
     input  logic       sd2_miso_i,
+    // SDRAM (IS42S16320F)
+    output logic        sdram_clk_o,
+    output logic        sdram_cke_o,
+    output logic        sdram_cs_n_o,
+    output logic        sdram_ras_n_o,
+    output logic        sdram_cas_n_o,
+    output logic        sdram_we_n_o,
+    output logic [1:0]  sdram_ba_o,
+    output logic [12:0] sdram_a_o,
+    output logic        sdram_dqml_o,
+    output logic        sdram_dqmh_o,
+    inout  wire  [15:0] sdram_dq_io,
     // Rear microSD slot, held deselected
     output logic       sd_clk_o,
     output logic       sd_reset_o,
@@ -83,8 +95,6 @@ module mega65_top (
 
     output logic       eth_reset_o,
     output logic       eth_txen_o,
-    output logic       sdram_cs_n_o,
-    output logic       sdram_cke_o,
     output logic       hr_cs0_o,
     output logic       hr_reset_o,
     output logic       qspicsn_o,
@@ -110,8 +120,6 @@ module mega65_top (
 
     assign eth_reset_o           = 1'b1;
     assign eth_txen_o            = 1'b0;
-    assign sdram_cs_n_o          = 1'b1;
-    assign sdram_cke_o           = 1'b0;
     assign hr_cs0_o              = 1'b1;
     assign hr_reset_o            = 1'b1;
     assign qspicsn_o             = 1'b1;
@@ -166,10 +174,23 @@ module mega65_top (
     logic [15:0] pc;
 
     logic [31:0] disk_rows [8];
+    logic [15:0] sdram_dq_out;
+    logic        sdram_dq_oe, memory_tested, memory_failed;
+    logic [22:0] memory_failed_address;
+    assign sdram_dq_io = sdram_dq_oe ? sdram_dq_out : 16'bz;
+    // The chip samples mid-cycle: send it the inverted machine clock.
+    ODDR #(.DDR_CLK_EDGE("SAME_EDGE")) sdram_clk_fwd (
+        .C(clk_cpu), .CE(1'b1), .D1(1'b0), .D2(1'b1), .R(1'b0), .S(1'b0), .Q(sdram_clk_o)
+    );
     rekursiv_system #(.BOOT_FILE("boot.mem"), .FIRMWARE("firmware.mem")) machine (
         .clk_i(clk_cpu), .rst_i(rst_cpu),
         .sd_clk_o(sd2_clk_o), .sd_cs_n_o(sd2_reset_o), .sd_mosi_o(sd2_mosi_o),
         .sd_miso_i(sd2_miso_i), .disk_display_o(disk_rows),
+        .sdram_cke_o, .sdram_cs_n_o, .sdram_ras_n_o, .sdram_cas_n_o, .sdram_we_n_o,
+        .sdram_ba_o, .sdram_a_o, .sdram_dqml_o, .sdram_dqmh_o,
+        .sdram_dq_o(sdram_dq_out), .sdram_dq_oe_o(sdram_dq_oe), .sdram_dq_i(sdram_dq_io),
+        .memory_tested_o(memory_tested), .memory_failed_o(memory_failed),
+        .memory_failed_address_o(memory_failed_address),
         .debug_o(debug), .booted_o(booted), .halted_o(halted), .service_o(service),
         .fault_o(fault), .pc_o(pc)
     );
@@ -178,7 +199,7 @@ module mega65_top (
     always_ff @(posedge clk_i) blink <= blink + 1'b1;
     assign led_o     = blink[26];
     assign led_g_n_o = !(booted && fault == 0);
-    assign led_r_n_o = fault == 0;
+    assign led_r_n_o = fault == 0 && !memory_failed;
 
     // ---------------------------------------------------------------------
     // 640x480 at 60 Hz: 800 x 525 total, both syncs active low.
@@ -196,11 +217,13 @@ module mega65_top (
         end
     end
 
-    // Rows 0-7: the debug display. Row 8: PC, fault, service, halted, booted.
+    // Rows 0-7: the debug display. Row 8: PC, fault, memory check, halted, booted.
     logic [31:0] rows [9];
     always_comb begin
         for (int i = 0; i < 8; i++) rows[i] = debug[i];
-        rows[8] = {pc, fault, 3'b0, service, 3'b0, halted, 3'b0, booted};
+        // Memory check: 1 passed, e failed (rows 6 shows the failing address).
+        rows[8] = {pc, fault, memory_failed ? 4'he : {3'b0, memory_tested}, 3'b0, halted, 3'b0, booted};
+        if (memory_failed) rows[6] = {9'd0, memory_failed_address};
     end
 
     // The disk processor's display, in a second panel on the right.
