@@ -23,8 +23,8 @@ historical software, microinstruction encodings, chip pins, and clock timing is 
 project retains useful mechanisms from Rekursiv and defines missing behavior explicitly.
 
 The hardware target is the MEGA65 home computer, mainboard revision R6. Its Artix-7 XC7A200T FPGA
-holds the whole machine, with object memory in the board's SDRAM and the object image on its SD card.
-The machine runs standalone: no host computer supplies storage, devices, or loading. The
+holds the whole machine, with object memory in the board's SDRAM and the object image on its SD
+card. The machine runs standalone: no host computer supplies storage, devices, or loading. The
 [MEGA65 target](#mega65-target) section lists the board resources and what the design takes from
 them.
 
@@ -367,14 +367,15 @@ upper 24 reference bits in the number table and reconstructs the low bits from t
 Our table retains the full canonical reference, which also supports smaller configurable tables
 without this historical storage optimization.
 
-The RTL stores the table in RAM with one write port and several same-cycle read ports, so commands
-keep their timing at any table size. A stored reference can occupy only the slot its identity
-selects, so finding a reference reads one slot. The few operations that must inspect every entry
-(raw service writes, SetBodyCursor, collector Begin and Commit, and NextObject) walk the table one
-slot per cycle while they hold the core exclusively. On the MEGA65's FPGA a 1,024-entry table maps
-to distributed (LUT) RAM. It uses about 63,000 LUTs, nearly half the device, and estimates near
-55 MHz before placement. That is acceptable for bring-up. A block-RAM table, which adds a cycle to
-pager reads, is the expected route to larger tables.
+The RTL stores the table in RAM. A stored reference can occupy only the slot its identity selects,
+so finding a reference reads one slot. The few operations that must inspect every entry (raw service
+writes, SetBodyCursor, collector Begin and Commit, and NextObject) walk the table one slot per cycle
+while they hold the core exclusively. The table is a two-port block RAM with registered reads: a
+command that pages a key takes one cycle more, and commands on the selected or prepared object are
+unchanged because OBJEKT holds those two entries in registers. On the MEGA65's FPGA a 16,384-entry
+table uses 107 block RAMs and a 32,768-entry table 214, with under 10,000 LUTs for all of OBJEKT,
+estimating near 55 MHz before placement. 32,768 entries hold every object of an imported
+Smalltalk-80 image.
 
 Architectural state includes eight 40-bit `VR` registers, `REF`, the metadata output registers,
 `IDX`, and `IDXREG`. It also includes the identity allocator, space allocator, and command status.
@@ -1294,20 +1295,20 @@ project behavior.
 
 ## Smalltalk-80 port
 
-The [Squeak 1.1 port](docs/squeak-1.1.md) defines a separate 32-bit guest profile.
-Its image reader, OBJEKT conversion and execution microcode are implemented.
-The native emulator restores the colour desktop and handles mouse menus.
-Binary64 NUMERIK arithmetic preserves Float precision; microcode implements packed-colour drawing and device primitives.
-Directed RTL tests cover binary64 retirement, packed BitBlt, paging and collection.
-Full desktop execution on RTL, snapshots and persistent workstation storage remain unfinished.
-Squeak class layouts and primitive numbers remain language policy, outside the generic machine.
+The [Squeak 1.1 port](docs/squeak-1.1.md) defines a separate 32-bit guest profile. Its image reader,
+OBJEKT conversion and execution microcode are implemented. The native emulator restores the colour
+desktop and handles mouse menus. Binary64 NUMERIK arithmetic preserves Float precision; microcode
+implements packed-colour drawing and device primitives. Directed RTL tests cover binary64
+retirement, packed BitBlt, paging and collection. Full desktop execution on RTL, snapshots and
+persistent workstation storage remain unfinished. Squeak class layouts and primitive numbers remain
+language policy, outside the generic machine.
 
 The intended first language target is a single-core port of the Blue Book Smalltalk-80 VM. Multicore
 execution, MVCC, and snapshot isolation remain deferred. The eventual goal is a usable Smalltalk /
 object-oriented workstation on the MEGA65. It will boot a converted Smalltalk-80 image from the SD
 card, keep object memory in the board's SDRAM, and display through the board's video outputs.
-Keyboard, mouse, storage, and saved images are part of that workstation goal. The architecture must remain
-usable by other object-oriented languages.
+Keyboard, mouse, storage, and saved images are part of that workstation goal. The architecture must
+remain usable by other object-oriented languages.
 
 The runtime preserves guest VM semantics while adapting storage to the project machine. The offline
 image importer and initial RTL bytecode interpreter are implemented. Method lookup, sends, context
@@ -1629,14 +1630,14 @@ The [MEGA65 target](#mega65-target) section gives the board resources.
   power-up, replacing the simulator's halted service loader.
 - Provide an SDRAM controller and the documented 40-bit word packing. Measure usable heap capacity
   after semispace and system reservations.
-- Implement the [streaming backing-store interface](docs/interface.md#streaming-backing-store-interface)
-  on the SD card, including its index, record encoding, atomic commits, and recovery after power
-  loss.
-- Expand the control store as the interpreter requires and map it and other resident arrays to
-  block RAM. Preserve fetch timing, programming behavior, root inspection, and recovery.
+- Implement the
+  [streaming backing-store interface](docs/interface.md#streaming-backing-store-interface) on the SD
+  card, including its index, record encoding, atomic commits, and recovery after power loss.
+- Expand the control store as the interpreter requires and map it and other resident arrays to block
+  RAM. Preserve fetch timing, programming behavior, root inspection, and recovery.
 - Build the [memory hierarchy](docs/memory-hierarchy.md): SDRAM object memory, a block-RAM pager
-  that caches an object table in SDRAM, and the store as the last resort. Measure pager behavior
-  and collection pauses beyond the 16-entry test configuration.
+  that caches an object table in SDRAM, and the store as the last resort. Measure pager behavior and
+  collection pauses beyond the 16-entry test configuration.
 
 Completion requires the machine to boot from the SD card and run microcode tests on the board.
 Object memory must work across the intended SDRAM range without truncation or aliasing, and objects

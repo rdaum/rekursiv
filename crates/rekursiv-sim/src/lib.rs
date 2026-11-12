@@ -225,6 +225,14 @@ impl<'a> Harness<'a> {
         self.eval();
         self.rtl.rst_i = 0;
         self.eval();
+        // Reset leaves the pager table's RAM contents. OBJEKT then drops one
+        // entry per cycle and accepts nothing until it has finished.
+        for _ in 0..PAGER_ENTRIES {
+            self.rtl.clk_i = 1;
+            self.eval();
+            self.rtl.clk_i = 0;
+            self.eval();
+        }
         self.oracle.reset();
         self.recovery_job = None;
         self.store = BackingStore::default();

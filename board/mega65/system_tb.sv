@@ -17,7 +17,7 @@ module system_tb;
         .clk_i(~clk), .cke_i(m_cke), .cs_n_i(m_cs_n), .ras_n_i(m_ras_n), .cas_n_i(m_cas_n),
         .we_n_i(m_we_n), .ba_i(m_ba), .a_i(m_a), .dq_i(m_dq_out), .dq_driven_i(m_dq_oe), .dq_o(m_dq_in));
     logic [31:0] disk [8];
-    rekursiv_system #(.FIRMWARE("build/sim/loader.mem")) machine (
+    rekursiv_system #(.PAGER_BITS(10), .FIRMWARE("build/sim/loader.mem")) machine (
         .clk_i(clk), .rst_i(rst),
         .sd_clk_o(sd_clk), .sd_cs_n_o(sd_cs_n), .sd_mosi_o(sd_mosi), .sd_miso_i(sd_miso),
         .disk_display_o(disk), .debug_o(debug), .booted_o(booted),

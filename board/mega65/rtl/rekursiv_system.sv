@@ -9,7 +9,7 @@
 //   the processor. The start record says whether collection is enabled and
 //   where the collector begins.
 module rekursiv_system #(
-    parameter integer PAGER_BITS = 10,
+    parameter integer PAGER_BITS = 14,
     parameter integer MEMORY_WORDS = 8388608,
     parameter integer CODE_WORDS = 8192,
     parameter FIRMWARE = "loader.mem"
@@ -128,7 +128,7 @@ module rekursiv_system #(
         .dbg_code_valid_o(), .dbg_code_data_o(), .dbg_code_type_o(), .dbg_root_o()
     );
 
-    objekt #(.PAGER_BITS(PAGER_BITS), .MEMORY_WORDS(MEMORY_WORDS)) core (
+    objekt #(.PAGER_BITS(PAGER_BITS), .MEMORY_WORDS(MEMORY_WORDS), .DEBUG_PORT(0)) core (
         .clk_i, .rst_i, .run_i(1'b1),
         .gc_enable_i(gc_enable), .gc_active_i(gc_active), .gc_explicit_i(gc_explicit),
         .gc_valid_i(gc_valid), .gc_ready_o(gc_ready), .gc_operation_i(gc_operation),

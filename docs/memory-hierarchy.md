@@ -1,7 +1,12 @@
 # Memory hierarchy for the MEGA65
 
-Status: design, partly built. Object bodies are in SDRAM (build step 1). The pager is still the
-1,024-entry LUT-RAM table and still defines residency.
+Status: partly built, and revised. Object bodies are in SDRAM. The pager is now a block-RAM table of
+up to 32,768 entries and still defines residency, which is enough to hold a whole Smalltalk-80
+image: its imported objects have identities below 32,768. The SDRAM object table described below is
+not built. It remains the route to more resident objects than block RAM allows, such as a Squeak
+image, and its cost is higher than this document first assumed: every table access becomes a
+multi-cycle request, it needs a write-back cache, and the emulator's cycle estimates would have to
+model that cache exactly.
 
 ## Problem
 
@@ -146,23 +151,20 @@ These change documented behaviour and need matching changes in `docs/interface.m
 1. **SDRAM controller** behind the existing memory channel, with a simulation model. Done: the board
    boots with bodies in SDRAM after a power-on check of the address and data lines. A full-range
    cell test is still owed.
-2. **Object table and block-RAM pager together.** OBJEKT keeps per-slot state beside the pager
-   today: validity, the persistent flag, the collector's mark, staged and complete bits, and the
-   edge sets gathered during saves and exchanges. They are flip-flop vectors with whole-vector
-   operations, which cannot grow to 16,384 slots. Enlarging the pager while it is still the record
-   of residency would mean rebuilding all of that for the pager and then again for the table.
-   Instead this step moves residency and every per-object flag into the SDRAM object table, with
-   skip allocation and the collector on table slots, and makes the pager a cache that holds only
-   entries and valid bits. Exit: all RTL suites pass against the revised contracts; a program with
-   more live objects than pager slots runs with zero store requests; the pager's LUTs are recovered.
-3. **Heap-pressure eviction.**
-4. **Body cache and store cache,** if measurements justify them.
+2. **Block-RAM pager.** Done: the table and the collector's per-slot state are two-port RAMs with
+   registered reads, the selected and prepared entries are authoritative registers, the collector
+   traces with a work list, and allocation prefers empty slots. OBJEKT is under 10,000 LUTs at
+   16,384 or 32,768 entries.
+3. **SDRAM object table,** if a runtime needs more than 32,768 resident objects.
+4. **Heap-pressure eviction:** a better victim than the next identity's slot, and collection before
+   eviction.
+5. **Body cache and store cache,** if measurements justify them.
 
 ## Revised contracts for the object table
 
-This section is the proposal for build step 2. It is written against today's
-[interface](interface.md) and [recovery](recovery.md) contracts and replaces the matching parts of
-both when the step lands. Nothing in it is implemented.
+This section is the proposal for build step 3. It is written against the [interface](interface.md)
+and [recovery](recovery.md) contracts and would replace the matching parts of both. Nothing in it is
+implemented.
 
 ### Configuration
 

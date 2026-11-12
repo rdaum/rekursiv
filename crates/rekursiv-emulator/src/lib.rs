@@ -529,6 +529,7 @@ impl Machine {
                 if let Some(path) = path {
                     self.cycle_estimate.as_mut().unwrap().object(
                         path,
+                        command.pager != rekursiv_asm::Pager::None,
                         &outcome,
                         instruction.object_async,
                     );

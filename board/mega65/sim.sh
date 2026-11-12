@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Simulate the board machine on a microprogram and print its debug display.
+# The simulated machine has a 1,024-entry pager table, so paging tests stay short.
 #   board/mega65/sim.sh [PROGRAM.uc]
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 program="$(realpath "${1:-$here/hello.uc}")"
 mkdir -p "$here/build/sim"
-"$here/files.sh" "$here/build/sim" "$program"
+"$here/files.sh" "$here/build/sim" "$program" 1024
 (cd "$here/firmware" && cargo run -q --target x86_64-unknown-linux-gnu --example mkstore -- "$here/build/sim/store.img" 4 16384)
 "$here/sim/make_card.py" "$here/build/sim/card.img" REKURSIV.IMG="$here/build/sim/store.img" \
     REKURSIV.FW="$here/build/sim/REKURSIV.FW" REKURSIV.BOO="$here/build/sim/REKURSIV.BOO"

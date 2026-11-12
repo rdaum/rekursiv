@@ -23,31 +23,29 @@ Each memory word has 40 bits. Each pager entry contains a valid bit and 171 meta
 40, size 24, class 40, base 24, representation 40, and three flags. The slot comes from the low
 identity bits; hits compare the complete 40-bit reference, including its scan bit.
 
-The entry table is a RAM with one write port and same-cycle read ports, so ordinary commands keep
-their timing at any pager width. A stored reference can only occupy the slot its identity selects.
-Operations that must inspect every entry walk the table one slot per cycle: `2**PAGER_BITS` cycles
-for a raw service write, SetBodyCursor, collector Begin, and collector Commit, and up to that many
-for NextObject. Each walk runs while its operation holds the core exclusively and completes before
-the operation's response.
+The entry table is a two-port RAM with registered reads, so it maps to FPGA block RAM at any pager
+width: 16,384 entries use 107 RAMB36 on an Artix-7 and 32,768 use 214, with under 10,000 LUTs for
+all of OBJEKT. Each word holds an entry with its validity and persistence bits. A stored reference
+can only occupy the slot its identity selects.
 
-| Value            | Bits and restrictions                                                              |
-| ---------------- | ---------------------------------------------------------------------------------- |
-| Raw              | Bit 39 is zero; bits 38:0 contain an unsigned payload                              |
-| Reference        | Bits 39:38 are `10`; bit 37 is the scan flag; bits 36:0 contain a nonzero identity |
-| Compact          | Bits 39:38 are `11`; bits 37:32 contain the code; bits 31:0 contain the payload    |
-| Nil              | Code 0, payload zero: `0xc000000000`                                               |
-| Boolean          | Code 1, payload zero or one                                                        |
-| Signed integer   | Code 2, signed 32-bit payload                                                      |
-| Unsigned integer | Code 3, unsigned 32-bit payload                                                    |
+OBJEKT keeps the selected entry and the prepared entry in registers. They are authoritative: every
+table write that touches their slot updates or invalidates them on the same edge. A command on the
+selected or prepared object therefore reads no table port and keeps the timing below. A command with
+a pager operation presents its key's slot on acceptance and executes one cycle later. Collector
+controls other than Begin, Commit, and NextMarked likewise take one cycle more than their handshake,
+and Exchange takes one more to drop its second entry.
 
-Compact codes 4–63 are reserved and return `BadValue` when probed. The four supported codes require
-service-installed class references before use. A compact selection has size zero, base zero, clear
-flags, and a zero-extended payload as its representation. Decoding a compact value causes no pager
-or object-memory transaction.
+Operations that must inspect every entry walk the table one slot per cycle, presenting each slot a
+cycle ahead: `2**PAGER_BITS` cycles for a raw service write, SetBodyCursor, collector Begin, and
+collector Commit, and up to that many for NextObject. Each walk runs while its operation holds the
+core exclusively and completes before the operation's response.
 
-Body words and VRs can contain any 40-bit pattern. Probing interprets tags and rejects noncanonical
-references or compact values. Index operands instead interpret all 40 bits as a signed
-two's-complement integer. The index range is `-2**39` through `2**39-1`.
+Reset cannot clear the RAM. After reset OBJEKT drops one entry per cycle and accepts no command,
+service, or collector operation for `2**PAGER_BITS` cycles.
+
+`DEBUG_PORT` adds the debug slot's combinational read of the table. The simulation wrapper keeps it;
+a hardware build sets it to zero, because an unregistered port would keep the table out of block
+RAM, and the debug entry outputs then read zero.
 
 ## Provisional control fields
 
@@ -175,7 +173,8 @@ accepts at most one command or service operation at a time. After acceptance, it
 needed to finish the operation. The sender may then change its inputs. Changing `run_i` affects
 later acceptance; it does not cancel an accepted operation.
 
-Resident operations without memory commit on their acceptance edge. Resident memory operations
+Resident operations without memory commit on their acceptance edge, or one edge later when they
+carry a pager operation. Resident memory operations
 commit on the successful memory-completion edge. Fetch misses and allocations commit their pager
 entry and selection after the complete transfer succeeds. Allocator reservations and transfer side
 effects have the separate failure rules specified below. That commit is architectural retirement:

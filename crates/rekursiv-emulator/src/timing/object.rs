@@ -42,7 +42,13 @@ impl ObjectPath {
     }
 }
 impl Estimate {
-    pub(crate) fn object(&mut self, path: ObjectPath, outcome: &Outcome, asynchronous: bool) {
+    pub(crate) fn object(
+        &mut self,
+        path: ObjectPath,
+        paged: bool,
+        outcome: &Outcome,
+        asynchronous: bool,
+    ) {
         let ram = outcome.memory.len() as u64;
         let backing = outcome.store.len() as u64;
         let ram_cycles = ram * self.config.ram.cycles();
@@ -54,6 +60,9 @@ impl Estimate {
         // Each engine serializes its RAM and backing requests. Their sum is
         // sufficient here; Outcome does not promise cross-channel ordering.
         let mut service = 1 + ram_cycles + backing_cycles; // final response edge
+                                                           // A command that pages a key waits one cycle for the pager table.
+                                                           // Commands on the selected or prepared object read registers only.
+        service += u64::from(paged);
         let status = outcome.response.status;
         let approximate = !matches!(status, Status::Ok | Status::OutOfSpace);
         match path {
@@ -81,7 +90,8 @@ impl Estimate {
             ObjectPath::Exchange => {
                 // SELECT_META for each key, then DONE/publication. Equal keys
                 // exit after the first selection, before opening a save batch.
-                service += 2 + u64::from(outcome.store.iter().any(|r| r.op == StoreOp::BeginBatch));
+                // One more to drop the second resident entry after the batch.
+                service += 3 + u64::from(outcome.store.iter().any(|r| r.op == StoreOp::BeginBatch));
             }
         }
         self.work.approximate_objects += u64::from(approximate);

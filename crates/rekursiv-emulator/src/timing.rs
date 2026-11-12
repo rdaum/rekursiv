@@ -215,7 +215,14 @@ impl Estimate {
         }
         if collector && !matches!(i.recovery, Recovery::None | Recovery::Return) {
             let ram = matches!(i.recovery, Recovery::ReadBody | Recovery::WriteBody);
-            let extra = 2 + if ram { self.config.ram.cycles() } else { 0 };
+            // Begin, Commit, and NextMarked present their first slot on
+            // acceptance. Every other control waits a cycle for its slot's
+            // table entry.
+            let walk = matches!(
+                i.recovery,
+                Recovery::Begin | Recovery::Commit | Recovery::NextMarked
+            );
+            let extra = 2 + u64::from(!walk) + if ram { self.config.ram.cycles() } else { 0 };
             self.cycles.maintenance_wait += extra;
             self.work.collector_cycles += extra;
             if ram {
