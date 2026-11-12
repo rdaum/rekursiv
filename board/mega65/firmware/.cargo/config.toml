@@ -1,8 +1,7 @@
 [build]
 target = "riscv32im-unknown-none-elf"
 
-[target.riscv32im-unknown-none-elf]
-rustflags = ["-C", "link-arg=-Tmemory.x"]
+# firmware/build.sh passes each binary its linker script.
 
 [alias]
 # Store and FAT tests run on the build machine.

@@ -182,7 +182,7 @@ module mega65_top (
     ODDR #(.DDR_CLK_EDGE("SAME_EDGE")) sdram_clk_fwd (
         .C(clk_cpu), .CE(1'b1), .D1(1'b0), .D2(1'b1), .R(1'b0), .S(1'b0), .Q(sdram_clk_o)
     );
-    rekursiv_system #(.BOOT_FILE("boot.mem"), .FIRMWARE("firmware.mem")) machine (
+    rekursiv_system #(.FIRMWARE("loader.mem")) machine (
         .clk_i(clk_cpu), .rst_i(rst_cpu),
         .sd_clk_o(sd2_clk_o), .sd_cs_n_o(sd2_reset_o), .sd_mosi_o(sd2_mosi_o),
         .sd_miso_i(sd2_miso_i), .disk_display_o(disk_rows),

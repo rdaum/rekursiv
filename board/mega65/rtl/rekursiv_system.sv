@@ -4,16 +4,15 @@
 // - Object memory is the board's SDRAM: 2^23 words.
 // - The disk processor serves the backing store from the SD card.
 // - The device channel serves only the debug display (0xf00-0xf1f).
-// - A boot sequencer replays a stream from BOOT_FILE through LOGIK's halted
-//   programming port, then starts the processor. The start record says
-//   whether collection is enabled and where the collector begins.
+// - The disk processor loads the microcode: it replays a boot stream from a
+//   file on the card through LOGIK's halted programming port, then starts
+//   the processor. The start record says whether collection is enabled and
+//   where the collector begins.
 module rekursiv_system #(
     parameter integer PAGER_BITS = 10,
     parameter integer MEMORY_WORDS = 8388608,
     parameter integer CODE_WORDS = 8192,
-    parameter integer BOOT_RECORDS = 1024,
-    parameter BOOT_FILE = "boot.mem",
-    parameter FIRMWARE = "firmware.mem"
+    parameter FIRMWARE = "loader.mem"
 )(
     input  logic        clk_i,
     input  logic        rst_i,
@@ -45,40 +44,25 @@ module rekursiv_system #(
     output logic [15:0] pc_o
 );
     // ---------------------------------------------------------------------
-    // Boot sequencer
+    // Boot: the disk processor programs LOGIK from a file on the card, then
+    // starts it. The record layout is boot_stream's.
     // ---------------------------------------------------------------------
-    logic [63:0] boot_rom [BOOT_RECORDS];
-    initial $readmemh(BOOT_FILE, boot_rom);
-
-    logic [$clog2(BOOT_RECORDS)-1:0] boot_index;
-    logic        boot_done;
-    wire  [63:0] record = boot_rom[boot_index];
-    wire  [1:0]  kind = record[63:62];
-    logic        boot_ready, start;
+    logic [63:0] record;
+    logic        boot_valid, boot_ready, start_request, start;
     logic        gc_enable;
     logic [15:0] gc_entry;
 
-    // The boot stream waits for the memory check.
-    wire boot_enable = memory_tested_o && !memory_failed_o && !boot_done;
-    wire boot_valid = boot_enable && kind == 2'd1;
-    assign start = boot_enable && kind == 2'd2 && halted_o;
-
+    assign start = start_request && halted_o && !booted_o;
     always_ff @(posedge clk_i) begin
         if (rst_i) begin
-            boot_index <= '0;
-            boot_done  <= 1'b0;
-            gc_enable  <= 1'b0;
-            gc_entry   <= '0;
-        end else if (boot_enable) begin
-            if (start) begin
-                gc_enable <= record[16];
-                gc_entry  <= record[47:32];
-            end
-            if (boot_valid && boot_ready) boot_index <= boot_index + 1'b1;
-            if (start || kind == 2'd0 || kind == 2'd3) boot_done <= 1'b1;
-        end
+            booted_o  <= 1'b0;
+            gc_enable <= 1'b0;
+            gc_entry  <= '0;
+        end else if (start) begin
+            gc_enable <= record[16];
+            gc_entry  <= record[47:32];
+        end else if (start_request && !halted_o) booted_o <= 1'b1;
     end
-    assign booted_o = boot_done;
 
     // ---------------------------------------------------------------------
     // LOGIK <-> OBJEKT
@@ -214,6 +198,9 @@ module rekursiv_system #(
         .store_rsp_class_o(store_rsp_class), .store_rsp_size_o(store_rsp_size),
         .store_rsp_cond_o(store_rsp_cond), .store_rsp_data_o(store_rsp_data),
         .sd_clk_o, .sd_cs_n_o, .sd_mosi_o, .sd_miso_i,
+        .boot_record_o(record), .boot_valid_o(boot_valid), .boot_ready_i(boot_ready),
+        .start_o(start_request),
+        .machine_status_i({booted_o, memory_failed_o, memory_tested_o, halted_o}),
         .display_o(disk_display_o));
 
     // ---------------------------------------------------------------------

@@ -4,4 +4,6 @@
 
 pub mod disk;
 pub mod fat;
+pub mod hw;
+pub mod image;
 pub mod store;

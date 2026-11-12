@@ -1,33 +1,23 @@
-//! Disk processor firmware: find REKURSIV.IMG on the card, open the object
-//! store in it, and serve OBJEKT's backing-store requests from it.
+//! Disk processor firmware, loaded from REKURSIV.FW by the loader. It opens
+//! the object store in REKURSIV.IMG, programs the machine from the boot
+//! stream in REKURSIV.BOO and starts it, then serves OBJEKT's backing-store
+//! requests.
 //!
 //! Display rows: 0 signature or error, 1 SD status, 2 image size in sectors,
-//! 3 extents, 4 committed generation, 5 log head, 6 requests served,
-//! 7 last request (op in bits 31:28, identity below).
+//! 3 boot records sent, 4 committed generation, 5 log head, 6 requests
+//! served, 7 last request (op in bits 31:28, identity below).
+//! Errors in row 0: e1 card, e2nn store file (FAT error nn), e3nn store
+//! format, e5nn boot file (FAT error nn), e6 memory check failed.
 #![no_std]
 #![no_main]
 
-mod hw;
-
 use disk_firmware::disk::FileDisk;
 use disk_firmware::fat;
+use disk_firmware::hw::{display, machine, mailbox, sd, Card};
+use disk_firmware::image;
 use disk_firmware::store::{status, Reply, Store};
-use hw::{display, mailbox, sd, Card};
 
-core::arch::global_asm!(
-    ".section .text.start",
-    ".global _start",
-    "_start:",
-    "    la sp, _stack_top",
-    "    la t0, _bss_start",
-    "    la t1, _bss_end",
-    "1:  bgeu t0, t1, 2f",
-    "    sw zero, 0(t0)",
-    "    addi t0, t0, 4",
-    "    j 1b",
-    "2:  call main",
-    "3:  j 3b",
-);
+disk_firmware::startup!();
 
 /// Serve every request with a service error, showing why on row 0.
 fn refuse(error: u32) -> ! {
@@ -52,24 +42,48 @@ fn open() -> Result<Store<FileDisk<Card>>, u32> {
         return Err(0xe100_0000);
     }
     let mut card = Card;
-    let file = fat::find(&mut card, b"REKURSIVIMG").map_err(|e| 0xe200_0000 | e as u32)?;
+    let file = fat::find(&mut card, image::STORE_NAME).map_err(|e| 0xe200_0000 | e as u32)?;
     let disk = FileDisk {
         device: card,
         extents: file.extents,
         count: file.count,
     };
     display(2, disk.sectors());
-    display(3, file.count as u32);
     Store::open(disk).map_err(|e| 0xe300_0000 | e as u32)
+}
+
+/// Program the machine from the boot stream and start it.
+fn boot_machine() -> Result<(), u32> {
+    while machine::status() & machine::MEMORY_TESTED == 0 {}
+    if machine::status() & machine::MEMORY_FAILED != 0 {
+        return Err(0xe600_0000);
+    }
+    let mut file = image::open(Card, image::BOOT_NAME).map_err(|e| 0xe500_0000 | e as u32)?;
+    let mut sent = 0u32;
+    file.sectors(|sector, valid| {
+        for record in sector[..valid].chunks_exact(8) {
+            let record = u64::from_le_bytes(record.try_into().unwrap());
+            if record >> 62 == 0 {
+                continue;
+            }
+            machine::record(record);
+            sent += 1;
+        }
+        display(3, sent);
+    })
+    .map_err(|e| 0xe500_0000 | e as u32)
 }
 
 #[no_mangle]
 extern "C" fn main() -> ! {
-    display(0, 0x5244_4b33); // "RDK3"
+    display(0, 0x5244_4b34); // "RDK4"
     let mut store = match open() {
         Ok(store) => store,
         Err(error) => refuse(error),
     };
+    if let Err(error) = boot_machine() {
+        refuse(error);
+    }
     let mut served = 0u32;
     loop {
         let sb = store.superblock();
@@ -91,6 +105,6 @@ extern "C" fn main() -> ! {
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
-    display(0, 0xdead_dead);
+    display(0, 0xdead_0002);
     loop {}
 }

@@ -20,6 +20,11 @@ name = "disk-firmware"
 test = false
 bench = false
 
+[[bin]]
+name = "loader"
+test = false
+bench = false
+
 [profile.release]
 opt-level = "s"
 lto = true

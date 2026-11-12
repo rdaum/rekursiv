@@ -17,7 +17,7 @@ module system_tb;
         .clk_i(~clk), .cke_i(m_cke), .cs_n_i(m_cs_n), .ras_n_i(m_ras_n), .cas_n_i(m_cas_n),
         .we_n_i(m_we_n), .ba_i(m_ba), .a_i(m_a), .dq_i(m_dq_out), .dq_driven_i(m_dq_oe), .dq_o(m_dq_in));
     logic [31:0] disk [8];
-    rekursiv_system #(.BOOT_FILE("build/sim/boot.mem"), .FIRMWARE("build/sim/firmware.mem")) machine (
+    rekursiv_system #(.FIRMWARE("build/sim/loader.mem")) machine (
         .clk_i(clk), .rst_i(rst),
         .sd_clk_o(sd_clk), .sd_cs_n_o(sd_cs_n), .sd_mosi_o(sd_mosi), .sd_miso_i(sd_miso),
         .disk_display_o(disk), .debug_o(debug), .booted_o(booted),
@@ -35,6 +35,7 @@ module system_tb;
         repeat (cycles) @(posedge clk);
         $display("booted=%0d halted=%0d service=%0d fault=%0d pc=%0d memory tested=%0d failed=%0d sdram violations=%0d",
                  booted, halted, service, fault, pc, memory_tested, memory_failed, ram.errors);
+        $display("disk processor trap=%0d pc=%h", machine.disk.cpu.trap, machine.disk.cpu.reg_pc);
         for (int i = 0; i < 8; i++) $display("debug[%0d] = %08x   disk[%0d] = %08x", i, debug[i], i, disk[i]);
         $finish;
     end

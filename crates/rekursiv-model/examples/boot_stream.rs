@@ -7,8 +7,9 @@
 //! the top of the control store, sized for that configuration.
 //!
 //! The stream replays the halted programming interface that the simulator
-//! drives, then starts the processor. One 64-bit record per line, in hex, for
-//! `$readmemh`:
+//! drives, then starts the processor. An output named `*.boo` holds the
+//! 64-bit records as little-endian binary, the form the MEGA65 board loads
+//! from its SD card. Any other name gets one record per line in hex:
 //!
 //!   bits 63:62  1 = programming write, 2 = start, 0 = end of stream
 //!   write:      57:56 space, 50:48 lane, 47:32 address, 31:0 data
@@ -100,11 +101,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_or(0, |entry| 1 << 16 | u64::from(entry) << 32);
     records.push(2 << 62 | collector | u64::from(assembly.entry.unwrap_or(0)));
 
-    let mut text = String::new();
-    for record in &records {
-        writeln!(text, "{record:016x}")?;
+    // A .boo file is the binary form the board loads from its SD card.
+    if output.to_ascii_lowercase().ends_with(".boo") {
+        let bytes: Vec<u8> = records.iter().flat_map(|r| r.to_le_bytes()).collect();
+        std::fs::write(output, bytes)?;
+    } else {
+        let mut text = String::new();
+        for record in &records {
+            writeln!(text, "{record:016x}")?;
+        }
+        std::fs::write(output, text)?;
     }
-    std::fs::write(output, text)?;
     eprintln!("{} records", records.len());
     Ok(())
 }

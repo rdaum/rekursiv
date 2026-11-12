@@ -1,4 +1,5 @@
 //! Memory-mapped registers of the disk processor (rtl/disk_processor.sv).
+//! Only meaningful on the board's RISC-V core.
 use core::ptr::{read_volatile, write_volatile};
 
 fn reg_read(address: usize) -> u32 {
@@ -59,14 +60,14 @@ pub mod sd {
 /// The SD card as a sector device, through the controller's buffer.
 pub struct Card;
 
-impl disk_firmware::disk::Disk for Card {
+impl crate::disk::Disk for Card {
     fn read(
         &mut self,
         sector: u32,
-        data: &mut disk_firmware::disk::Sector,
-    ) -> Result<(), disk_firmware::disk::DiskError> {
+        data: &mut crate::disk::Sector,
+    ) -> Result<(), crate::disk::DiskError> {
         if sd::read(sector) & sd::ERROR != 0 {
-            return Err(disk_firmware::disk::DiskError);
+            return Err(crate::disk::DiskError);
         }
         data.copy_from_slice(sd::buffer());
         Ok(())
@@ -74,11 +75,11 @@ impl disk_firmware::disk::Disk for Card {
     fn write(
         &mut self,
         sector: u32,
-        data: &disk_firmware::disk::Sector,
-    ) -> Result<(), disk_firmware::disk::DiskError> {
+        data: &crate::disk::Sector,
+    ) -> Result<(), crate::disk::DiskError> {
         sd::buffer().copy_from_slice(data);
         if sd::write_sector(sector) & sd::ERROR != 0 {
-            return Err(disk_firmware::disk::DiskError);
+            return Err(crate::disk::DiskError);
         }
         Ok(())
     }
@@ -86,7 +87,7 @@ impl disk_firmware::disk::Disk for Card {
 
 pub mod mailbox {
     use super::{reg_read, reg_write};
-    use disk_firmware::store::{Reply, Request};
+    use crate::store::{Reply, Request};
     const BASE: usize = 0x2000_0000;
 
     fn word(at: usize) -> u64 {
@@ -121,4 +122,46 @@ pub mod mailbox {
         reg_write(BASE + 0x60, (reply.data >> 32) as u32);
         reg_write(BASE + 0x64, 1);
     }
+}
+
+/// The main machine's boot port.
+pub mod machine {
+    use super::{reg_read, reg_write};
+    const BASE: usize = 0x4000_0000;
+    pub const HALTED: u32 = 1 << 0;
+    pub const MEMORY_TESTED: u32 = 1 << 1;
+    pub const MEMORY_FAILED: u32 = 1 << 2;
+    pub const STARTED: u32 = 1 << 3;
+    const PENDING: u32 = 1 << 4;
+
+    pub fn status() -> u32 {
+        reg_read(BASE)
+    }
+    /// Send one boot_stream record: a programming write or the start record.
+    pub fn record(record: u64) {
+        reg_write(BASE + 4, record as u32);
+        reg_write(BASE + 8, (record >> 32) as u32);
+        while status() & PENDING != 0 {}
+    }
+}
+
+/// Reset entry for a binary: set the stack, clear .bss, call `main`.
+#[macro_export]
+macro_rules! startup {
+    () => {
+        core::arch::global_asm!(
+            ".section .text.start",
+            ".global _start",
+            "_start:",
+            "    la sp, _stack_top",
+            "    la t0, _bss_start",
+            "    la t1, _bss_end",
+            "1:  bgeu t0, t1, 2f",
+            "    sw zero, 0(t0)",
+            "    addi t0, t0, 4",
+            "    j 1b",
+            "2:  call main",
+            "3:  j 3b",
+        );
+    };
 }

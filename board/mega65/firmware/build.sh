@@ -1,21 +1,29 @@
 #!/usr/bin/env bash
-# Build the disk processor firmware and write it as 32-bit words for $readmemh.
-#   firmware/build.sh OUT.mem
+# Build the disk processor's two programs into OUT_DIR:
+#   loader.mem    the first-stage loader, as 32-bit words for $readmemh;
+#                 it is built into the bitstream
+#   REKURSIV.FW   the main firmware, loaded from the card at start-up
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 out="$(realpath -m "$1")"
-(cd "$here" && cargo build -q --release)
-elf="$here/target/riscv32im-unknown-none-elf/release/disk-firmware"
+mkdir -p "$out"
 objcopy="$(ls "$(rustc --print sysroot)"/lib/rustlib/*/bin/llvm-objcopy | head -1)"
-"$objcopy" -O binary "$elf" "$out.bin"
-python3 - "$out.bin" "$out" <<'PY'
-import sys
-data = open(sys.argv[1], "rb").read()
-data += bytes(-len(data) % 4)
-if len(data) > 65536:
-    sys.exit(f"firmware is {len(data)} bytes; the disk processor has 65536")
-with open(sys.argv[2], "w") as f:
-    for i in range(0, len(data), 4):
-        f.write(f"{int.from_bytes(data[i:i+4], 'little'):08x}\n")
+cd "$here"
+for program in loader:loader.x disk-firmware:firmware.x; do
+    cargo rustc -q --release --bin "${program%%:*}" -- -C "link-arg=-T${program##*:}"
+    "$objcopy" -O binary "target/riscv32im-unknown-none-elf/release/${program%%:*}" "$out/${program%%:*}.bin"
+done
+python3 - "$out" <<'PY'
+import sys, zlib
+out = sys.argv[1]
+loader = open(f"{out}/loader.bin", "rb").read()
+loader += bytes(-len(loader) % 4)
+with open(f"{out}/loader.mem", "w") as f:
+    for i in range(0, len(loader), 4):
+        f.write(f"{int.from_bytes(loader[i:i+4], 'little'):08x}\n")
+firmware = open(f"{out}/disk-firmware.bin", "rb").read()
+header = b"RKFW" + len(firmware).to_bytes(4, "little") + zlib.crc32(firmware).to_bytes(4, "little")
+open(f"{out}/REKURSIV.FW", "wb").write(header + firmware)
+print(f"loader {len(loader)} bytes, firmware {len(firmware)} bytes")
 PY
-rm "$out.bin"
+rm "$out/loader.bin" "$out/disk-firmware.bin"

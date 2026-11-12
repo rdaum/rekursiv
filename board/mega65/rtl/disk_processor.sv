@@ -22,6 +22,13 @@
 //                  +0x64 (w) send the response; the request slot frees once
 //                        OBJEKT accepts it
 //   0x3000_0000  display rows 0-7 (w)
+//   0x4000_0000  machine boot port
+//                  +0x00 status (r): 0 LOGIK halted, 1 memory check done,
+//                        2 memory check failed, 3 machine started,
+//                        4 a programming write is still pending
+//                  +0x04 (w) low half of a boot_stream record
+//                  +0x08 (w) high half; a programming record (kind 1) is then
+//                        written to LOGIK, a start record (kind 2) starts it
 module disk_processor #(
     parameter integer RAM_BYTES = 65536,
     parameter FIRMWARE = "firmware.mem"
@@ -53,6 +60,13 @@ module disk_processor #(
     output logic        sd_cs_n_o,
     output logic        sd_mosi_o,
     input  logic        sd_miso_i,
+
+    // Machine boot port
+    output logic [63:0] boot_record_o,
+    output logic        boot_valid_o,
+    input  logic        boot_ready_i,
+    output logic        start_o,
+    input  logic [3:0]  machine_status_i,
 
     output logic [31:0] display_o [8]
 );
@@ -231,6 +245,28 @@ module disk_processor #(
     end
 
     // ---------------------------------------------------------------------
+    // Machine boot port
+    // ---------------------------------------------------------------------
+    always_ff @(posedge clk_i) begin
+        if (rst_i) begin
+            boot_valid_o <= 1'b0;
+            start_o <= 1'b0;
+            boot_record_o <= '0;
+        end else begin
+            if (boot_valid_o && boot_ready_i) boot_valid_o <= 1'b0;
+            if (mem_valid && !mem_ready && write && region == 4'h4) begin
+                if (mem_addr[7:0] == 8'h04) boot_record_o[31:0] <= mem_wdata;
+                if (mem_addr[7:0] == 8'h08) begin
+                    boot_record_o[63:32] <= mem_wdata;
+                    if (mem_wdata[31:30] == 2'd1) boot_valid_o <= 1'b1;
+                    if (mem_wdata[31:30] == 2'd2) start_o <= 1'b1;
+                end
+            end
+        end
+    end
+    wire [31:0] boot_status = {27'd0, boot_valid_o, machine_status_i};
+
+    // ---------------------------------------------------------------------
     // Display rows
     // ---------------------------------------------------------------------
     always_ff @(posedge clk_i) begin
@@ -250,7 +286,7 @@ module disk_processor #(
         else mem_ready <= mem_valid && !mem_ready;
         region_q <= region;
         sd_buffer_q <= mem_addr[9];
-        register_q <= region == 4'h1 ? sd_status : mailbox_rdata;
+        register_q <= region == 4'h1 ? sd_status : region == 4'h4 ? boot_status : mailbox_rdata;
     end
     assign mem_rdata = region_q == 4'h0 ? ram_rdata :
                        region_q == 4'h1 && sd_buffer_q ? buffer_rdata : register_q;

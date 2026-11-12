@@ -12,8 +12,7 @@ read_verilog -sv [concat [glob $here/rtl/*.sv] \
           $root/rtl/numerik.sv $root/rtl/numerik_alu.sv $root/rtl/numerik_fp32.sv \
           $root/rtl/numerik_fp64.sv $root/rtl/objekt.sv $root/rtl/objekt_directory.sv \
           $root/rtl/objekt_exchange.sv $root/rtl/objekt_gc.sv $root/rtl/objekt_transfer.sv]]
-read_mem $out/boot.mem
-read_mem $out/firmware.mem
+read_mem $out/loader.mem
 read_xdc $here/mega65r6.xdc
 
 synth_design -top mega65_top -part $part \
