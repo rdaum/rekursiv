@@ -10,6 +10,43 @@ use rekursiv_asm::{
     ADDRESS_LIMIT, ID_MASK,
 };
 impl Model {
+    /// The identity the next allocation takes: the first one at or after
+    /// `next_identity` whose slot holds no resident object, or `next_identity`
+    /// itself when every slot is occupied.
+    ///
+    /// Identities are never reused, so without this an allocation would
+    /// displace whatever long-lived object shares its slot while other slots
+    /// stand empty. Skipped identities are never issued. Nothing changes
+    /// until the allocation reserves its identity.
+    ///
+    /// # Errors
+    ///
+    /// `IdentityExhausted` when the search runs off the identity space.
+    pub fn free_identity(&self) -> Result<u64, Status> {
+        for identity in (self.next_identity..).take(self.entries.len()) {
+            if identity > ID_MASK {
+                return Err(Status::IdentityExhausted);
+            }
+            if self.entries[identity as usize & (self.entries.len() - 1)].is_none() {
+                return Ok(identity);
+            }
+        }
+        Ok(self.next_identity)
+    }
+    /// Cycles hardware spends choosing the next allocation's identity beyond
+    /// the acceptance cycle: one for each occupied candidate it passes over.
+    /// When every slot is occupied that is one per slot, the last of them
+    /// reading the victim.
+    pub fn allocation_skips(&self) -> u64 {
+        let occupied = |identity: &u64| {
+            *identity <= ID_MASK
+                && self.entries[*identity as usize & (self.entries.len() - 1)].is_some()
+        };
+        (self.next_identity..)
+            .take(self.entries.len())
+            .take_while(occupied)
+            .count() as u64
+    }
     /// Validate and execute a standalone fetch or allocation transaction.
     ///
     /// A resident fetch returns without RAM traffic. A miss or allocation can
@@ -48,11 +85,9 @@ impl Model {
                 return Err(Status::BadCommand);
             }
             let mut incoming = if c.pager == Pager::Allocate {
-                if self.next_identity > ID_MASK {
-                    return Err(Status::IdentityExhausted);
-                }
+                let identity = self.free_identity()?;
                 Entry {
-                    reference: Word::reference(self.next_identity, c.alloc_scan)?,
+                    reference: Word::reference(identity, c.alloc_scan)?,
                     class: c.data,
                     size: c.alloc_size,
                     base: 0,
@@ -91,7 +126,7 @@ impl Model {
             incoming.base = self.body_cursor & (ADDRESS_LIMIT - 1);
             self.body_cursor = end as u32;
             if c.pager == Pager::Allocate {
-                self.next_identity += 1;
+                self.next_identity = (incoming.reference.bits() & ID_MASK) + 1;
             }
             let slot = self.slot(incoming.reference);
             if let Some(victim) = self.entries[slot].get() {

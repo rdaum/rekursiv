@@ -568,3 +568,44 @@ fn imported_identity_reservation_is_monotonic_and_does_not_publish_an_object() -
     );
     Ok(())
 }
+
+#[test]
+fn allocation_skips_occupied_slots_and_evicts_only_when_every_slot_is_full() -> Result<()> {
+    let runtime = runtime()?;
+    let mut h = Harness::new(&runtime, Timing::default(), None)?;
+    bootstrap(&mut h)?;
+    assert_eq!(allocate(&mut h, 1, true), r(2));
+    assert_eq!(allocate(&mut h, 1, true), r(3));
+    // A refilled object now sits in the slot of the allocator's next identity.
+    let record = rekursiv_model::store::Record {
+        reference: r(20),
+        class: r(1),
+        cond: false,
+        body: vec![Word::signed(5)],
+    };
+    h.store.records.insert(20, record.clone());
+    h.oracle.store.records.insert(20, record);
+    good(&mut h, Command::fetch(r(20)));
+    assert_eq!(h.oracle.next_identity, 4);
+    let saves = h.stats.saved_objects;
+    // Identity 4 is passed over and never issued.
+    assert_eq!(allocate(&mut h, 1, true), r(5));
+    assert_eq!(h.oracle.next_identity, 6);
+    good(&mut h, Command::probe(r(20)));
+    assert_eq!(field(&mut h, 1), Word::signed(5));
+    assert_eq!(h.stats.saved_objects, saves);
+    // Fill the remaining slots: 6..=15 and 16, which maps to slot zero.
+    for id in 6..=16 {
+        assert_eq!(allocate(&mut h, 0, false).identity()?, id);
+    }
+    assert!(h.oracle.entries.iter().all(|e| e.is_some()));
+    assert_eq!(h.stats.saved_objects, saves);
+    // With no empty slot, the next identity displaces its slot's occupant.
+    assert_eq!(
+        allocate(&mut h, 0, false).identity()?,
+        17,
+        "identity 17 shares the bootstrap object's slot"
+    );
+    assert_eq!(h.execute(Command::probe(r(1)))?.status, Status::NotResident);
+    Ok(())
+}

@@ -92,7 +92,11 @@ impl Observation {
             _ => Lookup::Invalid,
         });
         let slot = if c.pager == Pager::Allocate {
-            Some(model.next_identity as usize & (model.entries.len() - 1))
+            // The slot of the identity the allocation will take.
+            model
+                .free_identity()
+                .ok()
+                .map(|identity| identity as usize & (model.entries.len() - 1))
         } else if c.pager == Pager::Fetch
             && matches!(lookup, Some(Lookup::Empty | Lookup::Collision))
         {

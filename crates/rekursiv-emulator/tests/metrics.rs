@@ -29,9 +29,9 @@ fn collisions_count_completed_victims_and_actual_word_traffic() -> Result<()> {
          d=0xa000000011, page=Fetch
          d=0xa000000001, page=Fetch
          d=0xa000000064, page=Allocate, size=4, scan=1
-         d=0xa000000011, page=Fetch
+         d=0xa000000012, page=Fetch
          d=0xc20000002a, page=Fetch
-         d=0xa000000011, page=ProbeBus
+         d=0xa000000012, page=ProbeBus
          halt",
         512,
     )?;
@@ -39,6 +39,9 @@ fn collisions_count_completed_victims_and_actual_word_traffic() -> Result<()> {
     m.objekt_metrics_enabled = true;
     m.objekt.store.records.insert(1, record(1, 3));
     m.objekt.store.records.insert(17, record(17, 2));
+    // Identity 33 shares resident object 1's slot, so the allocation takes
+    // 34. Record 18 shares that slot and later displaces the new object.
+    m.objekt.store.records.insert(18, record(18, 2));
     m.objekt.next_identity = 33;
     m.objekt.classes[2] = Some(Word::reference(100, true)?).into();
     while m.step()? != Step::Halted {}
@@ -55,7 +58,7 @@ fn collisions_count_completed_victims_and_actual_word_traffic() -> Result<()> {
     assert_eq!(s.probe.hits, 1);
     assert_eq!(
         (s.evicted_clean, s.evicted_new, s.evicted_modified),
-        (2, 1, 1)
+        (1, 1, 1)
     );
     assert_eq!(
         (s.allocations, s.allocation_attempts, s.allocated_words),
@@ -79,7 +82,8 @@ fn collisions_count_completed_victims_and_actual_word_traffic() -> Result<()> {
     );
     assert_eq!((s.errors, s.out_of_space), (0, 0));
     assert_eq!(m.objekt.store.records[&1].body[1], Word::raw(7)?);
-    assert_eq!(m.objekt.store.records[&33].body, vec![Word::NIL; 4]);
+    assert_eq!(m.objekt.store.records[&34].body, vec![Word::NIL; 4]);
+    assert_eq!(m.objekt.next_identity, 35);
     Ok(())
 }
 

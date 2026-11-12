@@ -155,6 +155,8 @@ struct Execution {
     result: Word,
     status: u32,
     allocations: u64,
+    /// Identities consumed, including any passed over for an occupied slot.
+    identities: u64,
     collections: u64,
     proactive_collections: usize,
     low_space_checks: Vec<(u32, u32)>,
@@ -477,7 +479,14 @@ fn execute_machine(
         trace,
         result: h.oracle.state.vr[5],
         status: cpu.rf[15],
-        allocations: h.rtl.dbg_next_identity_o - converted.next_identity,
+        identities: h.rtl.dbg_next_identity_o - converted.next_identity,
+        // Count completed Allocate commands: the identity counter also
+        // advances past identities whose pager slot was occupied.
+        allocations: h
+            .commands
+            .iter()
+            .filter(|(c, r)| c.pager == 6 && r.status == rekursiv_asm::Status::Ok)
+            .count() as u64,
         collections: h.stats.collections,
         proactive_collections,
         low_space_checks,
@@ -663,10 +672,10 @@ fn imported_send_allocates_objects_and_returns_a_reference_after_collection() ->
     assert_eq!(e.result, Word::reference(32769, true)?);
     assert!(e.collections > 0, "no machine collection");
     assert!(e.saves > 0, "no eviction saves");
+    // Which command meets the exhausted heap depends on what is resident.
     assert!(
-        e.allocation_retries > 0,
-        "no allocation recovery ({} refill recoveries)",
-        e.refill_retries
+        e.allocation_retries + e.refill_retries > 0,
+        "no allocation or refill recovery"
     );
     let result = &e.records[&e.result.identity()?];
     assert_eq!(result.class, r(CLASS));
@@ -2323,8 +2332,16 @@ fn low_space_uses_full_width_thresholds_and_signals_only_after_strict_crossing()
             })?;
             assert_eq!((e.status, e.result), (1, i(2)));
             assert_eq!(e.allocations, 1 + u64::from(allocate_after));
-            let signaled = allocate_after || word_limit != 0;
-            assert_eq!(e.proactive_collections, usize::from(word_limit != 0));
+            // The identity threshold is one below the starting supply, so it
+            // is crossed once more than one identity has been consumed.
+            let signaled = e.identities > 1 || word_limit != 0;
+            assert!(e.identities >= e.allocations);
+            // Crossing the identity threshold signals at once, before the
+            // word limit can ask for a proactive collection.
+            assert_eq!(
+                e.proactive_collections,
+                usize::from(word_limit != 0 && e.identities <= 1)
+            );
             assert_eq!(
                 e.records[&r(312).identity()?].body[1..],
                 [r(2), r(2), i(i32::from(signaled))]

@@ -326,9 +326,16 @@ publish pager entries.
 `Command::allocate(class, size, scan)` selects Allocate with the corresponding operands. The 38-bit
 identity counter starts at one and represents exhaustion without wrapping. The 25-bit body cursor
 starts at zero and can represent the end of the 24-bit address space. Successful halted
-installations advance both counters without moving them backward. Allocation first checks identity
+installations advance both counters without moving them backward. Allocation first chooses its identity, then checks identity
 exhaustion, then body capacity. It reserves the identity and complete body range before any victim
 transfer. An empty object consumes an identity but no body words.
+
+Allocation takes the first identity, at or after the counter, whose pager slot is empty. It examines
+one candidate per pager slot, one per cycle after the acceptance cycle. Identities are never reused,
+so without this rule an allocation would displace a long-lived object while other slots stood empty.
+Identities it passes over are never issued. When every slot is occupied, allocation takes the
+counter's identity and its slot's occupant becomes the victim. A failed attempt that reserves no
+identity leaves the counter unchanged.
 
 `Command::fetch(reference)` selects Fetch. Resident hits and supported compact values complete
 without a backing-store request. A miss first obtains and validates backing metadata, then reserves

@@ -5,7 +5,8 @@ use rekursiv_model::{Model, Outcome};
 
 pub(crate) enum ObjectPath {
     Resident,
-    Transfer,
+    /// Carries the cycles OBJEKT spends finding a free identity.
+    Transfer(u64),
     /// Carries the cycles OBJEKT spends scanning resident metadata.
     Directory(u64),
     Exchange,
@@ -30,9 +31,9 @@ fn directory_scan(model: &Model, c: Command) -> u64 {
 impl ObjectPath {
     pub(crate) fn capture(model: &Model, c: Command) -> Self {
         match c.pager {
-            Pager::Allocate => Self::Transfer,
+            Pager::Allocate => Self::Transfer(model.allocation_skips()),
             Pager::Fetch if c.data.is_reference() && model.resolve(c.data).is_err() => {
-                Self::Transfer
+                Self::Transfer(0)
             }
             Pager::NextObject | Pager::FindObject => Self::Directory(directory_scan(model, c)),
             Pager::Exchange => Self::Exchange,
@@ -61,7 +62,8 @@ impl Estimate {
             // this estimator assumes no response-consumption backpressure.
             ObjectPath::Resident if ram != 0 => service -= 1,
             ObjectPath::Resident => (),
-            ObjectPath::Transfer => {
+            ObjectPath::Transfer(skips) => {
+                service += skips;
                 // RESERVE and DONE/publication, plus one initial FILL.
                 // Subsequent words go directly to WRITE (allocation) or
                 // GET (refill). Victim reads are distinct.

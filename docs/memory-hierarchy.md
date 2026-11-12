@@ -83,16 +83,16 @@ through to it, so it is always current. They are rare: flag transitions, allocat
 **Allocation skips occupied slots.** Identities are never reused, so a direct-mapped table would
 otherwise evict a long-lived object every 262,144 allocations. Instead the identity allocator
 advances past any identity whose table slot holds a live object. The 37-bit identity space makes the
-skipped identities free. Allocation then never evicts. A collision arises only when a refill from
-the store finds its slot taken, and when more than 262,144 objects are live.
+skipped identities free. OBJEKT already allocates this way on the pager.
 
-**Eviction to the store** therefore has two triggers, both rare:
+**Eviction to the store** has two triggers, both rare with a large table:
 
 1. A refill collides with a resident object. OBJEKT saves that object if it is new or modified, as
    the transfer engine does today, then replaces it.
-2. The heap is still full after a collection. The collector then evicts objects whose referenced
-   flag is clear, saving the dirty ones, until the request fits. The mechanism is an Evict control;
-   the choice of victims is collector microcode policy.
+2. Every table slot is occupied. Allocation then takes the next identity and evicts its slot's
+   occupant, saving it if it is new or modified. This is today's behaviour, reached only when the
+   table is full. A later step can choose the victim better, using the referenced flag, and can
+   collect before evicting.
 
 ## Collection
 
@@ -215,19 +215,18 @@ whole-pager invalidation is one increment. A sweep rewrites the entries when the
 | Page (all sources), Probe | One more cycle on a pager hit; a refill on a pager miss. `NotResident` only when the table has no matching entry.           |
 | Fetch                     | Transfers from the store only when the object is not in the table.                                                          |
 | Field read and write      | Unchanged on the selected or prepared object. The first write to a clean object also writes the modified flag to the table. |
-| Allocate                  | Takes the next identity whose table slot is empty (see below). Never saves a victim.                                        |
+| Allocate                  | Takes the next identity whose table slot is empty (see below). Saves a victim only when every table slot is occupied.       |
 | Exchange                  | Residency of both operands comes from the table.                                                                            |
 | NextObject, FindObject    | The resident scan reads table slots instead of pager slots.                                                                 |
 
-**Allocation.** The identity allocator advances until the candidate's table slot is empty. Each
-probe is one table read. If it probes `2**TABLE_BITS` slots without finding one, the table is full
-of live objects and Allocate returns `OutOfSpace`, which enters collection like body exhaustion.
-Skipped identities are never issued. The halted ReserveIdentities floor still applies.
+**Allocation.** As on the pager today: the allocator takes the first identity whose table slot is
+empty, probing one table entry per candidate. When all `2**TABLE_BITS` slots are occupied it takes
+the next identity and evicts its slot's occupant. The halted ReserveIdentities floor still applies.
 
 **Refill.** Fetch of an object that is not in the table reserves body space and streams the record
 from the store, as today. If its table slot holds another object, that object is the victim: OBJEKT
 saves it first when it is new or modified, exactly as the transfer engine does today for a pager
-collision, then replaces it. This is the only path on which an ordinary command saves a victim.
+collision, then replaces it.
 
 **Edges.** While a victim save or an exchange streams a record, each class and scanned body word
 that names a resident NEW object must become a persistence dependency when the save commits. OBJEKT
@@ -263,19 +262,15 @@ at 12.6 MHz. Two measures keep this tolerable and should be built with the step:
 
 - The Rust model's entry array models the object table and gains the persistent flag. The pager does
   not appear in the model. `Model::new` takes the table size.
-- The model allocates identities with the same skip rule, so differential tests see the same
-  identities as the RTL.
 - The emulator's cycle estimator gains pager hit and miss costs and the table walk costs.
-- Tests that force pager collisions to exercise victim saves must force table collisions through
-  Fetch instead. Tests that assert consecutive identities across a collision must change.
-- New tests: pager misses with no store traffic; allocation skipping an occupied slot; a full table
-  entering collection; the work-list collector on chains, cycles, and wide fan-out; edge-list commit
-  and abandon.
+- New tests: pager misses with no store traffic; a program with more live objects than pager slots
+  that issues no store requests; edge-list commit and abandon.
 
 ### Implementation order within the step
 
 1. The work-list collector, on the existing pager. Done.
-2. Model and emulator: table semantics and skip allocation.
+2. Skip allocation, on the existing pager, in the model, emulator, and RTL. Done. The model's entry
+   array now behaves as the object table will.
 3. RTL: the raw table port on the memory channel, the table engine, the pager cache, then the
    collector and transfer engines moved onto table entries.
 4. Board: SDRAM table port, sizes 18 and 14, and measurement of walk and collection times.

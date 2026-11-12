@@ -81,7 +81,7 @@ module objekt #(
     `include "objekt_address.svh"
     prepared_access_t prepared_access, next_prepared, pending_prepared;
     typedef enum logic [3:0] {IDLE, REQUEST, WAIT_MEMORY, RESPONSE, TRANSFER, EXCHANGE,
-        SERVICE_SCAN, DIRECTORY_SCAN, DIRECTORY_START, DIRECTORY} resident_state_t;
+        SERVICE_SCAN, DIRECTORY_SCAN, DIRECTORY_START, DIRECTORY, ALLOCATE_SCAN} resident_state_t;
     resident_state_t phase;
     logic [3:0] response_status;
     logic [39:0] response_data;
@@ -129,7 +129,19 @@ module objekt #(
     wire [39:0] transfer_mem_data;
     wire [170:0] transfer_entry;
     wire [3:0] transfer_status;
-    wire [PAGER_BITS-1:0] transfer_slot=(pager_i==6) ? dbg_next_identity_o[PAGER_BITS-1:0] : data_i[PAGER_BITS-1:0];
+    wire [PAGER_BITS-1:0] transfer_slot=data_i[PAGER_BITS-1:0];
+    // Allocation takes the first identity at or after the allocator's next
+    // one whose slot is empty, so it displaces a resident object only when
+    // every slot is occupied. The acceptance cycle tests the next identity
+    // itself; ALLOCATE_SCAN tests one further identity per cycle. When all
+    // ENTRIES candidates are occupied the probe wraps to the next identity,
+    // and one more cycle reads its occupant as the victim.
+    logic [PAGER_BITS-1:0] allocate_probe;
+    logic allocate_evict;
+    logic [39:0] allocate_class;
+    logic [23:0] allocate_size;
+    logic allocate_scan_tag;
+    wire [37:0] allocate_candidate=dbg_next_identity_o+38'(allocate_probe);
 
     // Pager table read ports. Validity is a separate bit vector.
     logic [PAGER_BITS-1:0] aux_slot, walk_slot;
@@ -170,13 +182,21 @@ module objekt #(
         if(gc_active_i) aux_slot=gc_slot;
         else case(phase)
             TRANSFER, EXCHANGE: aux_slot=edge_key[PAGER_BITS-1:0];
+            ALLOCATE_SCAN: aux_slot=allocate_candidate[PAGER_BITS-1:0];
             SERVICE_SCAN: aux_slot=walk_slot;
             DIRECTORY_SCAN: aux_slot=directory_probe[PAGER_BITS-1:0];
             default: aux_slot=!run_i ? svc_ref_i[PAGER_BITS-1:0] :
                 pager_i==6 ? dbg_next_identity_o[PAGER_BITS-1:0] : vr[vr_i][PAGER_BITS-1:0];
         endcase
     end
-    wire start_transfer=cmd_valid_i && cmd_ready_o && ((pager_i==5 && error==NOT_RESIDENT) || (pager_i==6 && error==OK));
+    wire start_fetch=cmd_valid_i && cmd_ready_o && pager_i==5 && error==NOT_RESIDENT;
+    wire accept_allocate=cmd_valid_i && cmd_ready_o && pager_i==6 && error==OK;
+    // An exhausted identity goes straight to the engine, which reports it.
+    wire allocate_now=accept_allocate && (!aux_valid || dbg_next_identity_o[37]);
+    wire allocate_search=accept_allocate && !allocate_now;
+    wire allocate_last=allocate_probe==PAGER_BITS'(ENTRIES-1);
+    wire allocate_found=phase==ALLOCATE_SCAN && (allocate_evict || !aux_valid || allocate_candidate[37]);
+    wire start_transfer=start_fetch || allocate_now || allocate_found;
     wire seed_transfer=svc_valid_i && svc_ready_o && svc_op_i==0 && is_ref(svc_ref_i) && is_ref(svc_class_i) && (svc_size_i!=0 || svc_repr_i==NIL);
     wire transfer_store_valid;
     wire [3:0] transfer_store_op;
@@ -223,10 +243,14 @@ module objekt #(
     // Allocate. Probe remains resident-only. While TRANSFER owns the memory bus,
     // no resident command or halted service operation can enter the core.
     objekt_transfer #(.MEMORY_WORDS(MEMORY_WORDS)) transfer (
-        .clk_i(clk_i),.rst_i(rst_i),.start_i(start_transfer),.allocate_i(pager_i==6),
-        .target_i(data_i),.size_i(alloc_size_i),.scan_i(alloc_scan_i),
-        .victim_valid_i(pager_i==6 ? aux_valid : page_stored_valid),
-        .victim_i(pager_i==6 ? aux_stored : page_stored),
+        .clk_i(clk_i),.rst_i(rst_i),.start_i(start_transfer),
+        .allocate_i(phase==ALLOCATE_SCAN || pager_i==6),
+        .target_i(phase==ALLOCATE_SCAN ? allocate_class : data_i),
+        .size_i(phase==ALLOCATE_SCAN ? allocate_size : alloc_size_i),
+        .scan_i(phase==ALLOCATE_SCAN ? allocate_scan_tag : alloc_scan_i),
+        .identity_i(phase==ALLOCATE_SCAN ? allocate_candidate : dbg_next_identity_o),
+        .victim_valid_i(start_fetch ? page_stored_valid : allocate_evict && aux_valid),
+        .victim_i(start_fetch ? page_stored : aux_stored),
         .seed_i(seed_transfer),.seed_ref_i(svc_ref_i),.seed_base_i(svc_base_i),.seed_size_i(svc_size_i),
         .cursor_set_i(gc_commit || scan_cursor_set),
         .cursor_i(gc_commit ? gc_cursor : scan_value),
@@ -535,6 +559,7 @@ module objekt #(
             resident_mem_write_o<=0;resident_mem_addr_o<=0;resident_mem_data_o<=0;
             pending_idx<=0;pending_reg<=0;pending_selected<=0;pending_load_vr<=0;
             pending_mutator<=0;pending_write<=0;pending_vr<=0; directory_vr<=0;pending_data<=0;pending_snapshot<=0;pending_slot<=0; saved_victim_slot<=0; saved_edges<=0; saved_scan<=0; exchange_edges<='0;
+            allocate_probe<='0; allocate_evict<=0; allocate_class<=0; allocate_size<=0; allocate_scan_tag<=0;
             victim_scan<=0; walk_slot<='0; scan_cursor<=0; scan_clear<=0; scan_value<=0;
             directory_next<=0; directory_identity<=0; directory_best_ref<=NIL; directory_best_class<=NIL;
             for(j=0;j<8;j=j+1) vr[j]<=NIL;
@@ -588,7 +613,11 @@ module objekt #(
                         else if(start_exchange) phase<=EXCHANGE;
                         else if(start_transfer) begin
                             phase<=TRANSFER; saved_victim_slot<=transfer_slot;
-                            victim_scan<=pager_i==6 ? aux_stored[37] : page_stored[37];
+                            victim_scan<=page_stored[37];
+                        end else if(allocate_search) begin
+                            phase<=ALLOCATE_SCAN; allocate_probe<=PAGER_BITS'(1); allocate_evict<=0;
+                            allocate_class<=data_i; allocate_size<=alloc_size_i;
+                            allocate_scan_tag<=alloc_scan_i;
                         end
                         else if(error!=OK) phase<=RESPONSE;
                         else if(need_memory) begin
@@ -693,6 +722,13 @@ module objekt #(
                     if(!directory_next || directory_exact || walk_last) phase<=DIRECTORY_START;
                 end
                 DIRECTORY_START: phase<=DIRECTORY;
+                ALLOCATE_SCAN: begin
+                    allocate_probe<=allocate_probe+1'b1;
+                    if(allocate_last) allocate_evict<=1;
+                    if(start_transfer) begin
+                        phase<=TRANSFER; saved_victim_slot<=aux_slot; victim_scan<=aux_stored[37];
+                    end
+                end
                 REQUEST: if(mem_ready_i) phase<=WAIT_MEMORY;
                 // Commit the private retirement record only after successful
                 // memory completion. First-field writes publish both the body

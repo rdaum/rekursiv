@@ -15,6 +15,8 @@ module objekt_transfer #(
     input logic clk_i, input logic rst_i,
     input logic start_i, input logic allocate_i,
     input logic [39:0] target_i, input logic [23:0] size_i, input logic scan_i,
+    // The identity the parent chose for an allocation.
+    input logic [37:0] identity_i,
     input logic victim_valid_i, input logic [170:0] victim_i,
     input logic seed_i, input logic [39:0] seed_ref_i,
     input logic [23:0] seed_base_i, input logic [23:0] seed_size_i,
@@ -129,8 +131,8 @@ module objekt_transfer #(
                         status_o <= OK;
                         if (allocate_i) begin
                             incoming <= {3'b001, NIL, 24'b0, target_i, size_i,
-                                2'b10, scan_i, next_identity_o[36:0]};
-                            if (next_identity_o[37]) begin
+                                2'b10, scan_i, identity_i[36:0]};
+                            if (identity_i[37]) begin
                                 status_o <= IDENTITY_EXHAUSTED;
                                 phase <= DONE;
                             end else phase <= RESERVE;
@@ -160,7 +162,8 @@ module objekt_transfer #(
                         end else begin
                             incoming.base <= body_cursor_o[23:0];
                             body_cursor_o <= end_address[24:0];
-                            if (allocating) next_identity_o <= next_identity_o + 38'd1;
+                            // Identities the parent skipped are never issued.
+                            if (allocating) next_identity_o <= {1'b0, incoming.reference[36:0]} + 38'd1;
                             if (victim_valid && (victim.is_new || victim.modified)) begin
                                 if (victim_end > 25'(MEMORY_WORDS)) begin
                                     status_o <= BOUNDS;
