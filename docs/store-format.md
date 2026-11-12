@@ -1,12 +1,13 @@
 # Object store on the SD card
 
-Status: draft. Nothing implements it yet.
+Status: implemented by the board's disk processor firmware (`board/mega65/firmware/src/store.rs`),
+which is tested on the host against the simulator's in-memory store. `mkstore` creates empty files.
 
 The MEGA65 board keeps committed object records in one file, `REKURSIV.IMG`, on the card's FAT32
 filesystem. The board's disk processor serves OBJEKT's
 [streaming backing-store interface](interface.md#streaming-backing-store-interface) from this file.
-The format is independent of the processor that serves it, so a microcode implementation can
-replace the current RISC-V firmware and read the same files.
+The format is independent of the processor that serves it, so a microcode implementation can replace
+the current RISC-V firmware and read the same files.
 
 ## Sharing the card
 
@@ -24,31 +25,47 @@ system may have rewritten the card in between.
 All multi-byte fields are little-endian. A machine word occupies eight bytes: its 40 bits in the low
 five bytes, then three zero bytes. Positions below are file sector numbers.
 
-| Sectors          | Region      | Contents                                                     |
-| ---------------- | ----------- | ------------------------------------------------------------ |
-| 0–1              | Superblocks | Two alternating copies of the store's fixed parameters       |
-| 2–(2+J−1)        | Journal     | The intent list of the most recent commit                    |
-| following I      | Index       | One 8-byte entry per identity, in identity order             |
-| remainder        | Log         | Records, appended in commit order                            |
+| Sectors     | Region      | Contents                                               |
+| ----------- | ----------- | ------------------------------------------------------ |
+| 0–1         | Superblocks | Two alternating copies of the store's fixed parameters |
+| 2–(2+J−1)   | Journal     | The intent list of the most recent commit              |
+| following I | Index       | One 8-byte entry per identity, in identity order       |
+| remainder   | Log         | Records, appended in commit order                      |
 
 J and I are fixed when the file is created. With 2^24 identities the index occupies 128 MB.
 
 ### Superblock
 
-| Offset | Size | Field                                                              |
-| -----: | ---: | ------------------------------------------------------------------ |
-|      0 |    8 | Magic `RKSTORE1`                                                   |
-|      8 |    4 | Format version, currently 1                                        |
-|     12 |    4 | Generation; the copy with the larger valid generation is current   |
-|     16 |    4 | Journal start sector and                                           |
-|     20 |    4 | journal length in sectors                                          |
-|     24 |    4 | Index start sector                                                 |
-|     28 |    4 | Index capacity in identities                                       |
-|     32 |    4 | Log start sector                                                   |
-|     36 |    4 | Log end sector (exclusive)                                         |
-|     40 |    4 | Log head: the next free log sector                                 |
-|     44 |    4 | Journal state: 0 clean, 1 holds a complete commit not yet applied  |
-|    508 |    4 | CRC-32 of bytes 0–507                                              |
+| Offset | Size | Field                                                             |
+| -----: | ---: | ----------------------------------------------------------------- |
+|      0 |    8 | Magic `RKSTORE1`                                                  |
+|      8 |    4 | Format version, currently 1                                       |
+|     12 |    4 | Generation; the copy with the larger valid generation is current  |
+|     16 |    4 | Journal start sector and                                          |
+|     20 |    4 | journal length in sectors                                         |
+|     24 |    4 | Index start sector                                                |
+|     28 |    4 | Index capacity in identities                                      |
+|     32 |    4 | Log start sector                                                  |
+|     36 |    4 | Log end sector (exclusive)                                        |
+|     40 |    4 | Log head: the next free log sector                                |
+|     44 |    4 | Journal state: 0 clean, 1 holds a complete commit not yet applied |
+|     48 |    4 | Highest identity that has ever had a committed record             |
+|    508 |    4 | CRC-32 of bytes 0–507                                             |
+
+The two copies are sectors 0 and 1. Every superblock write goes to the copy that is not current, so
+a torn write leaves the previous copy intact. A new file has generation 1 in sector 0.
+
+### Journal
+
+|   Offset | Size | Field                             |
+| -------: | ---: | --------------------------------- |
+|        0 |    8 | Magic `RKJOURNL`                  |
+|        8 |    4 | Entry count, at most 126          |
+| 16 + 16i |    8 | Identity of entry i               |
+| 24 + 16i |    8 | New index entry for that identity |
+| 16 + 16n |    4 | CRC-32 of every byte before it    |
+
+The journal spans four sectors; a commit writes only the sectors its entries use.
 
 ### Index entry
 
@@ -59,15 +76,15 @@ log sector in bits 31:0 and its length in sectors in bits 55:32. Bits 63:56 are 
 
 A record starts on a sector boundary.
 
-| Offset | Size | Field                                           |
-| -----: | ---: | ----------------------------------------------- |
-|      0 |    8 | Magic `RKRECORD`                                |
-|      8 |    8 | Reference (machine word)                        |
-|     16 |    8 | Class (machine word)                            |
-|     24 |    4 | Body size in words                              |
-|     28 |    4 | Flags: bit 0 cond                               |
-|     32 |    8 | Commit generation that wrote this record        |
-|     40 |  8×n | Body words                                      |
+| Offset | Size | Field                                    |
+| -----: | ---: | ---------------------------------------- |
+|      0 |    8 | Magic `RKRECORD`                         |
+|      8 |    8 | Reference (machine word)                 |
+|     16 |    8 | Class (machine word)                     |
+|     24 |    4 | Body size in words                       |
+|     28 |    4 | Flags: bit 0 cond                        |
+|     32 |    8 | Commit generation that wrote this record |
+|     40 |  8×n | Body words                               |
 
 The record is padded to a whole sector. ReadWord for offset k reads byte 40 + 8k.
 
@@ -91,12 +108,15 @@ records: the log head never advanced past them.
 ## Lookups
 
 FindRecord and Metadata read one index entry, then the record's first sector. ReadWord reads one
-sector of the record. NextRecord scans index entries upward from the given identity. A small sector
-cache in the disk processor serves repeated reads of index and record sectors.
+sector of the record. NextRecord scans index entries upward from the given identity, stopping at the
+highest identity recorded in the superblock. A one-sector cache serves repeated reads of index and
+record sectors.
 
 ## Limits of this version
 
-- The log is never compacted. Replaced records stay in the file until a host tool rewrites it.
-  When the log is full, saves fail with a store error.
+- The log is never compacted. Replaced records stay in the file until a host tool rewrites it. When
+  the log is full, saves fail with a store error.
 - Each commit writes the journal and a superblock, so small commits cost several sector writes.
 - There is no checksum on records; the journal and superblocks carry the CRCs.
+- A batch holds at most 126 records, the journal's capacity.
+- An identity at or above the index capacity cannot be saved.

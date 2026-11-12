@@ -2,16 +2,7 @@
 //!
 //! The card may be partitioned (MBR with a FAT32 entry first) or a bare
 //! FAT32 volume. Only 512-byte sectors are supported.
-use crate::hw::sd;
-
-/// A run of consecutive card sectors belonging to the file.
-#[derive(Clone, Copy, Default)]
-pub struct Extent {
-    pub sector: u32,
-    pub length: u32,
-}
-
-pub const MAX_EXTENTS: usize = 64;
+use crate::disk::{Disk, Extent, Sector, MAX_EXTENTS};
 
 pub struct File {
     pub size: u32,
@@ -19,7 +10,7 @@ pub struct File {
     pub count: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     Read = 1,
     NoVolume = 2,
@@ -36,62 +27,69 @@ struct Volume {
     root_cluster: u32,
 }
 
-fn read(sector: u32) -> Result<&'static [u8; 512], Error> {
-    if sd::read(sector) & sd::ERROR != 0 {
-        return Err(Error::Read);
-    }
-    Ok(sd::buffer())
-}
-
-fn u16_at(b: &[u8; 512], at: usize) -> u32 {
+fn u16_at(b: &Sector, at: usize) -> u32 {
     u32::from(b[at]) | u32::from(b[at + 1]) << 8
 }
-fn u32_at(b: &[u8; 512], at: usize) -> u32 {
+fn u32_at(b: &Sector, at: usize) -> u32 {
     u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
 }
 
-fn is_fat32_boot(b: &[u8; 512]) -> bool {
+fn is_fat32_boot(b: &Sector) -> bool {
     b[0x1fe] == 0x55 && b[0x1ff] == 0xaa && &b[0x52..0x57] == b"FAT32"
 }
 
-fn volume() -> Result<Volume, Error> {
-    let mut start = 0;
-    let mut b = read(0)?;
-    if !is_fat32_boot(b) {
-        if b[0x1fe] != 0x55 || b[0x1ff] != 0xaa {
-            return Err(Error::NoVolume);
-        }
-        let entry = (0..4)
-            .map(|i| 0x1be + 16 * i)
-            .find(|&e| matches!(b[e + 4], 0x0b | 0x0c))
-            .ok_or(Error::NoVolume)?;
-        start = u32_at(b, entry + 8);
-        b = read(start)?;
-        if !is_fat32_boot(b) {
-            return Err(Error::NoVolume);
-        }
-    }
-    let cluster_sectors = u32::from(b[0x0d]);
-    if u16_at(b, 0x0b) != 512 || cluster_sectors == 0 || !cluster_sectors.is_power_of_two() {
-        return Err(Error::Geometry);
-    }
-    let fat_start = start + u16_at(b, 0x0e);
-    let data_start = fat_start + u32::from(b[0x10]) * u32_at(b, 0x24);
-    Ok(Volume {
-        fat_start,
-        data_start,
-        cluster_sectors,
-        root_cluster: u32_at(b, 0x2c),
-    })
+struct Reader<'a, D> {
+    disk: &'a mut D,
+    buffer: Sector,
+    buffered: Option<u32>,
 }
 
-impl Volume {
-    fn first_sector(&self, cluster: u32) -> u32 {
-        self.data_start + (cluster - 2) * self.cluster_sectors
+impl<D: Disk> Reader<'_, D> {
+    fn read(&mut self, sector: u32) -> Result<&Sector, Error> {
+        if self.buffered != Some(sector) {
+            self.buffered = None;
+            self.disk
+                .read(sector, &mut self.buffer)
+                .map_err(|_| Error::Read)?;
+            self.buffered = Some(sector);
+        }
+        Ok(&self.buffer)
     }
+
+    fn volume(&mut self) -> Result<Volume, Error> {
+        let mut start = 0;
+        let b = self.read(0)?;
+        if !is_fat32_boot(b) {
+            if b[0x1fe] != 0x55 || b[0x1ff] != 0xaa {
+                return Err(Error::NoVolume);
+            }
+            let entry = (0..4)
+                .map(|i| 0x1be + 16 * i)
+                .find(|&e| matches!(b[e + 4], 0x0b | 0x0c))
+                .ok_or(Error::NoVolume)?;
+            start = u32_at(b, entry + 8);
+            if !is_fat32_boot(self.read(start)?) {
+                return Err(Error::NoVolume);
+            }
+        }
+        let b = &self.buffer;
+        let cluster_sectors = u32::from(b[0x0d]);
+        if u16_at(b, 0x0b) != 512 || cluster_sectors == 0 || !cluster_sectors.is_power_of_two() {
+            return Err(Error::Geometry);
+        }
+        let fat_start = start + u16_at(b, 0x0e);
+        let data_start = fat_start + u32::from(b[0x10]) * u32_at(b, 0x24);
+        Ok(Volume {
+            fat_start,
+            data_start,
+            cluster_sectors,
+            root_cluster: u32_at(b, 0x2c),
+        })
+    }
+
     /// The cluster after `cluster`, or None at the end of the chain.
-    fn next(&self, cluster: u32) -> Result<Option<u32>, Error> {
-        let b = read(self.fat_start + cluster / 128)?;
+    fn next(&mut self, v: &Volume, cluster: u32) -> Result<Option<u32>, Error> {
+        let b = self.read(v.fat_start + cluster / 128)?;
         let next = u32_at(b, (cluster as usize % 128) * 4) & 0x0fff_ffff;
         match next {
             0x0fff_fff8..=0x0fff_ffff => Ok(None),
@@ -101,14 +99,25 @@ impl Volume {
     }
 }
 
+impl Volume {
+    fn first_sector(&self, cluster: u32) -> u32 {
+        self.data_start + (cluster - 2) * self.cluster_sectors
+    }
+}
+
 /// Find an 8.3 name, given as 11 bytes ("REKURSIVIMG"), in the root directory.
-pub fn find(name: &[u8; 11]) -> Result<File, Error> {
-    let v = volume()?;
+pub fn find<D: Disk>(disk: &mut D, name: &[u8; 11]) -> Result<File, Error> {
+    let mut r = Reader {
+        disk,
+        buffer: [0; 512],
+        buffered: None,
+    };
+    let v = r.volume()?;
     let mut cluster = Some(v.root_cluster);
     let mut found = None;
     'directory: while let Some(c) = cluster {
         for s in 0..v.cluster_sectors {
-            let b = read(v.first_sector(c) + s)?;
+            let b = r.read(v.first_sector(c) + s)?;
             for e in (0..512).step_by(32) {
                 match b[e] {
                     0x00 => break 'directory,
@@ -124,7 +133,7 @@ pub fn find(name: &[u8; 11]) -> Result<File, Error> {
                 }
             }
         }
-        cluster = v.next(c)?;
+        cluster = r.next(&v, c)?;
     }
     let (first, size) = found.ok_or(Error::NotFound)?;
     let mut file = File {
@@ -149,7 +158,7 @@ pub fn find(name: &[u8; 11]) -> Result<File, Error> {
                 file.count += 1;
             }
         }
-        cluster = v.next(c)?;
+        cluster = r.next(&v, c)?;
     }
     Ok(file)
 }

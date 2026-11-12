@@ -2,6 +2,7 @@
 // Built and run by sim.sh.
 module system_tb;
     logic clk = 0, rst = 1;
+    integer cycles;
     always #5 clk = ~clk;
     logic [31:0] debug [8];
     logic booted, halted, service;
@@ -19,7 +20,8 @@ module system_tb;
     initial begin
         repeat (4) @(posedge clk);
         rst = 0;
-        repeat (2000000) @(posedge clk);
+        if (!$value$plusargs("cycles=%d", cycles)) cycles = 2000000;
+        repeat (cycles) @(posedge clk);
         $display("booted=%0d halted=%0d service=%0d fault=%0d pc=%0d", booted, halted, service, fault, pc);
         for (int i = 0; i < 8; i++) $display("debug[%0d] = %08x   disk[%0d] = %08x", i, debug[i], i, disk[i]);
         $finish;

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Build a simulated SD card: an MBR with one FAT32 partition holding
 REKURSIV.IMG, deliberately split into two extents.
-    make_card.py OUT.img
+    make_card.py OUT.img STORE.img
+STORE.img (from mkstore) becomes the file's contents.
 Needs sfdisk and mkfs.fat (dosfstools)."""
 import struct, subprocess, sys
 
 out = sys.argv[1]
+store = open(sys.argv[2], "rb").read()
 SECTORS = 81920            # 40 MB
 START = 2048               # partition start sector
 open(out, "wb").truncate(SECTORS * 512)
@@ -26,7 +28,9 @@ with open(out, "r+b") as f:
                                       struct.unpack_from("<I", boot, 0x2c)[0])
     fat_start = START + reserved
     data_start = fat_start + fats * fat_size
-    chain = list(range(10, 18)) + list(range(30, 42))
+    count = len(store) // 512
+    half = count // 2
+    chain = list(range(10, 10 + half)) + list(range(20 + half, 20 + count))
     for i, cluster in enumerate(chain):
         nxt = chain[i + 1] if i + 1 < len(chain) else 0x0FFFFFFF
         for copy in range(fats):
@@ -45,4 +49,6 @@ with open(out, "r+b") as f:
     struct.pack_into("<I", entry, 0x1c, len(chain) * 512)
     d[slot:slot + 32] = entry
     put(data_start + (root - 2), d)
-    print(f"REKURSIV.IMG: {len(chain)} sectors; extents start {data_start + 8} and {data_start + 28}")
+    for i, cluster in enumerate(chain):
+        put(data_start + cluster - 2, store[i * 512:(i + 1) * 512])
+    print(f"REKURSIV.IMG: {len(chain)} sectors in 2 extents")

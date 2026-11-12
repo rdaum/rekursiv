@@ -8,6 +8,13 @@ license = "GPL-3.0-or-later"
 # Built for riscv32im-unknown-none-elf, separately from the host workspace.
 [workspace]
 
+[lib]
+test = true
+
+[dev-dependencies]
+rekursiv-asm = { path = "../../../crates/rekursiv-asm" }
+rekursiv-model = { path = "../../../crates/rekursiv-model" }
+
 [[bin]]
 name = "disk-firmware"
 test = false

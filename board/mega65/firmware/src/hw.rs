@@ -56,15 +56,69 @@ pub mod sd {
     }
 }
 
+/// The SD card as a sector device, through the controller's buffer.
+pub struct Card;
+
+impl disk_firmware::disk::Disk for Card {
+    fn read(
+        &mut self,
+        sector: u32,
+        data: &mut disk_firmware::disk::Sector,
+    ) -> Result<(), disk_firmware::disk::DiskError> {
+        if sd::read(sector) & sd::ERROR != 0 {
+            return Err(disk_firmware::disk::DiskError);
+        }
+        data.copy_from_slice(sd::buffer());
+        Ok(())
+    }
+    fn write(
+        &mut self,
+        sector: u32,
+        data: &disk_firmware::disk::Sector,
+    ) -> Result<(), disk_firmware::disk::DiskError> {
+        sd::buffer().copy_from_slice(data);
+        if sd::write_sector(sector) & sd::ERROR != 0 {
+            return Err(disk_firmware::disk::DiskError);
+        }
+        Ok(())
+    }
+}
+
 pub mod mailbox {
     use super::{reg_read, reg_write};
+    use disk_firmware::store::{Reply, Request};
     const BASE: usize = 0x2000_0000;
 
-    pub fn waiting() -> bool {
-        reg_read(BASE) & 1 != 0
+    fn word(at: usize) -> u64 {
+        u64::from(reg_read(BASE + at)) | u64::from(reg_read(BASE + at + 4)) << 32
     }
-    pub fn respond_status(status: u32) {
-        reg_write(BASE + 0x40, status);
+
+    /// The waiting request, if any.
+    pub fn request() -> Option<Request> {
+        if reg_read(BASE) & 1 == 0 {
+            return None;
+        }
+        Some(Request {
+            op: reg_read(BASE + 0x04) as u8,
+            reference: word(0x08),
+            class: word(0x10),
+            size: reg_read(BASE + 0x18),
+            cond: reg_read(BASE + 0x1c) != 0,
+            offset: reg_read(BASE + 0x20),
+            data: word(0x24),
+        })
+    }
+
+    pub fn respond(reply: &Reply) {
+        reg_write(BASE + 0x40, u32::from(reply.status));
+        reg_write(BASE + 0x44, reply.reference as u32);
+        reg_write(BASE + 0x48, (reply.reference >> 32) as u32);
+        reg_write(BASE + 0x4c, reply.class as u32);
+        reg_write(BASE + 0x50, (reply.class >> 32) as u32);
+        reg_write(BASE + 0x54, reply.size);
+        reg_write(BASE + 0x58, u32::from(reply.cond));
+        reg_write(BASE + 0x5c, reply.data as u32);
+        reg_write(BASE + 0x60, (reply.data >> 32) as u32);
         reg_write(BASE + 0x64, 1);
     }
 }
