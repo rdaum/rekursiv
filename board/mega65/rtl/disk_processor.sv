@@ -117,19 +117,29 @@ module disk_processor #(
         .read_byte_o(sd_read_byte), .read_index_o(sd_read_index), .read_data_o(sd_read_data),
         .write_index_o(sd_write_index), .write_data_i(sd_write_data));
 
-    // 512-byte buffer: bytes for the SD engine, words for the processor.
-    logic [7:0]  buffer [512];
-    logic [31:0] buffer_rdata;
-    wire  [8:0]  buffer_base = {mem_addr[8:2], 2'b00};
+    // 512-byte buffer as a true dual-port RAM of 128 words. Port A serves the
+    // SD engine a byte at a time; port B serves the processor's word accesses.
+    // Each port is written from its own process so it maps to block RAM.
+    logic [31:0] buffer [128];
+    logic [31:0] buffer_rdata, sd_word;
+    logic [1:0]  sd_lane;
+    wire  [8:0]  sd_index = sd_read_byte ? sd_read_index : sd_write_index;
+    wire  [3:0]  sd_we = sd_read_byte ? 4'b0001 << sd_read_index[1:0] : 4'b0000;
+    wire  [3:0]  cpu_we = (mem_valid && !mem_ready && region == 4'h1 && mem_addr[9]) ? mem_wstrb : 4'b0000;
+
     always_ff @(posedge clk_i) begin
-        sd_write_data <= buffer[sd_write_index];
-        if (sd_read_byte) buffer[sd_read_index] <= sd_read_data;
-        else if (mem_valid && !mem_ready && region == 4'h1 && mem_addr[9]) begin
-            for (int i = 0; i < 4; i++) if (mem_wstrb[i]) buffer[buffer_base + 9'(i)] <= mem_wdata[8*i +: 8];
-        end
-        buffer_rdata <= {buffer[buffer_base + 9'd3], buffer[buffer_base + 9'd2],
-                         buffer[buffer_base + 9'd1], buffer[buffer_base]};
+        for (int i = 0; i < 4; i++)
+            if (sd_we[i]) buffer[sd_index[8:2]][8*i +: 8] <= sd_read_data;
+        sd_word <= buffer[sd_index[8:2]];
+        sd_lane <= sd_index[1:0];
     end
+    always_ff @(posedge clk_i) begin
+        for (int i = 0; i < 4; i++)
+            if (cpu_we[i]) buffer[mem_addr[8:2]][8*i +: 8] <= mem_wdata[8*i +: 8];
+        buffer_rdata <= buffer[mem_addr[8:2]];
+    end
+    // The SD engine samples write data well after presenting its index.
+    assign sd_write_data = sd_word[8*sd_lane +: 8];
 
     always_ff @(posedge clk_i) begin
         if (rst_i) begin

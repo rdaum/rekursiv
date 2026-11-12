@@ -23,6 +23,7 @@ place_design
 route_design
 
 report_utilization    -file $out/utilization.rpt
+report_utilization -hierarchical -hierarchical_depth 3 -file $out/utilization_modules.rpt
 report_timing_summary -file $out/timing.rpt
 report_drc            -file $out/drc.rpt
 
