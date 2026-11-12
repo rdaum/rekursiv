@@ -62,6 +62,7 @@ transfers put the least significant word first unless a device explicitly specif
 | `0x0500–0x05ff` | Display          | Dimensions, stride, pixel format, upload offset/data, publish             |
 | `0x0600–0x06ff` | Block storage    | Sector address, transfer length, direction, data, submit, completion      |
 | `0x0700–0x07ff` | External files | Byte paths, opaque handles, byte transfers and volume properties |
+| `0x0f00–0x0f1f` | Debug display  | Eight read/write words that a board shows on screen in hexadecimal |
 
 ### Identification
 

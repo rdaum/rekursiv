@@ -267,6 +267,13 @@ impl Device {
                     file_effect = effect;
                     value
                 })
+            } else if (0xf00..0xf20).contains(&request.address) {
+                // Board debug display: eight words a board shows on screen.
+                Some(if request.write {
+                    0
+                } else {
+                    self.registers.get(&request.address).copied().unwrap_or(0)
+                })
             } else if let Some(events) = &self.events {
                 match (request.address, request.write) {
                     (0x100, false) => Some(events.status()),
