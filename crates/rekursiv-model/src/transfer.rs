@@ -47,6 +47,16 @@ impl Model {
             .take_while(occupied)
             .count() as u64
     }
+    /// Record a persistence dependency: a record being streamed to the store
+    /// names `word`. If that is a resident object, collection must keep it
+    /// while it is NEW, because only RAM holds it. The mark is made as the
+    /// reference is sent and stays if the save later fails.
+    pub(super) fn protect(&mut self, word: Word) {
+        let slot = self.slot(word);
+        if self.entries[slot].is_some_and(|e| e.reference == word) {
+            self.persistent_roots[slot] = true;
+        }
+    }
     /// Validate and execute a standalone fetch or allocation transaction.
     ///
     /// A resident fetch returns without RAM traffic. A miss or allocation can
@@ -134,6 +144,7 @@ impl Model {
                     if victim.base as u64 + victim.size as u64 > self.memory.len() as u64 {
                         return Err(Status::BoundsError);
                     }
+                    self.protect(victim.class);
                     self.store_effect(
                         StoreRequest {
                             op: StoreOp::BeginSave,
@@ -156,6 +167,9 @@ impl Model {
                             faults,
                             &mut out,
                         )?;
+                        if victim.reference.bits() & (1 << 37) != 0 {
+                            self.protect(data);
+                        }
                         self.store_effect(
                             StoreRequest {
                                 op: StoreOp::WriteWord,
@@ -177,19 +191,6 @@ impl Model {
                         faults,
                         &mut out,
                     )?;
-                    let mut edges = vec![victim.class];
-                    if victim.reference.bits() & (1 << 37) != 0 {
-                        edges.extend(
-                            &self.memory
-                                [victim.base as usize..(victim.base + victim.size) as usize],
-                        );
-                    }
-                    for edge in edges {
-                        let slot = self.slot(edge);
-                        if self.entries[slot].is_some_and(|e| e.reference == edge) {
-                            self.persistent_roots[slot] = true;
-                        }
-                    }
                     self.persistent_roots[slot] = true;
                 }
             }

@@ -63,9 +63,9 @@ impl Model {
                 &mut out,
             )?;
             begun = true;
-            let mut edges = vec![];
             for (which, &(source, resident)) in sources.iter().enumerate() {
                 let destination = keys[1 - which];
+                self.protect(source.class);
                 self.store_effect(
                     StoreRequest {
                         op: StoreOp::BeginSave,
@@ -78,7 +78,6 @@ impl Model {
                     faults,
                     &mut out,
                 )?;
-                edges.push(source.class);
                 for offset in 0..source.size {
                     let data = if resident {
                         self.memory_effect(
@@ -103,6 +102,9 @@ impl Model {
                         )?
                         .data
                     };
+                    if source.reference.bits() & (1 << 37) != 0 {
+                        self.protect(data);
+                    }
                     self.store_effect(
                         StoreRequest {
                             op: StoreOp::WriteWord,
@@ -114,9 +116,6 @@ impl Model {
                         faults,
                         &mut out,
                     )?;
-                    if source.reference.bits() & (1 << 37) != 0 {
-                        edges.push(data);
-                    }
                 }
                 self.store_effect(
                     StoreRequest {
@@ -136,12 +135,9 @@ impl Model {
                 faults,
                 &mut out,
             )?;
-            for (slot, entry) in self.entries.iter_mut().enumerate() {
-                if let Some(e) = entry.get() {
-                    self.persistent_roots[slot] |= edges.contains(&e.reference);
-                    if keys.contains(&e.reference) {
-                        *entry = None.into();
-                    }
+            for entry in &mut self.entries {
+                if entry.is_some_and(|e| keys.contains(&e.reference)) {
+                    *entry = None.into();
                 }
             }
             if self

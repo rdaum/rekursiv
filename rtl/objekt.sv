@@ -220,7 +220,6 @@ module objekt #(
     wire [3:0] exchange_status;
     wire [23:0] exchange_mem_address;
     wire [39:0] exchange_first, exchange_second;
-    logic [ENTRIES-1:0] exchange_edges;
     wire start_exchange=cmd_valid_i && cmd_ready_o && pager_i==7 && error==OK;
     wire exchange_first_resident, exchange_second_resident;
     logic [39:0] directory_best_ref, directory_best_class;
@@ -312,8 +311,7 @@ module objekt #(
     logic [24:0] gc_cursor;
     logic [23:0] gc_needed;
     logic [39:0] gc_needed_class;
-    logic [ENTRIES-1:0] saved_edges;
-    logic saved_scan, victim_scan;
+    logic victim_scan;
     logic [39:0] gc_root;
     logic gc_mem_valid, gc_mem_ready, gc_mem_write;
     logic [23:0] gc_mem_address;
@@ -558,31 +556,23 @@ module objekt #(
             idx<=0; idxreg<=0; response_status<=OK; response_data<=NIL;
             resident_mem_write_o<=0;resident_mem_addr_o<=0;resident_mem_data_o<=0;
             pending_idx<=0;pending_reg<=0;pending_selected<=0;pending_load_vr<=0;
-            pending_mutator<=0;pending_write<=0;pending_vr<=0; directory_vr<=0;pending_data<=0;pending_snapshot<=0;pending_slot<=0; saved_victim_slot<=0; saved_edges<=0; saved_scan<=0; exchange_edges<='0;
+            pending_mutator<=0;pending_write<=0;pending_vr<=0; directory_vr<=0;pending_data<=0;pending_snapshot<=0;pending_slot<=0; saved_victim_slot<=0;
             allocate_probe<='0; allocate_evict<=0; allocate_class<=0; allocate_size<=0; allocate_scan_tag<=0;
             victim_scan<=0; walk_slot<='0; scan_cursor<=0; scan_clear<=0; scan_value<=0;
             directory_next<=0; directory_identity<=0; directory_best_ref<=NIL; directory_best_class<=NIL;
             for(j=0;j<8;j=j+1) vr[j]<=NIL;
             for(j=0;j<4;j=j+1) classes[j]<=0;
         end else begin
-            // A committed disk object may name NEW objects that remain only in
-            // RAM. Retain those identities even after this victim disappears.
-            // Edges are accumulated privately and become roots only on save
-            // commit. Opaque payloads contribute no edges; classes always do.
-            if(phase==TRANSFER && store_valid_o && store_ready_i && store_op_o==2) begin
-                saved_scan<=victim_scan;
-                saved_edges<='0;
-                if(edge_resident) saved_edges[aux_slot]<=1;
-            end
-            if(phase==TRANSFER && store_valid_o && store_ready_i && store_op_o==3 && saved_scan && edge_resident)
-                saved_edges[aux_slot]<=1;
-            if(saved_victim) begin
-                persistent<=persistent | saved_edges;
-                persistent[saved_victim_slot]<=1;
-            end
-            if(start_exchange) exchange_edges<='0;
-            if(phase==EXCHANGE && store_valid_o && store_ready_i && edge_resident &&
-                (store_op_o==2 || (store_op_o==3 && store_ref_o[37]))) exchange_edges[aux_slot]<=1;
+            // A disk record may name NEW objects that remain only in RAM.
+            // Mark each resident object that a streamed record names as a
+            // persistence dependency, as its reference is sent. A save that
+            // later fails leaves those marks: they can only retain more.
+            // Opaque payloads contribute no edges; classes always do.
+            if(store_valid_o && store_ready_i && edge_resident &&
+                ((phase==TRANSFER && (store_op_o==2 || (store_op_o==3 && victim_scan))) ||
+                 (phase==EXCHANGE && (store_op_o==2 || (store_op_o==3 && store_ref_o[37])))))
+                persistent[aux_slot]<=1;
+            if(saved_victim) persistent[saved_victim_slot]<=1;
             // Collector commit visits one slot per cycle. The write port moves
             // a retained entry to its staged base; the registers that cache
             // that slot follow on the same edge. Validity changes only on the
@@ -771,7 +761,6 @@ module objekt #(
                     response_data<=exchange_status==OK ? exchange_first : NIL;
                     if(exchange_status==OK && exchange_first!=exchange_second) begin
                         if(prepared_access.status==OK && (prepared_access.reference==exchange_first || prepared_access.reference==exchange_second)) prepared_access.status<=NOT_RESIDENT;
-                        persistent<=persistent | exchange_edges;
                         if(exchange_first_resident) valid[exchange_first[PAGER_BITS-1:0]]<=0;
                         if(exchange_second_resident) valid[exchange_second[PAGER_BITS-1:0]]<=0;
                         if(selected && (snapshot[39:0]==exchange_first || snapshot[39:0]==exchange_second))

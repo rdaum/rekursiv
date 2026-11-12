@@ -107,11 +107,12 @@ contributes its class reference. Only scanned bodies contribute tagged field ref
 Modified persistent objects are additional roots, including their resident descendants. A NEW entry
 that acquired a backing record before a later transfer failure is also an additional root. OBJEKT
 records successful victim saves in a separate per-slot persistence bit, even if the incoming
-transfer later fails. A successful save also protects resident class and scanned-body references
-named by the new backing record. Their NEW targets remain roots after the saved parent is evicted.
-Protection persists until slot replacement, so obsolete disk edges can conservatively retain extra
-NEW objects. This prevents collection from losing unsaved descendants accessible through a
-persistent object without traversing disk records during collection.
+transfer later fails. A save also protects the resident class and scanned-body references named by
+the record it streams. OBJEKT sets each target's persistence bit as the reference is sent, so a save
+that later fails leaves its marks. Their NEW targets remain roots after the saved parent is evicted.
+Protection persists until slot replacement, so obsolete or abandoned disk edges can conservatively
+retain extra NEW objects. This prevents collection from losing unsaved descendants accessible
+through a persistent object without traversing disk records during collection.
 
 Tracing uses a work list held in OBJEKT. Begin marks and queues every slot whose retention flag is
 set. The first Mark of a slot queues it; a later Mark of the same slot does nothing. Microcode takes
