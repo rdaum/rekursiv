@@ -192,8 +192,10 @@ impl Harness<'_> {
         ensure!(
             (a.cpu_estkr_o, a.cpu_cstkr_o, a.cpu_symbol_o, a.cpu_object_o)
                 == (p.estkr, p.cstkr, p.symbol, p.object),
-            "cached word mismatch at {}",
-            p.pc
+            "cached word mismatch at {}: RTL {:?}, model {:?}",
+            p.pc,
+            (a.cpu_estkr_o, a.cpu_cstkr_o, a.cpu_symbol_o, a.cpu_object_o),
+            (p.estkr, p.cstkr, p.symbol, p.object)
         );
         ensure!(
             (
@@ -273,6 +275,8 @@ impl Harness<'_> {
         let mut response = None;
         let mut launched = false;
         let mut accepted_ports = None;
+        // A launched command whose reply arrives as its barrier issues the next.
+        let mut retiring = None;
         let mut device_response = None;
         let mut wait = 0u32;
         let mut from_upper = self.oracle.allocation_limit as usize == self.backing.len();
@@ -305,9 +309,31 @@ impl Harness<'_> {
                 }
                 continue;
             }
+            let barrier = image.code[model.pc as usize].is_none_or(|i| i.object_barrier());
             if candidate.is_none() {
                 model.low_space = self.oracle.low_space();
-                candidate = Some(model.prepare(image, self.rtl.cpu_irq_i != 0));
+                // A barrier executes in the cycle its launched reply arrives,
+                // with the reply forwarded as Object (recovery excepted).
+                let forwarded = (launched && barrier)
+                    .then(|| {
+                        response.or(expected_object
+                            .as_ref()
+                            .map(|o: &rekursiv_model::Outcome| o.response))
+                    })
+                    .flatten()
+                    .filter(|r| r.status == Status::Ok);
+                candidate = Some(match forwarded {
+                    Some(r)
+                        if image.code[model.pc as usize].is_some_and(|i| {
+                            i.recovery == rekursiv_asm::processor::Recovery::None
+                        }) =>
+                    {
+                        let mut joined = model.clone();
+                        joined.object = r.data.bits();
+                        joined.prepare(image, self.rtl.cpu_irq_i != 0)
+                    }
+                    _ => model.prepare(image, self.rtl.cpu_irq_i != 0),
+                });
             }
             // Periodic command backpressure and independently delayed response consumption.
             self.rtl.cpu_command_enable_i = (cycle % 7 >= 3) as u8;
@@ -319,6 +345,7 @@ impl Harness<'_> {
                 wait = 0;
             }
             let ports = self.processor_ports();
+            let mut new_launch = None;
             if self.rtl.cpu_cmd_valid_o != 0
                 && self.rtl.cpu_command_enable_i != 0
                 && self.rtl.cmd_ready_o != 0
@@ -333,7 +360,13 @@ impl Harness<'_> {
                     Some(ports) == expected_command.map(|c| c.encode()).transpose()?,
                     "processor command differs from model"
                 );
-                ensure!(expected_object.is_none(), "processor reissued command");
+                if let Some(previous) = expected_object.take() {
+                    ensure!(
+                        launched && barrier && self.rtl.rsp_valid_o != 0,
+                        "processor reissued command"
+                    );
+                    retiring = Some((previous, accepted_ports.take().unwrap(), transaction_start));
+                }
                 transaction_start = (
                     self.transfers.len(),
                     self.store_requests.len(),
@@ -341,12 +374,11 @@ impl Harness<'_> {
                 );
                 expected_object = Some(self.oracle.execute_raw(ports, false));
                 accepted_ports = Some(ports);
-                launched = image.code[model.pc as usize].unwrap().object_async;
+                new_launch = Some(image.code[model.pc as usize].unwrap().launches());
             }
             // Sample the reply inside tick, after external RAM has been driven.
             // A forwarded completion need not have been visible before tick.
-            let barrier = image.code[model.pc as usize].is_none_or(|i| i.object_barrier())
-                || candidate.as_ref().is_some_and(|c| c.is_err());
+            let barrier = barrier || candidate.as_ref().is_some_and(|c| c.is_err());
             let device_requests = self.device.requests.len();
             let device_completions = self.device.completions.len();
             let edges = self.tick()?;
@@ -354,7 +386,7 @@ impl Harness<'_> {
             if received {
                 response = edges.response_value;
             }
-            // A barrier joins on a separate edge before evaluating operands.
+            // A barrier joins on the edge its reply is available.
             let joining = launched && response.is_some() && barrier;
             if self.device.requests.len() != device_requests {
                 ensure!(
@@ -385,17 +417,33 @@ impl Harness<'_> {
                 device_response = self.device.completions.last().map(|(_, reply)| *reply);
             }
             if received {
-                let expected = expected_object
-                    .take()
-                    .ok_or_else(|| eyre::eyre!("unsolicited OBJEKT response"))?;
                 let rsp = response.unwrap();
-                ensure!(
-                    self.store_requests[transaction_start.1..] == expected.store,
-                    "processor store transactions differ"
-                );
-                self.verify(expected, rsp, transaction_start.0, transaction_start.2)?;
-                self.commands.push((accepted_ports.take().unwrap(), rsp));
+                if let Some((expected, ports, start)) = retiring.take() {
+                    // OBJEKT already holds the next command's effects; the
+                    // state comparison waits for that command's reply.
+                    ensure!(
+                        self.store_requests[start.1..] == expected.store,
+                        "processor store transactions differ"
+                    );
+                    self.verify_reply(expected, rsp, start.0, start.2)?;
+                    self.commands.push((ports, rsp));
+                    transaction_start.2 += 1;
+                } else {
+                    let expected = expected_object
+                        .take()
+                        .ok_or_else(|| eyre::eyre!("unsolicited OBJEKT response"))?;
+                    ensure!(
+                        self.store_requests[transaction_start.1..] == expected.store,
+                        "processor store transactions differ"
+                    );
+                    self.verify(expected, rsp, transaction_start.0, transaction_start.2)?;
+                    self.commands.push((accepted_ports.take().unwrap(), rsp));
+                }
             }
+            ensure!(
+                retiring.is_none(),
+                "launched reply did not arrive as the next command issued"
+            );
             if joining {
                 let rsp = response.take().unwrap();
                 ensure!(
@@ -405,13 +453,14 @@ impl Harness<'_> {
                 );
                 model.object = rsp.data.bits();
                 launched = false;
-                candidate = None;
-                ensure!(
-                    self.rtl.cpu_retire_o == 0,
-                    "barrier retired before consuming its reply"
-                );
-                self.compare_processor(model)?;
-                continue;
+                // A collector control joins on its own edge, then executes
+                // with the joined Object: prepare it again.
+                if self.rtl.cpu_retire_o == 0 && new_launch.is_none() {
+                    candidate = None;
+                }
+            }
+            if let Some(l) = new_launch {
+                launched = l;
             }
             if self.rtl.cpu_gc_active_o != 0 {
                 let mut expected = self.oracle.clone();
@@ -485,6 +534,7 @@ impl Harness<'_> {
                 *model = next;
                 self.compare_processor(model)?;
                 retired += 1;
+                self.object_outstanding = launched;
                 observe(self, model)?;
             } else {
                 // Architectural state must remain stable during request and response stalls.

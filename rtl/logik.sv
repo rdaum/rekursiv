@@ -85,7 +85,7 @@ module logik #(
     // follow. The first barrier drains/publishes the response before executing.
     // Errors are deferred to that barrier, whose effects do not retire. This is
     // not speculative execution: intervening arithmetic remains committed.
-    logic async_pending, async_done, async_barrier, async_join;
+    logic async_pending, async_done, async_barrier, async_join, launch, joined, blocked, static_barrier;
     logic [3:0] async_status;
     object_word_t async_data;
     logic [3:0] async_completion_status;
@@ -111,7 +111,7 @@ module logik #(
     assign response_valid=gc_active_o ? gc_response_i : rsp_valid_i;
     assign response_status=gc_active_o ? gc_status_i : rsp_status_i;
     assign response_data=gc_active_o ? gc_result_i : rsp_data_i;
-    assign gc_request=state==EXECUTE && !async_pending && !gc_active_o && !retried &&
+    assign gc_request=state==EXECUTE && !blocked && !gc_active_o && !retried &&
         instruction.recovery==11 && local_fault==FAULT_NONE;
     assign gc_enter=gc_request || (state==WAIT_RESPONSE && !gc_active_o && rsp_valid_i &&
         rsp_status_i==11 && gc_enable_i && !retried &&
@@ -147,17 +147,35 @@ module logik #(
     assign halted_o = state == HALTED;
     assign service_o = state == SERVICE_BREAK;
     assign service_code_o = service_code;
-    // Offered from EXECUTE: a validated, blocking command outside collection.
-    // Launched commands and collector controls keep the ISSUE cycle.
-    wire direct_issue = state == EXECUTE && !(async_pending && async_barrier) &&
+    // A launched command retires when OBJEKT accepts it; the next barrier
+    // joins its reply. Every command that pages nothing and changes no
+    // low-space threshold launches, as do explicitly launched accesses.
+    assign launch = instruction.object_enable && (instruction.object_async ||
+        (instruction.object_pager == 0 && instruction.object_register != 3'd5 &&
+         instruction.object_register != 3'd6 && instruction.condition != CC_OBJECT_OK &&
+         instruction.device == 0 && instruction.recovery == 0 && instruction.alu != ALU_FLOAT &&
+         instruction.sequence_op != SEQ_SERVICE && instruction.sequence_op != SEQ_HOLD &&
+         !instruction.halt));
+    // Join-through: a barrier executes in the cycle its reply arrives, with
+    // the reply forwarded as Object. Collector controls take a separate join
+    // edge, because collector entry saves Object on that edge.
+    // Decided from the instruction's fields alone: the forwarded Object can
+    // raise a local fault, which must not feed back into this decision.
+    assign joined = state == EXECUTE && async_pending && static_barrier && (async_done || rsp_valid_i) &&
+        async_completion_status == 0 && instruction.recovery == 0;
+    assign blocked = async_pending && async_barrier && !joined;
+    // Offered from EXECUTE: a validated command outside collection. Collector
+    // controls keep the ISSUE cycle.
+    wire direct_issue = state == EXECUTE && !blocked &&
         local_fault == FAULT_NONE && !gc_request && instruction.sequence_op != SEQ_HOLD &&
         instruction.device == 0 && instruction.alu != ALU_FLOAT && instruction.object_enable &&
-        instruction.recovery == 0 && !instruction.object_async;
+        instruction.recovery == 0;
     assign cmd_valid_o = (state == ISSUE || direct_issue) && !gc_active_o && !rst_i;
     assign rsp_ready_o = (state == WAIT_RESPONSE || (async_pending && !async_done)) && !gc_active_o && !rst_i;
-    assign async_barrier=instruction.object_enable || instruction.bus_source==BUS_OBJECT ||
+    assign static_barrier=instruction.object_enable || instruction.bus_source==BUS_OBJECT ||
         instruction.condition==CC_OBJECT_OK || instruction.device!=0 || instruction.recovery!=0 ||
-        instruction.halt || instruction.sequence_op==SEQ_SERVICE || local_fault!=FAULT_NONE;
+        instruction.halt || instruction.sequence_op==SEQ_SERVICE;
+    assign async_barrier=static_barrier || local_fault!=FAULT_NONE;
     assign async_completion_status=async_done ? async_status : rsp_status_i;
     assign async_completion_data=async_done ? async_data : rsp_data_i;
     assign async_join=state==EXECUTE && async_pending && async_barrier && (async_done || rsp_valid_i);
@@ -228,7 +246,7 @@ module logik #(
         .invert_i(instruction.invert_condition), .halt_i(instruction.halt),
         .load_mark_i(instruction.load_mark), .branch_i(instruction.branch),
         .dispatch_i(ucar_o), .control_top_i(cstkr_o), .bus_i(bus_value), .symbol_i(symbol),
-        .flags_i(flags_o), .object_ok_i(object_status == 0), .irq_i(irq_i),
+        .flags_i(flags_o), .object_ok_i(object_status == 0 || joined), .irq_i(irq_i),
         .low_space_i(low_space_i), .pending_i(pending_o),
         .use_issued_condition_i(state == ISSUE || state == WAIT_RESPONSE || state == NUMERIC_WAIT || state == DEVICE_WAIT || (!gc_active_o && retried)),
         .issued_condition_i((!gc_active_o && retried) ? saved_issued_condition : issued_condition), .condition_o(condition_value),
@@ -244,7 +262,7 @@ module logik #(
         unique case (instruction.bus_source)
             BUS_ESTK: bus_value = estkr_o;
             BUS_CSTK: bus_value = {16'b0, cstkr_o};
-            BUS_OBJECT: bus_value = object_result;
+            BUS_OBJECT: bus_value = joined ? async_completion_data : object_result;
             BUS_REGISTER: bus_value = {8'b0, register_a};
             BUS_APC: bus_value = {16'b0, apc_o};
             BUS_AP: bus_value = {16'b0, ap_o};
@@ -309,7 +327,7 @@ module logik #(
         unique case (state)
             HALTED: if (start) next_state = EXECUTE;
             EXECUTE: begin
-                if (async_pending && async_barrier) begin
+                if (blocked) begin
                     if(async_join && async_completion_status!=0) next_state=HALTED;
                 end
                 else if (local_fault != FAULT_NONE) next_state = HALTED;
@@ -319,7 +337,10 @@ module logik #(
                 else if (instruction.sequence_op != SEQ_HOLD) begin
                     if (instruction.device != 0) next_state = DEVICE_WAIT;
                     else if (instruction.alu==ALU_FLOAT) next_state=NUMERIC_WAIT;
-                    else if (direct_issue && !gc_active_o && cmd_ready_i) next_state = WAIT_RESPONSE;
+                    else if (direct_issue && !gc_active_o && cmd_ready_i) begin
+                        if (launch) retire = 1'b1;
+                        else next_state = WAIT_RESPONSE;
+                    end
                     else if (instruction.object_enable || (instruction.recovery!=0 && (instruction.recovery<10 || instruction.recovery>=12))) next_state = ISSUE;
                     else retire = 1'b1;
                 end
@@ -334,7 +355,7 @@ module logik #(
                 if(local_fault!=FAULT_NONE) next_state=HALTED;
             end
             ISSUE: if (gc_active_o ? gc_ready_i : cmd_ready_i) begin
-                if(instruction.object_async && !gc_active_o) begin next_state=EXECUTE; retire=1; end
+                if(launch && !gc_active_o) begin next_state=EXECUTE; retire=1; end
                 else next_state = WAIT_RESPONSE;
             end
             WAIT_RESPONSE: if (response_valid) begin
@@ -379,11 +400,8 @@ module logik #(
             if (boot_fault) fault_o <= FAULT_ENCODING;
             if (start) begin fault_o <= FAULT_NONE; retried<=0; end
             if (state == EXECUTE) begin
-                if (local_fault != FAULT_NONE && !async_pending) fault_o <= local_fault;
+                if (local_fault != FAULT_NONE && !blocked) fault_o <= local_fault;
                 else if (next_state == ISSUE || next_state == WAIT_RESPONSE || next_state == NUMERIC_WAIT || next_state == DEVICE_WAIT) issued_condition <= (!gc_active_o && retried) ? saved_issued_condition : condition_value;
-            end
-            if(state==ISSUE && cmd_ready_i && instruction.object_async && !gc_active_o) begin
-                async_pending<=1; async_done<=0;
             end
             if(async_pending && !async_done && rsp_valid_i) begin
                 async_done<=1; async_status<=rsp_status_i; async_data<=rsp_data_i;
@@ -392,6 +410,11 @@ module logik #(
                 async_pending<=0; async_done<=0; last_status_o<=async_completion_status;
                 if(async_completion_status!=0) fault_o<=FAULT_OBJECT;
                 else begin object_result<=async_completion_data; object_status<=async_completion_status; end
+            end
+            // A barrier joined through may launch its own command on the same edge.
+            if(launch && !gc_active_o && cmd_ready_i &&
+               ((state==ISSUE) || (direct_issue && next_state==EXECUTE && retire))) begin
+                async_pending<=1; async_done<=0;
             end
             if (state == DEVICE_WAIT && io_done && io_error) fault_o <= FAULT_DEVICE;
             if (state == WAIT_RESPONSE && response_valid) begin

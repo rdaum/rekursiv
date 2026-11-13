@@ -142,6 +142,9 @@ pub struct Work {
 struct Pending {
     start: u64,
     service: u64,
+    /// The reply is a resident memory completion forwarded from WAIT_MEMORY.
+    /// OBJEKT accepts its next command one cycle after such a reply.
+    forwarded: bool,
 }
 
 /// Running estimate for one execution, excluding bootstrap and host compilation.
@@ -237,14 +240,18 @@ impl Estimate {
         self.cycles.maintenance_wait += slots;
         self.work.collector_cycles += slots;
     }
-    pub(crate) fn join(&mut self) {
+    /// Join the launched command at a barrier, which `issues` a command of its own.
+    pub(crate) fn join(&mut self, issues: bool) {
         if let Some(p) = self.pending.take() {
-            let hidden = (self.cycles.total() - p.start).min(p.service);
-            self.work.async_hidden += hidden;
+            // The reply is visible service cycles after the launch's EXECUTE
+            // edge; the barrier executes in the cycle it arrives, or at once
+            // if it arrived during local work.
+            let elapsed = self.cycles.total() - p.start;
+            let ready = p.service - 1 + u64::from(issues && p.forwarded);
+            let wait = ready.saturating_sub(elapsed);
+            self.work.async_hidden += ready - wait;
             self.work.async_joins += 1;
-            // LOGIK joins on the reply edge when still waiting, or on a
-            // separate EXECUTE edge if the reply arrived during local work.
-            self.cycles.async_wait += (p.service - hidden).max(1);
+            self.cycles.async_wait += wait;
         }
     }
 }

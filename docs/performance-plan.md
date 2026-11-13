@@ -20,6 +20,7 @@ microinstructions and estimated time for the 30,000 bytecodes after one keystrok
 | BitBlt draw loop, overlaps without staging     |                            112 |                 0.40 s |
 | One pending flag for boundary work             |                            104 |                 0.39 s |
 | `fetch_byte` checks overlapped with the fetch  |                            101 |                 0.38 s |
+| Object commands launched, joined through       |                            101 |                 0.29 s |
 
 On the board itself a keystroke took over a second before the block-RAM memory cache, and noticeably
 less after it. A well-tuned bytecode interpreter spends perhaps 10 to 30 microinstructions per
@@ -51,6 +52,11 @@ OBJEKT command stalls it until the command completes. On the board it is about 2
 - **Bytecode boundary** (`7a3786a`, `78d979d`). A pending process switch and idle now raise the
   pending flag, so a quiet boundary is three condition tests; `fetch_byte`'s bounds checks overlap
   the method fetch.
+- **Background object commands** (item 7, first step). Every command that pages nothing now
+  launches: its instruction retires when OBJEKT accepts it, and the next barrier executes in the
+  cycle the reply arrives, with the reply forwarded as Object. OBJEKT accepts the next command as it
+  delivers a reply. A keystroke fell from 4.87M to 3.88M cycles with fast memory and from 8.42M to
+  7.35M with the SDRAM cost model. Paging commands still block, and one command is in flight.
 - **Method cache** (`a2cdbec`). 512 entries of class, selector and method in a private array. 94% of
   sends hit; dictionary searches per keystroke fell from about 11,800 to 480.
 
@@ -165,13 +171,13 @@ keystroke, so this follows the larger items.
 
 ### 7. Object commands in the background
 
-Today the sequencer stalls on every OBJEKT command until it completes, except one launched memory
-read. A scoreboard would let it continue until an instruction actually uses a result (Object, a VR,
-the index, or the selection), and OBJEKT would accept two or three commands in flight with its
-memory channel pipelined. This converts most of the 0.8 to 1.8 waiting cycles per microinstruction
-into work. It is the largest single hardware gain available, and the largest change: LOGIK's issue
-logic, OBJEKT's command interface, the reference model, the emulator's cycle estimator and the
-differential tests all change.
+Done in part: commands that page nothing launch and are joined through (see Done). Remaining: paging
+commands still block, and only one command is in flight. A scoreboard would let it continue until an
+instruction actually uses a result (Object, a VR, the index, or the selection), and OBJEKT would
+accept two or three commands in flight with its memory channel pipelined. This converts most of the
+0.8 to 1.8 waiting cycles per microinstruction into work. It is the largest single hardware gain
+available, and the largest change: LOGIK's issue logic, OBJEKT's command interface, the reference
+model, the emulator's cycle estimator and the differential tests all change.
 
 ### 8. Bytecode prefetch and dispatch
 

@@ -70,7 +70,7 @@ fn native_retirements_and_heaps_match_rtl_across_collection_and_paging() -> Resu
                 }
                 ensure!(completed, "emulator failed to reach next retirement");
                 ensure!(
-                    machine.cpu == *expected,
+                    same_cpu(&machine.cpu, expected, h.object_outstanding),
                     "CPU differs at micro-PC {}",
                     expected.pc
                 );
@@ -518,4 +518,15 @@ fn packed_colour_scanout_uses_device_palette_and_rgb_formats() {
         presentation::pixels(&frame, Some((&cursor, (1, 1)))),
         [0xedcba9]
     );
+}
+
+/// The emulator completes a launched command at once; the RTL publishes its
+/// reply as Object only at the next barrier.
+fn same_cpu(cpu: &Processor, expected: &Processor, outstanding: bool) -> bool {
+    cpu == expected
+        || (outstanding
+            && Processor {
+                object: expected.object,
+                ..cpu.clone()
+            } == *expected)
 }

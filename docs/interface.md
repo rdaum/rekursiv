@@ -644,24 +644,32 @@ waits for one response. For a blocking command, only a successful response retir
 effects. Command acceptance, response waiting, and response backpressure cannot repeat local writes
 or command issue.
 
-`launch` permits a prepared memory instruction to retire its local effects when OBJEKT accepts the
-command. Independent local instructions can then execute while RAM completes the access. Only one
-object command can be outstanding. Its response remains private until the next barrier:
+A launched command retires its instruction's local effects when OBJEKT accepts it. Independent local
+instructions can then execute while OBJEKT completes it. Every command that pages nothing (pager
+field zero) and loads no low-space threshold launches, unless its instruction is itself a barrier
+for another reason (`cc=ObjectOk`, a device or recovery control, Halt, Service or HOLD). The
+`launch` bit also launches a prepared memory access explicitly. Paging commands block: they can
+start a collection and be retried. Only one object command can be outstanding. Its response remains
+private until the next barrier:
 
 - Any OBJEKT command, `d=Object`, or `cc=ObjectOk`.
 - A device instruction or a recovery instruction.
 - Halt, service break, or a local validation fault.
 
-The barrier waits for completion before it evaluates its operands or commits any effects. A
+The barrier executes in the cycle the reply arrives, or at once if it has already arrived, with the
+reply forwarded as its Object operand and object condition. A recovery control takes a separate join
+cycle first. A local validation fault on an instruction that is not otherwise a barrier also waits
+for the reply. OBJEKT accepts the barrier's own command in the cycle it delivers a reply from
+RESPONSE; after a resident memory completion forwarded from RAM it accepts one cycle later. A
 successful completion updates the Object result. An error halts at the barrier with fault 4 and the
 OBJEKT status. The launch and intervening local instructions remain retired. OBJEKT itself still
-commits its memory command only on success. Microcode that requires all local effects to wait for
-success uses a blocking command.
+commits its memory command only on success. Because object errors halt the machine, the only
+difference from a blocking command is where the fault is reported.
 
-`launch` requires `prepared` and a memory operation. It cannot share Halt, Service, or recovery
-controls. An ordinary local branch does not force a barrier, unless it reads an object result or
-condition. The RTL can overlap address preparation and independent processor work with one resident
-memory request. It does not queue multiple RAM requests or overlap pager misses.
+The explicit `launch` bit requires `prepared` and a memory operation. It cannot share Halt, Service,
+or recovery controls. An ordinary local branch does not force a barrier, unless it reads an object
+result or condition. The RTL can overlap address preparation and independent processor work with one
+resident memory request. It does not queue multiple RAM requests or overlap pager misses.
 
 The selected condition stays fixed throughout command issue and response waiting. IRQ is a
 synchronous input and cannot redirect an already prepared object instruction. Conditions include

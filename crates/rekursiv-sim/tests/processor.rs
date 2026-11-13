@@ -1,5 +1,5 @@
 use eyre::Result;
-use rekursiv_asm::{processor::*, Command, Index, Memory, Read, Word};
+use rekursiv_asm::{processor::*, Command, Index, Pager, Read, Word};
 use rekursiv_model::processor::{Image, Processor};
 use rekursiv_sim::{runtime, Harness, Timing};
 fn lit(value: u64) -> Instruction {
@@ -462,10 +462,11 @@ fn object_error_and_reset_during_wait_preserve_processor_state() -> Result<()> {
         },
         None,
     )?;
+    // A paging command blocks; its error leaves the instruction unretired.
     let image = Image::program(&[Instruction {
         sp: Pointer::Increment,
         object: Some(Command {
-            memory: Memory::Write,
+            pager: Pager::Fetch,
             ..Command::default()
         }),
         ..lit(5)

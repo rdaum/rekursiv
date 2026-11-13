@@ -73,14 +73,14 @@ impl Estimate {
         service += u64::from(paged);
         let status = outcome.response.status;
         let approximate = !matches!(status, Status::Ok | Status::OutOfSpace);
-        match path {
+        match &path {
             // Resident RAM completion is forwarded directly to LOGIK. A
             // stalled consumer retains the reply in RESPONSE in the RTL;
             // this estimator assumes no response-consumption backpressure.
             ObjectPath::Resident if ram != 0 => service -= 1,
             ObjectPath::Resident => (),
             ObjectPath::Transfer(skips, refused) => {
-                service += skips - u64::from(refused);
+                service += skips - u64::from(*refused);
                 // RESERVE and DONE/publication, plus one initial FILL.
                 // Subsequent words go directly to WRITE (allocation) or
                 // GET (refill). Victim reads are distinct.
@@ -92,7 +92,7 @@ impl Estimate {
             ObjectPath::Directory(scan) => {
                 service += 1; // DONE/publication
                 if !matches!(status, Status::BadCommand | Status::BadValue) {
-                    service += scan + 1; // resident scan, then engine start
+                    service += *scan + 1; // resident scan, then engine start
                 }
             }
             ObjectPath::Exchange => {
@@ -103,14 +103,14 @@ impl Estimate {
             }
         }
         self.work.approximate_objects += u64::from(approximate);
-        // LOGIK offers a blocking command from EXECUTE, and an idle OBJEKT
-        // accepts it there. A launched command still takes an ISSUE cycle.
-        self.cycles.object_issue += u64::from(asynchronous);
+        // LOGIK offers every command from EXECUTE. A launched command
+        // retires there; a blocking one waits for its reply.
         if asynchronous {
             debug_assert!(self.pending.is_none());
             self.pending = Some(Pending {
                 start: self.cycles.total(),
                 service,
+                forwarded: matches!(path, ObjectPath::Resident) && ram != 0,
             });
             self.work.async_service += service;
         } else {

@@ -116,6 +116,9 @@ pub struct Harness<'a> {
     pub oracle: Model,
     pub backing: Vec<Word>,
     pub timing: Timing,
+    /// During a processor run: a launched command's reply has not yet been
+    /// joined, so the model's Object still holds the previous result.
+    pub object_outstanding: bool,
     pub stats: Statistics,
     pending: Option<Pending>,
     request_wait: u32,
@@ -157,6 +160,7 @@ impl<'a> Harness<'a> {
         let trace = trace.map(|p| rtl.open_vcd(p.as_str()));
         let mut h = Self {
             trace,
+            object_outstanding: false,
             rtl,
             oracle: Model::new(PAGER_ENTRIES, memory_words),
             backing: vec![Word::ZERO; memory_words],
@@ -578,6 +582,17 @@ impl<'a> Harness<'a> {
         start: usize,
         responses: u64,
     ) -> Result<()> {
+        self.verify_reply(expected, response, start, responses)?;
+        self.compare_state()
+    }
+    /// Check a reply and its memory effects, without comparing OBJEKT state.
+    fn verify_reply(
+        &mut self,
+        expected: Outcome,
+        response: Response,
+        start: usize,
+        responses: u64,
+    ) -> Result<()> {
         ensure!(
             response == expected.response,
             "response {response:?} != model {:?}",
@@ -598,7 +613,7 @@ impl<'a> Harness<'a> {
             self.pending.is_none(),
             "memory operation remained after retirement"
         );
-        self.compare_state()
+        Ok(())
     }
     pub fn snapshot(&mut self) -> Result<State> {
         let mut vr = [Word::NIL; 8];

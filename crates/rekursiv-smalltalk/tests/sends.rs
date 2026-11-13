@@ -322,7 +322,9 @@ fn execute_machine(
             if cpu.pc == assembly.symbols["low_space_collected"] as u16 {
                 proactive_collections += 1;
             }
-            if h.rtl.cpu_pc_o == assembly.symbols["capacity_value"] as u16 {
+            // Sampled as capacity_value retires: it is the barrier that joins
+            // the launched read, and it latches Object into Symbol.
+            if cpu.pc == assembly.symbols["capacity_value"] as u16 + 1 {
                 let expected = if cpu.rf[0] == 112 {
                     u64::from(
                         h.oracle
@@ -333,7 +335,7 @@ fn execute_machine(
                     (1 << 37) - h.oracle.next_identity
                 };
                 ensure!(
-                    cpu.object == expected,
+                    cpu.symbol == expected,
                     "capacity sample differs from committed allocator state"
                 );
                 capacity_samples.push((cpu.rf[0], expected));

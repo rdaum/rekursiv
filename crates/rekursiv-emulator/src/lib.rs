@@ -330,7 +330,7 @@ impl Machine {
                 // Local blocks may start by reading Object. Publish a pending
                 // reply before evaluating that word, just as step_with does.
                 // A block with a later barrier is declined while a reply is pending.
-                if self.pending_object.is_some()
+                if self.object_outstanding()
                     && self
                         .image
                         .code
@@ -339,8 +339,16 @@ impl Machine {
                         .flatten()
                         .is_none_or(|i| i.object_barrier())
                 {
-                    self.join_object()?;
+                    let issues = self
+                        .image
+                        .code
+                        .get(self.cpu.pc as usize)
+                        .copied()
+                        .flatten()
+                        .is_some_and(|i| i.object.is_some());
+                    self.join_object(issues)?;
                 }
+                let outstanding = self.object_outstanding();
                 if let Some(result) = self.jit.as_mut().and_then(|jit| {
                     jit.run_block(
                         &mut self.cpu,
@@ -351,7 +359,7 @@ impl Machine {
                         jit::BlockPolicy {
                             allow_object: !self.objekt_metrics_enabled
                                 && self.cycle_estimate.is_none(),
-                            pending_object: self.pending_object.is_some(),
+                            pending_object: outstanding,
                             recovering: self.recovery.is_some(),
                         },
                     )
@@ -371,7 +379,7 @@ impl Machine {
                         return Err(error);
                     }
                     if result.fault != 0 {
-                        self.join_object()?;
+                        self.join_object(false)?;
                         self.estimate_local(1);
                         return Err(self.fail(result.fault, result.object_status).into());
                     }
@@ -413,7 +421,7 @@ impl Machine {
         }
         let instruction = self.image.code.get(self.cpu.pc as usize).copied().flatten();
         if instruction.is_none_or(|i| i.object_barrier()) {
-            self.join_object()?;
+            self.join_object(instruction.is_some_and(|i| i.object.is_some()))?;
         }
         let instruction = instruction.ok_or_else(|| {
             self.estimate_local(1);
@@ -451,7 +459,7 @@ impl Machine {
         let command = match prepared {
             Ok(p) => p,
             Err(code) => {
-                self.join_object()?;
+                self.join_object(false)?;
                 self.estimate_local(1);
                 return Err(self.fail(code, None).into());
             }
@@ -536,7 +544,7 @@ impl Machine {
                         path,
                         command.pager != rekursiv_asm::Pager::None,
                         &outcome,
-                        instruction.object_async,
+                        instruction.launches(),
                     );
                 }
                 outcome.response
@@ -552,6 +560,8 @@ impl Machine {
                 self.devices.tick_idle()?;
                 return Ok(Step::RecoveryEntered);
             }
+            // Implicitly launched commands complete at once here, as in the
+            // JIT; the estimator still times them as launched.
             if instruction.object_async {
                 self.pending_object = Some(response);
             } else if response.status != Status::Ok {
@@ -607,11 +617,15 @@ impl Machine {
         }
         Ok(Step::Retired)
     }
-    fn join_object(&mut self) -> Result<()> {
+    /// A launched command awaits its join, functionally or in the estimator.
+    fn object_outstanding(&self) -> bool {
+        self.pending_object.is_some() || self.cycle_estimate.as_ref().is_some_and(|t| t.pending())
+    }
+    fn join_object(&mut self, issues: bool) -> Result<()> {
+        if let Some(timing) = &mut self.cycle_estimate {
+            timing.join(issues);
+        }
         if let Some(response) = self.pending_object.take() {
-            if let Some(timing) = &mut self.cycle_estimate {
-                timing.join();
-            }
             if response.status != Status::Ok {
                 return Err(self.fail(4, Some(response.status)).into());
             }

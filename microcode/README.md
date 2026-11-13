@@ -89,11 +89,12 @@ command consumes the old reply in its local datapath, then produces the next rep
 reference in a VR or SYMBOL before another command needs that response latch.
 
 `prepare` computes an address using the updated index and old selection. `prepared` uses the
-previously prepared address. `launch` permits local work while a prepared access waits; the next
-object/result/device/recovery/stop barrier joins it. An unused prepared bounds error is deferred,
-which is why the stream demo can prepare component 5 of a four-word object after its final read. See
-the [pipeline contract](../docs/interface.md#prepared-address-pipeline) for invalidation and
-recovery rules.
+previously prepared address. Commands that page nothing launch: the instruction retires when OBJEKT
+accepts it, and the next object/result/device/recovery/stop barrier joins the reply, executing in
+the cycle it arrives. `launch` does the same for a prepared access. An unused prepared bounds error
+is deferred, which is why the stream demo can prepare component 5 of a four-word object after its
+final read. See the [pipeline contract](../docs/interface.md#prepared-address-pipeline) for
+invalidation and recovery rules.
 
 ## Smalltalk source map
 

@@ -23,7 +23,11 @@ fn compare_program(source: &str, timing: Timing) -> Result<(u64, rekursiv_emulat
     h.run_processor_observed(&m.image().clone(), &mut oracle, 5_000_000, |h, expected| {
         for _ in 0..200_000 {
             if m.step()? == Step::Retired && !m.recovering() {
-                ensure!(m.cpu == *expected, "CPU mismatch at {}", expected.pc);
+                ensure!(
+                    same_cpu(&m.cpu, expected, h.object_outstanding),
+                    "CPU mismatch at {}",
+                    expected.pc
+                );
                 ensure!(m.objekt == h.oracle, "OBJEKT mismatch at {}", expected.pc);
                 return Ok(());
             }
@@ -38,7 +42,9 @@ fn compare_program(source: &str, timing: Timing) -> Result<(u64, rekursiv_emulat
 #[test]
 fn shared_stream_microcode_overlaps_numeric_work_and_reduces_rtl_cycles() -> Result<()> {
     let source = include_str!("../../../microcode/pipeline.uc");
-    let blocking = source.replace(", launch", "");
+    // Reads that page nothing launch without the bit; an instruction that
+    // tests object success blocks instead.
+    let blocking = source.replace(", launch", ", cc=ObjectOk");
     for timing in [
         Timing::default(),
         Timing {
@@ -239,4 +245,15 @@ fn local_fault_drains_the_launched_access_and_preserves_error_priority() -> Resu
         h.compare_state()?;
     }
     Ok(())
+}
+
+/// The emulator completes a launched command at once; the RTL publishes its
+/// reply as Object only at the next barrier.
+fn same_cpu(cpu: &Processor, expected: &Processor, outstanding: bool) -> bool {
+    cpu == expected
+        || (outstanding
+            && Processor {
+                object: expected.object,
+                ..cpu.clone()
+            } == *expected)
 }

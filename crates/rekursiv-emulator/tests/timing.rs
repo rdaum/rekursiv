@@ -200,8 +200,9 @@ fn reporting_does_not_drain_an_outstanding_reply() -> Result<()> {
     m.run_steps(10)?;
     let e = m.cycle_estimate().unwrap();
     assert!(!e.pending());
-    // RAM completion now reaches LOGIK without a registered-response bubble.
-    assert_eq!(e.cycles().async_wait, 13);
+    // RAM completion reaches LOGIK without a registered-response bubble, and
+    // the halt barrier executes in the cycle the reply arrives.
+    assert_eq!(e.cycles().async_wait, 12);
     assert!(e.report(&m.stats, f64::NAN).is_err());
     assert!(m.enable_cycle_estimate(Config::SRAM).is_err());
     Ok(())

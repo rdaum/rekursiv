@@ -105,6 +105,27 @@ impl Instruction {
             || self.halt
             || self.seq == Seq::Service
     }
+    /// Whether this instruction's OBJEKT command is launched: it retires on
+    /// acceptance and its reply is joined by the next barrier. Explicitly
+    /// launched prepared accesses, and every command that pages nothing,
+    /// changes no low-space threshold, and is not itself a barrier for
+    /// other reasons. A launched command that fails faults at its join.
+    pub fn launches(self) -> bool {
+        self.object_async
+            || (self.object.is_some_and(|c| {
+                c.pager == crate::Pager::None
+                    && !matches!(
+                        c.register,
+                        crate::Register::WordThreshold | crate::Register::IdentityThreshold
+                    )
+            }) && self.condition != Condition::ObjectOk
+                && self.device == Device::None
+                && self.recovery == Recovery::None
+                && self.alu != Alu::Float
+                && self.seq != Seq::Service
+                && self.seq != Seq::Hold
+                && !self.halt)
+    }
     pub fn literal(data: Word) -> Self {
         Self {
             data,

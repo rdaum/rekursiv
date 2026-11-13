@@ -175,7 +175,9 @@ module objekt #(
     wire [23:0] c_alloc_size=looking ? held_alloc_size : alloc_size_i;
     wire [39:0] c_data=looking ? held_data : data_i;
     wire [39:0] c_expected_type=looking ? held_expected_type : expected_type_i;
-    wire accept=phase==IDLE && cmd_valid_i && cmd_ready_o;
+    // A command is accepted when idle, or in RESPONSE as its reply is taken:
+    // every effect of the replying command is already committed there.
+    wire accept=(phase==IDLE || phase==RESPONSE) && cmd_valid_i && cmd_ready_o;
     // A command without a paged key executes on acceptance; others in LOOKUP.
     wire execute=(accept && pager_i==0) || looking;
 
@@ -427,7 +429,8 @@ module objekt #(
     assign mem_write_o=gc_active_i ? gc_mem_write :(phase==EXCHANGE) ? 1'b0 :(phase==TRANSFER) ? transfer_mem_write : resident_mem_write_o;
     assign mem_addr_o=gc_active_i ? gc_mem_address :(phase==EXCHANGE) ? exchange_mem_address :(phase==TRANSFER) ? transfer_mem_addr : resident_mem_addr_o;
     assign mem_data_o=gc_active_i ? gc_mem_data :(phase==EXCHANGE) ? 40'b0 :(phase==TRANSFER) ? transfer_mem_data : resident_mem_data_o;
-    assign cmd_ready_o = phase==IDLE && run_i && !maintenance && !gc_active_i && !rst_i;
+    assign cmd_ready_o = (phase==IDLE || (phase==RESPONSE && rsp_ready_i)) && run_i &&
+        !maintenance && !gc_active_i && !rst_i;
     assign svc_ready_o = phase==IDLE && !run_i && !gc_active_i && !rst_i;
     assign rsp_valid_o = (phase==RESPONSE || resident_completion) && !rst_i;
     assign mem_valid_o = gc_active_i ? gc_mem_valid : ((phase==REQUEST) || (phase==TRANSFER && transfer_mem_valid) || (phase==EXCHANGE && exchange_mem_valid)) && !rst_i;
@@ -729,8 +732,10 @@ module objekt #(
                     clear_slot<=clear_slot+1'b1;
                     if(clear_slot==PAGER_BITS'(ENTRIES-1)) phase<=IDLE;
                 end
-                IDLE, LOOKUP: begin
-                    if(execute) begin
+                IDLE, LOOKUP, RESPONSE: begin
+                    if(phase==RESPONSE && !accept) begin
+                        if(rsp_ready_i) phase<=IDLE;
+                    end else if(execute) begin
                         response_status<=error; response_data<=(error==OK) ? result_data : NIL;
                         if(start_directory) begin
                             phase<=DIRECTORY_SCAN; directory_vr<=c_vr; walk_slot<='0;
@@ -930,7 +935,6 @@ module objekt #(
                     phase<=EXCHANGE_FINISH;
                 end
                 EXCHANGE_FINISH: phase<=RESPONSE;
-                RESPONSE: if(rsp_ready_i) phase<=IDLE;
                 default: phase<=IDLE;
             endcase
         end

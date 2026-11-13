@@ -44,11 +44,11 @@ The additive cycle categories sum to the estimated elapsed processor time:
 
 - **Execute:** one cycle per local instruction or instruction attempt, including HOLD and GC
   entry/return.
-- **Object issue:** one acceptance cycle per launched OBJEKT command. LOGIK offers a blocking
-  command from EXECUTE, and an idle OBJEKT accepts it there, so blocking commands add no issue
-  cycle.
+- **Object issue:** LOGIK offers every command from EXECUTE and OBJEKT accepts it there, so this is
+  zero unless OBJEKT is busy; it remains for collector controls.
 - **Blocking object wait:** OBJEKT service and response cycles after acceptance.
-- **Async join/wait:** the unhidden service tail and the required barrier join edge.
+- **Async join/wait:** the unhidden service tail. The barrier executes in the cycle the reply
+  arrives, plus one cycle when it issues a command right after a forwarded RAM completion.
 - **Numeric wait:** floating-point execution after the initial EXECUTE cycle.
 - **Device wait:** request, response, and completion cycles after EXECUTE.
 - **GC maintenance wait:** maintenance issue, RAM access where required, and response cycles.
@@ -61,7 +61,7 @@ transitions can increase CPI without adding retirements.
 RAM and backing service totals describe work, not additional elapsed time. An asynchronous command
 can overlap local arithmetic, stack work, fetch controls, and floating-point execution. The
 estimator records its completion time and waits only when a later instruction needs the result or
-reaches a barrier. Even an already-completed reply needs one join cycle, as in LOGIK.
+reaches a barrier. A reply that has already arrived costs nothing to join.
 
 The hidden-service total covers joined commands. If execution stops with a pending command, the
 report shows its remaining service cycles without forcing a join. A ready reply can remain pending
