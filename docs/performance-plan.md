@@ -10,15 +10,20 @@ from the emulator's cycle estimator at the board's sizes (32,768 pager entries, 
 Typing one character into the System Workspace runs about 30,000 bytecodes. The benchmark is the
 microinstructions and estimated time for the 30,000 bytecodes after one keystroke:
 
-| Change                                        | Microinstructions per bytecode | Time, SDRAM cost model |
-| --------------------------------------------- | -----------------------------: | ---------------------: |
-| Before this work                              |                            180 |                 0.69 s |
-| IP and SP kept in registers between bytecodes |                            152 |                 0.51 s |
-| Method cache                                  |                            144 |                 0.48 s |
+| Change                                         | Microinstructions per bytecode | Time, SDRAM cost model |
+| ---------------------------------------------- | -----------------------------: | ---------------------: |
+| Before this work                               |                            180 |                 0.69 s |
+| IP and SP kept in registers between bytecodes  |                            152 |                 0.51 s |
+| Method cache                                   |                            144 |                 0.48 s |
+| Frame caches set without reloading the context |                            138 |                 0.46 s |
+| BitBlt per-word validation pass removed        |                            122 |                 0.42 s |
+| BitBlt draw loop, overlaps without staging     |                            112 |                 0.40 s |
+| One pending flag for boundary work             |                            104 |                 0.39 s |
+| `fetch_byte` checks overlapped with the fetch  |                            101 |                 0.38 s |
 
 On the board itself a keystroke took over a second before the block-RAM memory cache, and noticeably
 less after it. A well-tuned bytecode interpreter spends perhaps 10 to 30 microinstructions per
-bytecode; 144 is the number to attack.
+bytecode; 101 is the number to attack now.
 
 Even with ideal memory the sequencer averages about 1.8 cycles per microinstruction, because every
 OBJEKT command stalls it until the command completes. On the board it is about 2.2 to 2.8.
@@ -36,6 +41,16 @@ OBJEKT command stalls it until the command completes. On the board it is about 2
 - **IP and SP in registers** (`a2cdbec`). They are written into the context only at sends, process
   switches and stops, not at every bytecode. A method's own temporaries are read without resolving
   its home.
+- **Trusted frame reloads** (`5791d01`). Activation sets the new frame's caches from its own
+  registers; after a quick method or primitive, and on returns into counted frames, only the caches
+  the send used are rebuilt.
+- **BitBlt** (`6a545e3`, `c257b66`). The pass that validated every pixel word before drawing is gone
+  (words draw as their low 16 bits). A new draw loop copies overlapping rectangles in an order that
+  needs no staging, reads each source word once, and keeps its invariants in registers. BitBlt fell
+  from 36.6 to 10.6 microinstructions per bytecode of a keystroke.
+- **Bytecode boundary** (`7a3786a`, `78d979d`). A pending process switch and idle now raise the
+  pending flag, so a quiet boundary is three condition tests; `fetch_byte`'s bounds checks overlap
+  the method fetch.
 - **Method cache** (`a2cdbec`). 512 entries of class, selector and method in a private array. 94% of
   sends hit; dictionary searches per keystroke fell from about 11,800 to 480.
 
