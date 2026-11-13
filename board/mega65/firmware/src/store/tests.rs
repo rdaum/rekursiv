@@ -452,7 +452,7 @@ fn crc32_matches_the_standard_check_value() {
 
 #[test]
 fn window_names_the_words_in_the_sector_last_read() {
-    let mut store = Store::open(formatted(64, 16)).unwrap();
+    let mut store = Store::open(formatted(512, 16)).unwrap();
     let reference = 2 << 38 | 7;
     let class = 2 << 38 | 100;
     let save = |store: &mut Store<_>, request: Request| {
@@ -523,4 +523,77 @@ fn window_names_the_words_in_the_sector_last_read() {
             count: 11
         })
     );
+}
+
+#[test]
+fn identities_far_apart_get_index_blocks_on_demand() {
+    // The board failed saving identity 266,837 against a flat index sized for
+    // 262,144. Index blocks are now allocated only where identities are saved.
+    let mut store = Store::open(formatted(9000, 1 << 26)).unwrap();
+    let class = 2 << 38 | 100;
+    let ids = [266_837u64, 5_000_000, 70];
+    for (n, id) in ids.iter().enumerate() {
+        let reference = 2 << 38 | id;
+        let save = |store: &mut Store<_>, request: Request| {
+            assert_eq!(store.request(request).status, status::OK);
+        };
+        save(
+            &mut store,
+            Request {
+                op: op::BEGIN_SAVE,
+                reference,
+                class,
+                size: 2,
+                ..Request::default()
+            },
+        );
+        for offset in 0..2 {
+            save(
+                &mut store,
+                Request {
+                    op: op::WRITE_WORD,
+                    reference,
+                    offset,
+                    data: n as u64 * 10 + u64::from(offset),
+                    ..Request::default()
+                },
+            );
+        }
+        save(
+            &mut store,
+            Request {
+                op: op::COMMIT_SAVE,
+                reference,
+                ..Request::default()
+            },
+        );
+    }
+    let top = store.superblock().index_top;
+    assert_eq!(top, 9000 - 3, "one index block per identity range");
+    let mut store = Store::open(store.into_disk()).unwrap();
+    for (n, id) in ids.iter().enumerate() {
+        let reply = store.request(Request {
+            op: op::READ_WORD,
+            reference: 2 << 38 | id,
+            offset: 1,
+            ..Request::default()
+        });
+        assert_eq!((reply.status, reply.data), (status::OK, n as u64 * 10 + 1));
+    }
+    let mut next = 0;
+    let mut order = std::vec::Vec::new();
+    loop {
+        let reply = store.request(Request {
+            op: op::NEXT_RECORD,
+            reference: next,
+            ..Request::default()
+        });
+        assert_eq!(reply.status, status::OK);
+        if reply.reference == NIL {
+            break;
+        }
+        next = reply.reference & ID_MASK;
+        order.push(next);
+    }
+    assert_eq!(order, [70, 266_837, 5_000_000]);
 }

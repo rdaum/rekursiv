@@ -25,31 +25,37 @@ system may have rewritten the card in between.
 All multi-byte fields are little-endian. A machine word occupies eight bytes: its 40 bits in the low
 five bytes, then three zero bytes. Positions below are file sector numbers.
 
-| Sectors     | Region      | Contents                                               |
-| ----------- | ----------- | ------------------------------------------------------ |
-| 0–1         | Superblocks | Two alternating copies of the store's fixed parameters |
-| 2–(2+J−1)   | Journal     | The intent list of the most recent commit              |
-| following I | Index       | One 8-byte entry per identity, in identity order       |
-| remainder   | Log         | Records, appended in commit order                      |
+| Sectors     | Region       | Contents                                                    |
+| ----------- | ------------ | ----------------------------------------------------------- |
+| 0–1         | Superblocks  | Two alternating copies of the store's parameters            |
+| 2–(2+J−1)   | Journal      | The intent list of the most recent commit                   |
+| following D | Directory    | One 4-byte index block sector per 64 identities, or zero    |
+| upward      | Log          | Records, appended in commit order from the log start        |
+| downward    | Index blocks | One sector of 64 index entries each, allocated from the end |
 
-J and I are fixed when the file is created. With 2^24 identities the index occupies 128 MB.
+J and D are fixed when the file is created: the directory covers identities below the capacity, at
+one sector per 8,192 identities, so 2^26 identities need 4 MB. An index block is allocated, from the
+end of the file downward, the first time an identity in its range of 64 is saved. The index
+therefore grows with the identities actually saved, not with the identity range. Records may not
+grow into the index blocks; the superblock records the boundary.
 
 ### Superblock
 
 | Offset | Size | Field                                                             |
 | -----: | ---: | ----------------------------------------------------------------- |
 |      0 |    8 | Magic `RKSTORE1`                                                  |
-|      8 |    4 | Format version, currently 1                                       |
+|      8 |    4 | Format version, currently 2                                       |
 |     12 |    4 | Generation; the copy with the larger valid generation is current  |
 |     16 |    4 | Journal start sector and                                          |
 |     20 |    4 | journal length in sectors                                         |
-|     24 |    4 | Index start sector                                                |
-|     28 |    4 | Index capacity in identities                                      |
+|     24 |    4 | Directory start sector                                            |
+|     28 |    4 | Capacity: the directory covers identities below this              |
 |     32 |    4 | Log start sector                                                  |
 |     36 |    4 | Log end sector (exclusive)                                        |
 |     40 |    4 | Log head: the next free log sector                                |
 |     44 |    4 | Journal state: 0 clean, 1 holds a complete commit not yet applied |
 |     48 |    4 | Highest identity that has ever had a committed record             |
+|     52 |    4 | Index top: the lowest sector of the index blocks                  |
 |    508 |    4 | CRC-32 of bytes 0–507                                             |
 
 The two copies are sectors 0 and 1. Every superblock write goes to the copy that is not current, so
@@ -57,13 +63,13 @@ a torn write leaves the previous copy intact. A new file has generation 1 in sec
 
 ### Journal
 
-|   Offset | Size | Field                             |
-| -------: | ---: | --------------------------------- |
-|        0 |    8 | Magic `RKJOURNL`                  |
-|        8 |    4 | Entry count, at most 126          |
-| 16 + 16i |    8 | Identity of entry i               |
-| 24 + 16i |    8 | New index entry for that identity |
-| 16 + 16n |    4 | CRC-32 of every byte before it    |
+|   Offset | Size | Field                                                                                                                  |
+| -------: | ---: | ---------------------------------------------------------------------------------------------------------------------- |
+|        0 |    8 | Magic `RKJOURNL`                                                                                                       |
+|        8 |    4 | Entry count, at most 126                                                                                               |
+| 16 + 16i |    8 | Identity of entry i (bits 31:0), its index block sector (62:32), and in bit 63 whether this entry allocates that block |
+| 24 + 16i |    8 | New index entry for that identity                                                                                      |
+| 16 + 16n |    4 | CRC-32 of every byte before it                                                                                         |
 
 The journal spans four sectors; a commit writes only the sectors its entries use.
 
@@ -95,11 +101,14 @@ every record in it is visible or none is.
 
 1. BeginSave and WriteWord stream a record to free log sectors beyond the head. Nothing visible
    changes.
-2. At commit, the disk processor writes the journal: the identities and new index entries of every
-   record in the commit, with a CRC.
+2. At commit, the disk processor chooses the index block of every record in the commit, allocating
+   new blocks below the index top, and writes the journal: the identities, their new index entries
+   and blocks, with a CRC.
 3. It writes the superblock copy that is not current, with a larger generation, the new log head,
-   and journal state 1. This write is the commit point.
-4. It writes the new index entries, then a superblock with journal state 0.
+   the new index top, and journal state 1. This write is the commit point.
+4. For each entry that allocates a block, it zeroes the block and enters it in the directory. It
+   writes the new index entries, then a superblock with journal state 0. Repeating this step after a
+   crash gives the same result.
 
 At start, a current superblock with journal state 1 means step 4 did not finish. The disk processor
 replays the journal before serving requests. AbortBatch and a reset before step 3 discard the staged
@@ -107,10 +116,11 @@ records: the log head never advanced past them.
 
 ## Lookups
 
-FindRecord and Metadata read one index entry, then the record's first sector. ReadWord reads one
-sector of the record. NextRecord scans index entries upward from the given identity, stopping at the
-highest identity recorded in the superblock. A one-sector cache serves repeated reads of index and
-record sectors.
+FindRecord and Metadata read one directory entry and one index entry, then the record's first
+sector. ReadWord reads one sector of the record. NextRecord scans index entries upward from the
+given identity, skipping ranges of 64 identities that have no index block, and stops at the highest
+identity recorded in the superblock. A one-sector cache serves repeated reads of directory, index
+and record sectors.
 
 ## Limits of this version
 
@@ -119,4 +129,6 @@ record sectors.
 - Each commit writes the journal and a superblock, so small commits cost several sector writes.
 - There is no checksum on records; the journal and superblocks carry the CRCs.
 - A batch holds at most 126 records, the journal's capacity.
-- An identity at or above the index capacity cannot be saved.
+- An identity at or above the capacity cannot be saved. Identities are never reused, so a long
+  session approaches it; at 2^26 a heavily used session lasts about a day.
+- A record must leave room below the index top for one commit's worth of new index blocks.

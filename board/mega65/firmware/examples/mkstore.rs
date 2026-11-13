@@ -2,7 +2,7 @@
 //!
 //!   cargo run --target x86_64-unknown-linux-gnu --example mkstore -- OUT SIZE_MIB [CAPACITY [RECORDS]]
 //!
-//! CAPACITY is the number of identities the index covers (default 262144).
+//! CAPACITY is the number of identities the index covers (default 2^26).
 //! RECORDS is a file of objects to save into the new store, as written by
 //! the emulator's `board_smalltalk` example: for each object, little-endian,
 //! reference (8 bytes), class (8), size in words (4), cond (4), body words
@@ -32,7 +32,7 @@ impl Disk for FileDevice {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (out, mib, capacity, records) = match args.as_slice() {
-        [out, mib] => (out, mib.parse::<u32>()?, 262_144, None),
+        [out, mib] => (out, mib.parse::<u32>()?, 1 << 26, None),
         [out, mib, capacity] => (out, mib.parse::<u32>()?, capacity.parse()?, None),
         [out, mib, capacity, records] => {
             (out, mib.parse::<u32>()?, capacity.parse()?, Some(records))

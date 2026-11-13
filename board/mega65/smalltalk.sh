@@ -18,5 +18,5 @@ image="$(realpath "${2:-$root/artifacts/st80/VirtualImage}")"
 (cd "$root" && cargo run -q --release --locked -p rekursiv-emulator --example board_smalltalk -- \
     "$image" "$out" 32768 8388608 640 480)
 (cd "$here/firmware" && cargo run -q --target x86_64-unknown-linux-gnu --example mkstore -- \
-    "$out/REKURSIV.IMG" "${3:-32}" 262144 "$out/records.bin")
+    "$out/REKURSIV.IMG" "${3:-32}" 67108864 "$out/records.bin")
 rm "$out/records.bin"

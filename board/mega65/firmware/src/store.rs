@@ -61,11 +61,16 @@ fn is_reference(word: u64) -> bool {
 const SUPER_MAGIC: &[u8; 8] = b"RKSTORE1";
 const RECORD_MAGIC: &[u8; 8] = b"RKRECORD";
 const JOURNAL_MAGIC: &[u8; 8] = b"RKJOURNL";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const HEADER_BYTES: u32 = 40;
 const JOURNAL_SECTORS: u32 = 4;
 /// Journal capacity: a 16-byte header, then 16 bytes per entry, then a CRC.
 pub const MAX_BATCH: usize = (JOURNAL_SECTORS as usize * SECTOR - 20) / 16;
+/// Index entries per index block (one sector), and blocks per directory sector.
+const BLOCK_IDS: u64 = (SECTOR / 8) as u64;
+const DIRECTORY_BLOCKS: u64 = (SECTOR / 4) as u64;
+/// Identities covered by one directory sector.
+const DIRECTORY_IDS: u64 = BLOCK_IDS * DIRECTORY_BLOCKS;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Superblock {
@@ -79,6 +84,9 @@ pub struct Superblock {
     pub log_head: u32,
     pub journal_pending: bool,
     pub highest: u32,
+    /// Lowest sector of the index blocks, which are allocated downward from
+    /// the end of the file. Records may not reach it.
+    pub index_top: u32,
 }
 
 fn get32(b: &[u8], at: usize) -> u32 {
@@ -139,6 +147,7 @@ impl Superblock {
         put32(b, 40, self.log_head);
         put32(b, 44, u32::from(self.journal_pending));
         put32(b, 48, self.highest);
+        put32(b, 52, self.index_top);
         let crc = crc32(&b[..508]);
         put32(b, 508, crc);
     }
@@ -157,17 +166,19 @@ impl Superblock {
             log_head: get32(b, 40),
             journal_pending: get32(b, 44) != 0,
             highest: get32(b, 48),
+            index_top: get32(b, 52),
         })
     }
 }
 
-/// Lay out an empty store in a file of `sectors` sectors, with an index for
-/// identities below `capacity`. Writes the superblocks and a zero index.
+/// Lay out an empty store in a file of `sectors` sectors, for identities below
+/// `capacity`. Writes the superblocks and a zero directory; index blocks are
+/// allocated as identities are first saved.
 pub fn format<D: Disk>(disk: &mut D, sectors: u32, capacity: u32) -> Result<Superblock, Error> {
     let index_start = 2 + JOURNAL_SECTORS;
-    let index_sectors = capacity.div_ceil(64);
+    let index_sectors = u64::from(capacity).div_ceil(DIRECTORY_IDS) as u32;
     let log_start = index_start + index_sectors;
-    if capacity < 2 || log_start + 16 > sectors {
+    if capacity < 2 || log_start + 16 + MAX_BATCH as u32 > sectors {
         return Err(Error::Layout);
     }
     let zero = [0u8; SECTOR];
@@ -185,6 +196,7 @@ pub fn format<D: Disk>(disk: &mut D, sectors: u32, capacity: u32) -> Result<Supe
         log_head: log_start,
         journal_pending: false,
         highest: 0,
+        index_top: sectors,
     };
     let mut b = [0u8; SECTOR];
     sb.encode(&mut b);
@@ -225,6 +237,17 @@ struct Save {
 struct Batch {
     entries: [(u32, u64); MAX_BATCH],
     count: usize,
+}
+
+/// One index update as the journal records it: the identity, its new entry,
+/// the index block that holds it, and whether this update allocates that
+/// block (and must zero it first).
+#[derive(Clone, Copy, Default)]
+struct Update {
+    id: u32,
+    entry: u64,
+    block: u32,
+    new: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -361,13 +384,22 @@ impl<D: Disk> Store<D> {
         Ok(())
     }
 
-    fn index_entry(&mut self, id: u64) -> Result<u64, ()> {
+    /// The index block holding `id`'s entry, or 0 if none is allocated.
+    fn block_of(&mut self, id: u64) -> Result<u32, ()> {
         if id == 0 || id >= u64::from(self.sb.capacity) {
             return Ok(0);
         }
-        let sector = self.sb.index_start + (id / 64) as u32;
-        let at = (id % 64) as usize * 8;
-        Ok(get64(self.read(sector)?, at))
+        let sector = self.sb.index_start + (id / DIRECTORY_IDS) as u32;
+        let at = ((id / BLOCK_IDS) % DIRECTORY_BLOCKS) as usize * 4;
+        Ok(get32(self.read(sector)?, at))
+    }
+
+    fn index_entry(&mut self, id: u64) -> Result<u64, ()> {
+        let block = self.block_of(id)?;
+        if block == 0 {
+            return Ok(0);
+        }
+        Ok(get64(self.read(block)?, (id % BLOCK_IDS) as usize * 8))
     }
 
     fn record(&mut self, id: u64) -> Result<Option<Record>, ()> {
@@ -389,13 +421,26 @@ impl<D: Disk> Store<D> {
         }))
     }
 
-    /// Write index entries, then a superblock marking the journal applied.
-    fn apply(&mut self, entries: &[(u32, u64)]) -> Result<(), ()> {
-        for &(id, entry) in entries {
-            let sector = self.sb.index_start + id / 64;
-            let mut b = *self.read(sector)?;
-            put64(&mut b, (id % 64) as usize * 8, entry);
-            self.write(sector, &b)?;
+    /// Write index entries, then a superblock marking the journal applied. An
+    /// update that allocates its block zeroes it and enters it in the
+    /// directory first. Repeating this after a crash gives the same result.
+    fn apply(&mut self, updates: &[Update]) -> Result<(), ()> {
+        for u in updates {
+            if u.new {
+                self.write(u.block, &[0; SECTOR])?;
+                let id = u64::from(u.id);
+                let sector = self.sb.index_start + (id / DIRECTORY_IDS) as u32;
+                let mut b = *self.read(sector)?;
+                put32(
+                    &mut b,
+                    ((id / BLOCK_IDS) % DIRECTORY_BLOCKS) as usize * 4,
+                    u.block,
+                );
+                self.write(sector, &b)?;
+            }
+            let mut b = *self.read(u.block)?;
+            put64(&mut b, (u64::from(u.id) % BLOCK_IDS) as usize * 8, u.entry);
+            self.write(u.block, &b)?;
         }
         let sb = Superblock {
             generation: self.sb.generation + 1,
@@ -426,26 +471,61 @@ impl<D: Disk> Store<D> {
         if get32(&journal, end) != crc32(&journal[..end]) {
             return Err(());
         }
-        let mut entries = [(0u32, 0u64); MAX_BATCH];
-        for (i, e) in entries[..count].iter_mut().enumerate() {
-            *e = (
-                get64(&journal, 16 + 16 * i) as u32,
-                get64(&journal, 24 + 16 * i),
-            );
+        let mut updates = [Update::default(); MAX_BATCH];
+        for (i, u) in updates[..count].iter_mut().enumerate() {
+            let word = get64(&journal, 16 + 16 * i);
+            *u = Update {
+                id: word as u32,
+                entry: get64(&journal, 24 + 16 * i),
+                block: (word >> 32) as u32 & 0x7fff_ffff,
+                new: word >> 63 != 0,
+            };
         }
-        self.apply(&entries[..count])
+        self.apply(&updates[..count])
     }
 
     /// Publish entries atomically: journal, commit point, index, clean.
+    /// Index blocks are chosen before the commit point, below the current
+    /// index_top, and the commit point's superblock records the new boundary.
     fn commit(&mut self, entries: &[(u32, u64)]) -> Result<(), ()> {
+        let mut updates = [Update::default(); MAX_BATCH];
+        let mut top = self.sb.index_top;
+        for (i, &(id, entry)) in entries.iter().enumerate() {
+            let range = u64::from(id) / BLOCK_IDS;
+            let earlier = updates[..i]
+                .iter()
+                .find(|u| u64::from(u.id) / BLOCK_IDS == range)
+                .map(|u| u.block);
+            let (block, new) = match earlier {
+                Some(block) => (block, false),
+                None => match self.block_of(u64::from(id))? {
+                    0 => {
+                        top -= 1;
+                        (top, true)
+                    }
+                    block => (block, false),
+                },
+            };
+            updates[i] = Update {
+                id,
+                entry,
+                block,
+                new,
+            };
+        }
+        if top < self.head {
+            return Err(());
+        }
+        let updates = &updates[..entries.len()];
         let mut journal = [0u8; JOURNAL_SECTORS as usize * SECTOR];
         journal[0..8].copy_from_slice(JOURNAL_MAGIC);
         put32(&mut journal, 8, entries.len() as u32);
         let mut highest = self.sb.highest;
-        for (i, &(id, entry)) in entries.iter().enumerate() {
-            put64(&mut journal, 16 + 16 * i, u64::from(id));
-            put64(&mut journal, 24 + 16 * i, entry);
-            highest = highest.max(id);
+        for (i, u) in updates.iter().enumerate() {
+            let word = u64::from(u.id) | u64::from(u.block) << 32 | u64::from(u.new) << 63;
+            put64(&mut journal, 16 + 16 * i, word);
+            put64(&mut journal, 24 + 16 * i, u.entry);
+            highest = highest.max(u.id);
         }
         let end = 16 + 16 * entries.len();
         let crc = crc32(&journal[..end]);
@@ -461,13 +541,14 @@ impl<D: Disk> Store<D> {
             log_head: self.head,
             journal_pending: true,
             highest,
+            index_top: top,
             ..self.sb
         };
         self.write_superblock(sb)?;
         // Committed. A failure from here on leaves the commit to be finished
         // by the next request or the next start.
         self.unapplied = true;
-        let _ = self.apply(entries);
+        let _ = self.apply(updates);
         Ok(())
     }
 
@@ -507,9 +588,14 @@ impl<D: Disk> Store<D> {
                 let found = if req.op == op::FIND_RECORD {
                     self.metadata(id)?
                 } else {
+                    // Unallocated index blocks hold no records: skip them.
                     let mut found = None;
                     let mut next = id + 1;
                     while next <= u64::from(self.sb.highest) && found.is_none() {
+                        if self.block_of(next).map_err(|_| status::SERVICE_ERROR)? == 0 {
+                            next = (next / BLOCK_IDS + 1) * BLOCK_IDS;
+                            continue;
+                        }
                         found = self.metadata(next)?;
                         next += 1;
                     }
@@ -584,9 +670,11 @@ impl<D: Disk> Store<D> {
                 if !is_reference(req.class) || req.size >= 1 << 24 {
                     return Err(status::SERVICE_ERROR);
                 }
+                // Leave room below the index blocks for one commit's worth of
+                // new blocks.
                 let start = self.head;
                 if id >= u64::from(self.sb.capacity)
-                    || start + sectors_for(req.size) > self.sb.log_end
+                    || start + sectors_for(req.size) + MAX_BATCH as u32 > self.sb.index_top
                 {
                     return Err(status::SERVICE_ERROR);
                 }
