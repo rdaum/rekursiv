@@ -108,7 +108,8 @@ block_initialize:
     d=7, idx=Load
     read=Vr, vr=3
     d=Object, mem=Write
-    seq=Jump, brch=send_result
+    ; The block refers to its home: no existing frame is recyclable.
+    d=0, cstk=Bus, seq=Jump, brch=send_result
 
 ; Primitive 81 / special bytecodes 201 and 202. The existing BlockContext is
 ; activated, not copied. Argument count and capacity checks precede mutation.
@@ -210,6 +211,8 @@ block_clear_caller:
 ; Invalid return is an ordinary message to the active context. The result is
 ; already rooted in VR5. Both new stack entries are guest-visible before lookup.
 cannot_return:
+    ; The active context goes to the guest as an argument.
+    d=0, cstk=Bus
     ra=14, rb=9, alu=Sub, cin=One, ldq
     d=Q, r=Bus, s=Branch, brch=2, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=bad_state

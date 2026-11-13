@@ -49,7 +49,10 @@ perform_array_check:
     d=Q, r=Bus, s=Register, rb=14, alu=SubReverse, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=primitive_failed
 perform_save:
-    d=Register, ra=12, cstk=Bus
+    ; R12 waits in evaluation-stack slot 3; the control stack register counts
+    ; recyclable contexts.
+    d=3, esp=Bus
+    d=Register, ra=12, estk=Bus
     ra=0, rb=12, ldrb
     d=1, esp=Bus
     read=Vr, vr=7
@@ -149,7 +152,10 @@ perform_clear:
     seq=Jump, brch=perform_clear
 perform_send:
     ra=11, rb=1, ldrb
-    d=Cstk, r=Bus, rb=12, ldrb
+    d=3, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=12, ldrb
+    d=0, estk=Bus
     d=0, esp=Bus, sp=Bus
     d=0, estk=Bus
     d=0, r=Bus, rb=2, ldrb
@@ -159,7 +165,10 @@ perform_failed:
     d=1, esp=Bus
     estk=Read
     d=Estk, ldvr, vr=7
+    d=3, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=12, ldrb
+    d=0, estk=Bus
     d=0, esp=Bus, sp=Bus
     d=0, estk=Bus
-    d=Cstk, r=Bus, rb=12, ldrb
     seq=Jump, brch=primitive_method_failed

@@ -74,7 +74,8 @@ fn native_default_display_draws_at_1024_by_768() -> Result<()> {
         m.objekt_metrics_enabled = true;
         let started = std::time::Instant::now();
         let mut copies = 0;
-        for _ in 0..30_000_000 {
+        // Sixteen pager entries page parked contexts out and back in.
+        for _ in 0..90_000_000 {
             ensure!(
                 !m.cpu.halted && !m.cpu.service,
                 "unexpected stop at {}",

@@ -89,6 +89,8 @@ identity_write_byte:
     seq=Jump, brch=identity_write_byte
 
 primitive_identity_object:
+    ; An object produced from its identity may be a live context.
+    d=0, cstk=Bus
     ra=1, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     read=Vr, vr=6
@@ -166,6 +168,8 @@ identity_find:
     d=Symbol, ldvr, vr=5, seq=Jump, brch=send_result
 
 primitive_instances:
+    ; Enumeration can reach a live context.
+    d=0, cstk=Bus
     ra=1, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     ra=0, s=Branch, brch=77, alu=Sub, cin=One, flags

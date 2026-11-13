@@ -12,6 +12,8 @@ push_integer:
     ra=13, s=Branch, brch=117, alu=Sub, cin=One, estk=Compact, compact=2
     d=Estk, ldsym, seq=Jump, brch=push
 push_context:
+    ; The guest now holds the active context: no existing frame is recyclable.
+    d=0, cstk=Bus
     read=Vr, vr=0
     d=Object, ldsym, seq=Jump, brch=push
 duplicate:

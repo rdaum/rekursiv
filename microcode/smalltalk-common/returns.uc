@@ -20,10 +20,20 @@ return_pop:
     ra=9, s=Branch, brch=1, alu=Sub, cin=One, rb=9, ldrb
 return_value:
     d=Symbol, ldvr, vr=5
+    ; R2 tells return_sender what is returning: 0 a block to its caller,
+    ; 1 a method from itself, 2 a block from its home method.
+    d=0, r=Bus, rb=2, ldrb
     ra=13, s=Branch, brch=125, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=return_local
     d=return_home_ready, r=Bus, rb=6, ldrb, seq=Jump, brch=context_home
 return_home_ready:
+    read=Vr, vr=0
+    d=Object, ldsym
+    read=Vr, vr=3
+    d=1, r=Bus, rb=2, ldrb
+    d=Object, seq=ConditionalJump, cc=Symbol, brch=return_home_fetch
+    d=2, r=Bus, rb=2, ldrb
+return_home_fetch:
     read=Vr, vr=3
     d=Object, page=Fetch
     seq=Jump, brch=return_target

@@ -64,6 +64,52 @@ return_sender:
     d=NIL, mem=Write
     idx=Increment
     d=NIL, mem=Write
+    ; Context recycling (see sends.uc). R2: 0 block to caller, 1 method from
+    ; itself, 2 block from its home.
+    ra=2, s=Branch, brch=1, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Sign, brch=return_resume
+    seq=ConditionalJump, cc=!Zero, brch=return_shared
+    ; A method frame returns. With a zero count it may be shared: leave it.
+    seq=ConditionalJump, cc=ControlZero, brch=return_resume
+    cstk=Decrement
+; Clear its temporaries and stack, slots 1..SP, so it is ready for reuse.
+return_clear:
+    ra=9, flags
+    seq=ConditionalJump, cc=Zero, brch=return_park
+    ra=9, s=Branch, brch=CTX_STACK, alu=Add, ldq
+    d=Q, idx=Load
+    d=NIL, mem=Write
+    ra=9, s=Branch, brch=1, alu=Sub, cin=One, rb=9, ldrb
+    seq=Jump, brch=return_clear
+return_park:
+    ; Park it with the sender's home MethodContext, VR3: the sender itself,
+    ; or a BlockContext sender's home.
+    read=Vr, vr=7
+    d=Object, ldvr, vr=3
+    read=Vr, vr=7
+    d=Object, page=Fetch
+    read=Type
+    d=0xa00000000b, ldsym
+    d=Object, seq=ConditionalJump, cc=Symbol, brch=return_keep
+    d=0xa00000000c, ldsym
+    d=Object, seq=ConditionalJump, cc=!Symbol, brch=return_resume
+    d=7, idx=Load
+    mem=Read
+    d=Object, ldvr, vr=3
+    read=Vr, vr=3
+    d=Object, page=Fetch
+    read=Type
+    d=0xa00000000b, ldsym
+    d=Object, seq=ConditionalJump, cc=!Symbol, brch=return_resume
+return_keep:
+    d=6, idx=Load
+    read=Vr, vr=0
+    d=Object, mem=Write
+    seq=Jump, brch=return_resume
+return_shared:
+    ; A block returned from its home method, past frames in between.
+    d=0, cstk=Bus
+return_resume:
     read=Vr, vr=7
     d=Object, ldvr, vr=0
     d=16, r=Bus, rb=15, ldrb, seq=Jump, brch=load_context

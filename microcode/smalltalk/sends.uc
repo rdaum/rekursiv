@@ -35,6 +35,24 @@
 ; r6=new context size, r7=transfer cursor. r8/r9 retain caller IP/SP until saved.
 ; Cache fields r10/r12/r14 can be reused after lookup; load_context restores them.
 ;
+; Context recycling. A MethodContext that returns to its sender is normally
+; garbage at once. Instead of leaving it to the collector, the return clears
+; its temporaries and stack and parks it in the unused field (component 6,
+; the Blue Book's receiverMap) of its sender's home MethodContext: the
+; sender itself, or the home of a BlockContext sender. The next send from
+; that method or one of its blocks that needs that frame size takes it back
+; out. Parking a frame replaces any frame already parked there.
+;
+; A frame may be reused only if nothing else can refer to it. The control
+; stack register counts the newest frames of the running chain that are known
+; to be unshared: each method activation increments it, a recycling return
+; decrements it, and a return that finds it zero leaves the frame alone.
+; Anything that can hand a context to the guest resets it to zero, which
+; marks every existing frame as shared for good: pushing thisContext,
+; blockCopy, a process switch, a block's return from its home method,
+; cannotReturn:, and the primitives that produce an object from its identity
+; or enumerate instances. Frames activated afterwards count again.
+;
 ; Failed lookup constructs a guest Message through messages.uc. Only a missing
 ; doesNotUnderstand: handler stops with status 6. Argument mismatch uses status 7.
 
@@ -297,6 +315,48 @@ context_size:
     ra=6, s=Branch, brch=7, alu=Sub, cin=One, ldq
     d=Q, r=Bus, s=Register, rb=4, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=bad_state
+    ; Count this activation as recyclable; see "Context recycling" below.
+    cstk=Increment
+    ; The caller's home MethodContext keeps a finished callee in its unused
+    ; field (component 6). Reuse it when it has the size this method needs.
+    ; VR3 is that home: the caller itself, or a BlockContext caller's home.
+    read=Vr, vr=0
+    d=Object, ldvr, vr=3
+    read=Vr, vr=0
+    d=Object, page=Fetch
+    read=Type
+    d=0xa00000000b, ldsym
+    d=Object, seq=ConditionalJump, cc=Symbol, brch=context_parked
+    d=7, idx=Load
+    mem=Read
+    d=Object, ldvr, vr=3
+    read=Vr, vr=3
+    d=Object, page=Fetch
+    read=Type
+    d=0xa00000000b, ldsym
+    d=Object, seq=ConditionalJump, cc=!Symbol, brch=context_allocate
+context_parked:
+    d=6, idx=Load
+    mem=Read
+    d=NIL, ldsym
+    d=Object, ldvr, vr=5, seq=ConditionalJump, cc=Symbol, brch=context_allocate
+    read=Vr, vr=5
+    d=Object, page=Fetch
+    read=Size
+    d=Object, r=Bus, s=Register, rb=6, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Zero, brch=context_allocate
+    read=Type
+    d=0xa00000000b, ldsym
+    d=Object, seq=ConditionalJump, cc=!Symbol, brch=context_allocate
+    ; Take it out of its keeper before it becomes active.
+    read=Vr, vr=3
+    d=Object, page=Fetch
+    d=6, idx=Load
+    d=NIL, mem=Write
+    read=Vr, vr=5
+    d=Object, page=Fetch
+    seq=Jump, brch=context_fields
+context_allocate:
     d=0xa00000000b, page=Allocate, size=ra, ra=6, scan=1
     d=Object, ldvr, vr=5
     ; Initializing all pointer fields replaces the allocator's machine NIL.
@@ -312,6 +372,9 @@ initialize_context:
     ra=0, shift=Left, rb=0, ldrb
     ra=0, shift=Left, rb=0, ldrb
     d=Register, ra=0, mem=Write
+; A recycled frame arrives here selected, with its descriptor, its own cached
+; callee, and nil temporaries and stack already in place.
+context_fields:
     d=2, idx=Load
     read=Vr, vr=0
     d=Object, mem=Write

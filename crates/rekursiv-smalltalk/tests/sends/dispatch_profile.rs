@@ -178,6 +178,12 @@ fn profile_bytecode_loop() -> Result<()> {
                     roots[27] = r(302);
                     roots[29] = r(304);
                     roots[30] = r(300);
+                    // Hold OBJEKT's low-space line high, so the exact check
+                    // reads the registration at every boundary.
+                    m.objekt.word_threshold = (1 << 40) - 1;
+                    // Likewise mark input as pending, so the first boundary
+                    // reads the buffered-word count.
+                    m.cpu.pending = true;
                 }
                 Ok(m)
             };

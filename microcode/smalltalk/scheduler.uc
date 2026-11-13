@@ -240,6 +240,8 @@ scheduler_choose_priority:
 scheduler_choose_found:
     d=scheduler_chosen, r=Bus, rb=6, ldrb, seq=Jump, brch=queue_remove
 scheduler_chosen:
+    ; Another process will run: the running chain is held by its Process.
+    d=0, cstk=Bus
     d=1, esp=Bus
     read=Vr, vr=5
     d=Object, estk=Bus
@@ -258,6 +260,7 @@ scheduler_suspend_result:
     d=NIL, ldvr, vr=5, seq=Jump, brch=send_result
 scheduler_no_runnable:
     ; Finish the wait/suspend send and materialize its continuation before idle.
+    d=0, cstk=Bus
     d=31, r=Bus, rb=7, ldrb
     ra=7, d=1, ldroot
     seq=Jump, brch=scheduler_result
