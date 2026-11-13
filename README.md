@@ -3,6 +3,11 @@
 An attempt to build David Harland’s 1980s **Rekursiv** hardware object-oriented machine in
 synthesizable SystemVerilog, with extensions.
 
+<img src="docs/images/rekursiv-65.jpg" width="480" alt="The Smalltalk-80 desktop with a System Browser on a monitor, driven by a MEGA65 with an Atari ST mouse">
+
+_The Rekursiv running the 1983 Xerox Smalltalk-80 image on a MEGA65. See
+[Booting on the MEGA65](#booting-on-the-mega65)._
+
 [Rekursiv](https://en.wikipedia.org/wiki/Rekursiv) came from Linn Smart Computing, a division of the
 Scottish hi-fi manufacturer Linn Products. Linn wanted better software to run its factory. Its
 experiments with LINGO, a language related to Smalltalk, led to an unusual next step: building a
@@ -59,17 +64,52 @@ keyboard, and mouse. The "Blue Book" was used as a reference to write the microc
 executes on the emulated Rekursiv hardware.
 
 A separate microcode profile runs the **Squeak 1.1** colour desktop, with binary64 Floats and mouse
-menus. The Smalltalk-80 desktop also boots on the MEGA65 from an SD card, without keyboard or mouse
-so far. Squeak is tested only in the native software emulator.
+menus. Squeak is tested only in the native software emulator.
 
 ![Smalltalk-80 desktop and System Browser in the Rekursiv emulator](docs/images/st80.png)
 
 _Smalltalk-80 running on Rekursiv microcode in the native emulator._
 
-Ultimate success means running this Smalltalk-80 workstation on my [MEGA65](https://mega65.org/), a
-modern Commodore 65 whose Artix-7 FPGA can be loaded with other machines' cores. Rekursiv will run
-there standalone: object memory in the board's 64 MB of SDRAM, the object image on its SD card, and
-the desktop on its HDMI or VGA output, driven from its own keyboard.
+## Booting on the MEGA65
+
+The goal has been to run this Smalltalk-80 workstation on real hardware; I ended up using my
+[MEGA65](https://mega65.org/), a modern Commodore 65 whose Artix-7 FPGA can be loaded with other
+machines' cores. It now does, standalone: object memory in the board's SDRAM, the object image on
+its SD card, the desktop on its HDMI or VGA output, its own keyboard, and an Atari ST mouse in a
+joystick port.
+
+The original Rekursiv was a board in a Sun workstation, and the Sun did its disk work. Here that
+job falls to a small RISC-V processor (a PicoRV32) built into the core beside LOGIK, OBJEKT and
+NUMERIK. Everything else is the Rekursiv itself. A boot goes like this:
+
+1. **The core loads.** The MEGA65 configures its FPGA from the Rekursiv core in a flash slot. The
+   screen shows a panel of hex words: the machine's status on the left, the disk processor's on the
+   right. Those rows are the whole debugging interface.
+2. **The memory is checked.** Before OBJEKT may touch it, the SDRAM controller writes and reads back
+   a pattern and its complement at every single-address-bit address, which finds stuck or shorted
+   address and data lines in a few hundred cycles.
+3. **The loader finds the firmware.** A first-stage loader in the disk processor's block RAM reads
+   the FAT32 card, loads `REKURSIV.FW`, checks its CRC, and jumps to it.
+4. **The firmware opens the object store.** `REKURSIV.IMG` is a file of 32 MB holding the 18,391
+   objects of the Xerox image, converted to Rekursiv objects: a log of records with a journaled
+   index, so a power cut never leaves it half-written.
+5. **The machine is programmed.** The firmware streams `REKURSIV.BOO` into the halted machine:
+   37,067 records of microcode for the interpreter and collector, roots, and service requests. Then
+   it starts LOGIK and settles down to serve OBJEKT's requests for objects.
+6. **Smalltalk starts with an empty memory.** Nothing is preloaded. The first bytecode needs its
+   method, its context and its receiver, and OBJEKT faults each one in from the card by identity,
+   on demand, through the disk processor. Objects land in SDRAM behind a block-RAM cache; when the
+   32,768-entry pager fills, new objects are written back to the store and evicted, and the RAM
+   collector, in microcode, reclaims the garbage.
+7. **The desktop draws itself.** The image's own BitBlt, executed in microcode, paints the
+   640×480 one-bit Display bitmap, and the core scans it out. The System Transcript reports
+   _Snapshot at: (31 May 1983)_: the image was saved at Xerox forty-three years ago, and is running
+   again on hardware its authors never imagined.
+
+Keystrokes come from the MEGA65's keyboard controller as 128-bit serial frames, and mouse motion
+from the quadrature lines of the joystick port. The machine runs at 25.2 MHz, which makes typing
+usable but not yet brisk; [docs/performance-plan.md](docs/performance-plan.md) records where the
+time goes and what comes next.
 
 ## Implementation
 
@@ -85,8 +125,8 @@ examples execute their program control flow and garbage collection on the RTL pr
 
 The Smalltalk microcode executes bytecodes, runtime primitives, and process scheduling. NUMERIK
 supports integer, binary32 and binary64 arithmetic. BitBlt runs in microcode and refreshes the
-display as the original Smalltalk image draws its desktop. Snapshot saving and the board's keyboard
-and mouse remain unfinished. On the MEGA65 the machine runs at 25.2 MHz with its object memory in
+display as the original Smalltalk image draws its desktop. Snapshot saving remains unfinished. On
+the MEGA65 the machine runs at 25.2 MHz with its object memory in
 SDRAM, a 32,768-entry pager in block RAM, and its object store in a file on the SD card;
 `board/mega65/smalltalk.sh` builds the card's files from the Xerox image.
 
