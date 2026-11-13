@@ -62,8 +62,33 @@ OBJEKT command stalls it until the command completes. On the board it is about 2
 
 ## Where the time goes now
 
-Profile of the 30,000 bytecodes after a keystroke, with all of the above in place, under the fast
-memory model (1.79 cycles per microinstruction):
+### Measured on the board
+
+The RESTORE counters (`b62288a`) report one second of typing into the System Workspace, with the
+background object commands in place:
+
+| Counter                                | Per second | Per bytecode |
+| -------------------------------------- | ---------: | -----------: |
+| Bytecodes                              |    185,551 |            1 |
+| Microinstructions                      | 18,517,198 |        99.79 |
+| OBJEKT commands                        |  8,571,108 |         46.2 |
+| Cycles without a retirement            |  6,682,802 |         36.0 |
+| Collector cycles, store requests       |          0 |            0 |
+
+Other seconds of typing gave 162,000 to 188,000 bytecodes. The sequencer retires an instruction in
+73% of cycles, 1.36 cycles per microinstruction; the emulator's fast memory model predicts 1.28. The
+block-RAM cache therefore hides most of the SDRAM, and waiting is about a quarter of the time.
+
+Almost half the microinstructions are OBJEKT commands. Even pushing a temporary or a receiver field
+selects an object, sets the index and reads, as separate commands. Fewer commands per bytecode is
+now the largest target: keeping the active context's hot fields where the sequencer reaches them
+without OBJEKT (item 6), and fused commands such as reading field n of a VR in one step.
+
+### Emulator profile
+
+Profile of the 30,000 bytecodes after a keystroke under the fast memory model, taken before the
+context reload, BitBlt, boundary and background-command work above (1.79 cycles per
+microinstruction):
 
 | Routine                                                                        | Microinstructions per bytecode | Share of cycles |
 | ------------------------------------------------------------------------------ | -----------------------------: | --------------: |
