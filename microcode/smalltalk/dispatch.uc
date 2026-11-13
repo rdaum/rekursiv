@@ -105,7 +105,7 @@ primitive_table:
     seq=Jump, brch=primitive_bitmap ; 102
     seq=Jump, brch=activate ; 103
     seq=Jump, brch=activate ; 104
-    seq=Jump, brch=activate ; 105
+    seq=Jump, brch=primitive_replace ; 105
     seq=Jump, brch=activate ; 106
     seq=Jump, brch=activate ; 107
     seq=Jump, brch=activate ; 108

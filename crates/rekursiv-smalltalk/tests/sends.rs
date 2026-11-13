@@ -3174,7 +3174,7 @@ fn original_large_integer_fallbacks_execute_as_guest_bytecodes() -> Result<()> {
 
 #[test]
 #[ignore = "requires the pinned Xerox distribution; run scripts/check-smalltalk-image.sh"]
-fn original_byte_replacement_fallbacks_execute_as_guest_bytecodes() -> Result<()> {
+fn original_byte_replacement_methods_use_the_primitive() -> Result<()> {
     let directory = std::env::var("REKURSIV_ST80_DIR")?;
     let bytes = std::fs::read(std::path::Path::new(&directory).join("VirtualImage"))?;
     ensure!(rekursiv_smalltalk::checksum(&bytes) == rekursiv_smalltalk::IMAGE_SHA256);
@@ -3227,8 +3227,8 @@ fn original_byte_replacement_fallbacks_execute_as_guest_bytecodes() -> Result<()
             e.records[&r(65520).identity()?].body[1..],
             b"aXYZe".map(|b| Word::raw(b as u64).unwrap())
         );
-        assert!(e.trace.iter().any(|f| f.method == r(method_oop)));
-        assert!(e.collections > 0);
+        // Primitive 105 copies the bytes; the guest method never activates.
+        assert!(!e.trace.iter().any(|f| f.method == r(method_oop)));
     }
     Ok(())
 }

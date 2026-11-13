@@ -1,4 +1,5 @@
 ; Primitive map: 60 at:, 61 at:put:, 62 size, 63/64 String at:/at:put:,
+; 105 replaceFrom:to:with:startingAt: (at the end of this file),
 ; 68/69 CompiledMethod objectAt:/objectAt:put:, 73/74 instVarAt:/instVarAt:put:.
 ; Guest indices are one-based. Ordinary indexed access skips the fixed-field
 ; count from class component 4; instVar access starts at the first body field.
@@ -284,3 +285,114 @@ positive_allocate:
     ra=4, s=Bus, d=0x00ffffff, alu=And, rb=4, ldrb
     d=Register, ra=4, mem=Write
     seq=Jump, brch=send_result
+
+; Primitive 105: replaceFrom: start to: stop with: replacement startingAt:
+; repStart, for ByteArray and String receivers and replacements in any
+; pairing. A byte object keeps one raw byte per component after its
+; descriptor, so guest index i is component i + 1 and the copy moves whole
+; words. It runs in ascending order, as the guest fallback does, so an
+; overlapping copy within one object gives the same result.
+;
+; Fails to the guest method unless both objects are byte objects, the three
+; integers are positive and at most 65535, start >= 1, stop <= receiver
+; length, stop >= start - 1, repStart >= 1, and the source range lies inside
+; the replacement. An empty range succeeds without copying. Every check
+; precedes the first write. Answers the receiver.
+;
+; VR6 receiver, VR3 replacement. R10 receiver length, then destination
+; component; R11 replacement length, then source component; R12 word count.
+primitive_replace:
+    ra=1, s=Branch, brch=4, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Zero, brch=primitive_failed
+    read=Vr, vr=6
+    d=Object, page=Fetch
+    read=Size
+    d=Object, r=Bus, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_failed
+    read=Representation
+    d=Object, r=Bus, s=Branch, brch=3, alu=And, rb=2, ldrb
+    d=Object, r=Bus, shift=Right, rb=3, ldrb
+    ra=3, shift=Right, rb=10, ldrb
+    ra=2, s=Branch, brch=2, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Zero, brch=primitive_failed
+    ; The replacement is the third of four arguments: one below the stack top.
+    read=Vr, vr=0
+    d=Object, page=Fetch, ra=9, s=Branch, brch=6, alu=Add, ldq
+    d=Q, idx=Load
+    mem=Read
+    d=Object, ldvr, vr=3
+    read=Vr, vr=3
+    d=Object, page=Fetch
+    read=Size
+    d=Object, r=Bus, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_failed
+    read=Representation
+    d=Object, r=Bus, s=Branch, brch=3, alu=And, rb=2, ldrb
+    d=Object, r=Bus, shift=Right, rb=3, ldrb
+    ra=3, shift=Right, rb=11, ldrb
+    ra=2, s=Branch, brch=2, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Zero, brch=primitive_failed
+    ; start
+    read=Vr, vr=0
+    d=Object, page=Fetch, ra=9, s=Branch, brch=4, alu=Add, ldq
+    d=Q, idx=Load
+    mem=Read
+    d=Object, ldsym
+    d=replace_start, r=Bus, rb=6, ldrb, seq=Jump, brch=positive_value
+replace_start:
+    ra=4, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_failed
+    ; Keep the receiver length in R12 until stop is checked against it.
+    ra=10, rb=12, ldrb
+    ra=4, rb=10, ldrb
+    ; stop
+    read=Vr, vr=0
+    d=Object, page=Fetch, ra=9, s=Branch, brch=5, alu=Add, ldq
+    d=Q, idx=Load
+    mem=Read
+    d=Object, ldsym
+    d=replace_stop, r=Bus, rb=6, ldrb, seq=Jump, brch=positive_value
+replace_stop:
+    ra=12, rb=4, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Sign, brch=primitive_failed
+    ; count = stop - start + 1, which may be zero but not negative.
+    ra=4, rb=10, alu=Sub, cin=One, ldq
+    r=Q, s=Branch, brch=1, alu=Add, rb=12, ldrb, flags
+    seq=ConditionalJump, cc=Sign, brch=primitive_failed
+    ; repStart
+    read=Vr, vr=0
+    d=Object, page=Fetch, ra=9, s=Branch, brch=7, alu=Add, ldq
+    d=Q, idx=Load
+    mem=Read
+    d=Object, ldsym
+    d=replace_source, r=Bus, rb=6, ldrb, seq=Jump, brch=positive_value
+replace_source:
+    ra=4, flags
+    seq=ConditionalJump, cc=Zero, brch=primitive_failed
+    ; The last source index is repStart + count - 1.
+    ra=4, rb=12, alu=Add, ldq
+    r=Q, s=Branch, brch=1, alu=Sub, cin=One, rb=2, ldrb
+    ra=11, rb=2, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Sign, brch=primitive_failed
+    ; Guest index i is component i + 1.
+    ra=4, s=Branch, brch=1, alu=Add, rb=11, ldrb
+    ra=10, s=Branch, brch=1, alu=Add, rb=10, ldrb
+    ra=12, flags
+    seq=ConditionalJump, cc=Zero, brch=replace_done
+replace_word:
+    read=Vr, vr=3
+    d=Object, page=Fetch
+    d=Register, ra=11, idx=Load
+    mem=Read
+    d=Object, ldsym
+    read=Vr, vr=6
+    d=Object, page=Fetch
+    d=Register, ra=10, idx=Load
+    d=Symbol, mem=Write
+    ra=10, s=Branch, brch=1, alu=Add, rb=10, ldrb
+    ra=11, s=Branch, brch=1, alu=Add, rb=11, ldrb
+    ra=12, s=Branch, brch=1, alu=Sub, cin=One, rb=12, ldrb, flags
+    seq=ConditionalJump, cc=!Zero, brch=replace_word
+replace_done:
+    read=Vr, vr=6
+    d=Object, ldvr, vr=5, seq=Jump, brch=send_result

@@ -49,7 +49,7 @@ execution evidence. Neither check proves that every fallback works.
 | 102       |       1 | Install a display bitmap; microcode validates device limits, packs rows, publishes, and roots the Form                                          |
 | 103       |       1 | Character scanning/drawing accelerator; original guest fallback measures text on RTL; native image startup also draws through BitBlt            |
 | 104       |       1 | BitBlt line-drawing accelerator; guest fallback uses copyBits; original line-drawing path not yet qualified                                     |
-| 105       |       5 | ByteArray/String range replacement; four original replacement methods exercised through guest fallback                                          |
+| 105       |       5 | ByteArray/String range replacement; microcode copies the range for byte objects in any pairing and fails to the guest method otherwise          |
 | 110–111   |       4 | Identity equality and class lookup; microcode                                                                                                   |
 | 112       |       1 | Report currently allocatable 40-bit RAM words; generic OBJEKT counter plus guest integer construction                                           |
 | 113       |       1 | Quit; materialize the context and halt with runtime status 10                                                                                   |
