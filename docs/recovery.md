@@ -20,7 +20,7 @@ h.load_processor(&image)?;
 h.start_processor(0)?;
 ```
 
-`with_ram_collector` assembles 40 ordinary microinstructions at the supplied address and rejects
+`with_ram_collector` assembles 45 ordinary microinstructions at the supplied address and rejects
 overlap with existing code. Root bounds come from the image's stack and control-store capacities.
 The wrapper has 16 pager entries, 32 stack words, and 8192 control words. The collector does not
 depend on the pager size. It uses NUMERIK registers R0–R4 for loop state; hardware preserves the
@@ -152,6 +152,37 @@ them. No host body snapshot, relocation plan, or rollback command is needed.
 This first policy reports terminal exhaustion when retained bodies plus the request cannot fit in
 one half. It does not implement the book's optional MEMFLUSH fallback or disk garbage collection.
 Two semispaces therefore trade half the physical RAM capacity for failure-safe copying.
+
+## Minor collections
+
+Most collections are triggered by a full pager, long before the semispace runs out of words, and
+most of what fills the pager is short-lived. A full collection nevertheless copies every live
+object. The collector therefore tries a minor collection first.
+
+An object is young if its body starts at or above the boundary: the allocation cursor at the last
+commit. Allocation and refill both bump the cursor, so young means allocated or refilled since the
+last collection; nothing per object records it. OBJEKT's write barrier sets a slot's remembered bit
+when a mutator write stores a reference (tag `10`) into an old object. Only a NEW old object needs
+this: a modified persistent one is already a retention root.
+
+BeginMinor walks the table as Begin does and also queues every remembered old slot. Mark treats an
+old object as live and neither marks nor queues it, so tracing visits only young objects and the
+fields of remembered old ones. The microcode skips the copy phase. Commit keeps every entry in place
+except the unmarked young ones, leaves the cursor and semispace unchanged, and moves the boundary up
+to the cursor, so every survivor becomes old. Both kinds of commit clear the remembered bits.
+
+A minor collection reclaims pager slots but no words: the bodies of the young objects it drops stay
+below the cursor until a full collection. BeginMinor therefore declines, returning zero without
+walking, when fewer than the pending request plus an eighth of a semispace of words remain free, and
+the microcode then begins a full collection. It also declines for an explicit `gc=Collect`: a
+runtime asks for collection to reclaim words, as the Smalltalk low-space check does. Unreachable old
+objects also wait for a full collection.
+
+A refilled object counts as young, so a minor collection can drop an unreachable clean copy; its
+backing record remains and a later Fetch refills it. Exchange saves both objects and drops their
+resident copies, so it never leaves an old identity naming a young body. A remembered bit can
+outlive its object when the slot is reused, but every new occupant is young until the next commit,
+which clears the bit.
 
 ## Machine collector inventory
 

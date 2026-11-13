@@ -496,7 +496,9 @@ impl Machine {
                 .map_err(|status| self.fail(4, Some(status)))?;
             if let Some(timing) = &mut self.cycle_estimate {
                 match instruction.recovery {
-                    Recovery::Begin | Recovery::Commit => {
+                    // A declined BeginMinor answers without walking the table.
+                    Recovery::BeginMinor if result == Word::ZERO => {}
+                    Recovery::Begin | Recovery::BeginMinor | Recovery::Commit => {
                         timing.table_walk(self.objekt.entries.len() as u64);
                     }
                     Recovery::NextMarked => {
@@ -685,6 +687,7 @@ impl Machine {
             irq,
             roots,
             needed,
+            command.is_none(),
             &self.objekt,
         ));
         self.cpu.pc = self.image.collector_entry.unwrap();

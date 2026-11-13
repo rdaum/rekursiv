@@ -149,6 +149,11 @@ impl Model {
                 } else {
                     self.memory[address as usize] = c.data;
                     e.modified = true;
+                    // Write barrier: a reference stored into an old object.
+                    if c.data.bits() >> 38 == 2 && !self.young(&e) {
+                        let slot = self.slot(e.reference);
+                        self.remembered[slot] = true;
+                    }
                     if index == 1 {
                         e.representation = c.data;
                     }

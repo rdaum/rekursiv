@@ -6,6 +6,13 @@
 //! queued slot. NextMarked then visits the marked slots in ascending order for
 //! copying. Relocations become visible together at Commit, just as in
 //! rtl/objekt_gc.sv.
+//!
+//! BeginMinor starts a minor collection, unless the collection is explicit
+//! or too few words remain free: old
+//! objects count as live, the work list starts with the persistence roots
+//! and the remembered old objects, and Commit drops the unmarked young
+//! objects in place. It declines with a zero result otherwise, and the
+//! microcode then begins a full collection.
 use rekursiv_asm::{processor::Recovery, Entry, Status, Word};
 use rekursiv_model::Model;
 
@@ -16,6 +23,10 @@ pub(crate) struct RecoveryState {
     pub needed: u32,
     pub committed: bool,
     initialized: bool,
+    /// This collection is minor: nothing is copied.
+    minor: bool,
+    /// An explicit gc=Collect, which always collects in full.
+    explicit: bool,
     selected: usize,
     marked: Vec<bool>,
     /// Marked slots not yet taken by Next, most recent last.
@@ -37,6 +48,7 @@ impl RecoveryState {
         irq: bool,
         roots: Vec<Word>,
         needed: u32,
+        explicit: bool,
         model: &Model,
     ) -> Self {
         let half = model.memory.len() as u32 / 2;
@@ -48,6 +60,8 @@ impl RecoveryState {
             needed,
             committed: false,
             initialized: false,
+            minor: false,
+            explicit,
             selected: 0,
             marked: vec![false; model.entries.len()],
             queue: Vec::new(),
@@ -84,13 +98,20 @@ impl RecoveryState {
         )
     }
     pub fn execute(&mut self, op: Recovery, data: Word, model: &mut Model) -> Result<Word, Status> {
-        if (!self.initialized && op != Recovery::Begin) || self.committed {
+        if (!self.initialized && !matches!(op, Recovery::Begin | Recovery::BeginMinor))
+            || self.committed
+        {
             return Err(Status::BadCommand);
         }
         let n = data.bits();
         let mut result = Word::ZERO;
         match op {
-            Recovery::Begin => {
+            Recovery::Begin | Recovery::BeginMinor => {
+                if op == Recovery::BeginMinor
+                    && (self.explicit || !model.minor_possible(self.needed))
+                {
+                    return Ok(Word::ZERO);
+                }
                 let half = model.memory.len() as u32 / 2;
                 let source = if self.end == half { half } else { 0 };
                 if self.initialized
@@ -103,11 +124,20 @@ impl RecoveryState {
                     return Err(Status::BoundsError);
                 }
                 self.initialized = true;
+                self.minor = op == Recovery::BeginMinor;
                 for (slot, entry) in model.entries.iter().enumerate() {
-                    if entry.is_some_and(|e| Self::retained(model, slot, &e)) {
+                    if entry.is_some_and(|e| {
+                        Self::retained(model, slot, &e)
+                            || (self.minor && model.remembered[slot] && !model.young(&e))
+                    }) {
                         self.marked[slot] = true;
                         self.queue.push(slot);
                     }
+                }
+                if self.minor {
+                    self.cursor = model.body_cursor;
+                    self.end = model.allocation_limit;
+                    result = Word::raw(1)?;
                 }
             }
             Recovery::Root => result = self.roots.get(n as usize).copied().unwrap_or(Word::ZERO),
@@ -148,7 +178,11 @@ impl RecoveryState {
             }
             Recovery::Mark => {
                 let slot = n as usize & (model.entries.len() - 1);
-                if data.is_reference() && model.entries[slot].is_some_and(|e| e.reference == data) {
+                // A minor collection treats old objects as live, untraced.
+                if data.is_reference()
+                    && model.entries[slot]
+                        .is_some_and(|e| e.reference == data && !(self.minor && !model.young(&e)))
+                {
                     result = Word::raw(u64::from(!self.marked[slot]))?;
                     if !self.marked[slot] {
                         self.marked[slot] = true;
@@ -191,6 +225,30 @@ impl RecoveryState {
                 self.write_offset = 0;
                 self.complete[self.selected] = e.size == 0;
             }
+            Recovery::Commit if self.minor => {
+                if u64::from(self.cursor) + u64::from(self.needed) > u64::from(self.end) {
+                    return Err(Status::OutOfSpace);
+                }
+                for slot in 0..model.entries.len() {
+                    let Some(e) = model.entries[slot].get() else {
+                        continue;
+                    };
+                    if model.young(&e) && !self.marked[slot] {
+                        if model
+                            .state
+                            .selected
+                            .is_some_and(|s| s.reference == e.reference)
+                        {
+                            model.state.selected = None.into();
+                        }
+                        model.entries[slot] = None.into();
+                    }
+                }
+                model.young_boundary = model.body_cursor;
+                model.remembered.fill(false);
+                model.eviction_permitted = true;
+                self.committed = true;
+            }
             Recovery::Commit => {
                 if self
                     .marked
@@ -230,6 +288,8 @@ impl RecoveryState {
                 model.body_cursor = self.cursor;
                 model.allocation_limit = self.end;
                 model.eviction_permitted = true;
+                model.young_boundary = self.cursor;
+                model.remembered.fill(false);
                 self.committed = true;
             }
             _ => return Err(Status::BadCommand),

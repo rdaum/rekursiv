@@ -1,5 +1,5 @@
 ; RAM collector. ROOT_COUNT comes from the hardware configuration.
-; R0 = root index; R1 = body offset; R2 = size; R4 = slot flags.
+; R0 = root index; R1 = body offset; R2 = size; R3 = minor; R4 = slot flags.
 ; LOGIK saves the interrupted arithmetic and sequencer state before entry.
 ;
 ; Loader entry, not a standalone mutator program: .collector tells LOGIK where
@@ -8,6 +8,15 @@
 ; ROOT_COUNT covers the frozen machine root interface (VRs, selection, code
 ; literals, live ESTK slots, explicit roots, etc.), not just 32 explicit roots.
 ; See ../docs/recovery.md for the exact root index layout and saved state.
+;
+; A collection is minor when enough words remain free. Objects allocated or
+; refilled since the last collection are young; the rest are old. BeginMinor
+; queues the persistence dependencies and every old object that has had a
+; reference stored into it since; Mark then treats old objects as live without
+; tracing them, and Commit drops the unmarked young objects without moving
+; anything. A minor collection reclaims pager slots but no words. BeginMinor
+; returns zero when too few words remain or the collection is an explicit
+; gc=Collect, and a full collection follows.
 ;
 ; Algorithm: Begin queues the persistence dependencies -> mark the roots ->
 ; take each queued object once and mark what it names -> copy the marked
@@ -21,6 +30,7 @@
 ; no backing record is deleted. Unreachable NEW objects and clean RAM copies
 ; may disappear; unsaved persistent changes and their descendants must survive.
 ;
+; R3 is nonzero during a minor collection.
 ; gc=Next takes one queued slot and selects it without changing the mutator
 ; selection. gc=NextMarked selects the next marked slot in ascending order,
 ; starting from slot zero after Begin. Both return the slot's flags, or zero
@@ -38,9 +48,13 @@
 ; is implemented. R0..R4 and collector flags are scratch, restored on return.
 .collector collector
 collector:
+    gc=BeginMinor
+    d=Object, r=Bus, rb=3, ldrb, flags
+    seq=ConditionalJump, cc=!Zero, brch=begun
     ; Begin clears per-collection marks and plans, chooses the inactive half,
     ; and marks and queues every object that persistence requires in RAM.
     gc=Begin
+begun:
     d=0, r=Bus, rb=0, ldrb
 roots:
     d=Register, ra=0, gc=Root
@@ -54,7 +68,7 @@ trace:
     gc=Next
     d=Object, r=Bus, rb=4, ldrb
     alu=Sub, ra=4, s=Bus, d=0, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=copy
+    seq=ConditionalJump, cc=Zero, brch=traced
     d=1, gc=Info                     ; class edge, including opaque objects
     d=Object, gc=Mark
     alu=And, ra=4, rb=4, s=Bus, d=4, ldrb, flags
@@ -69,6 +83,11 @@ trace_body:
     d=Object, gc=Mark
     alu=Add, ra=1, rb=1, s=Branch, brch=1, ldrb
     seq=Jump, cc=Zero, brch=trace_body
+
+; A minor collection copies nothing.
+traced:
+    ra=3, flags
+    seq=ConditionalJump, cc=!Zero, brch=finish
 
 ; Plan and copy retained bodies into the inactive half, in slot order. COMMIT
 ; publishes every mapping together; until then the original heap is

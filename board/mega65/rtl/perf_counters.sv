@@ -1,5 +1,6 @@
 // Live performance counters for the status panel. Over each second of
-// machine clock it counts retired microinstructions, bytecode dispatches,
+// machine clock it counts retired mutator microinstructions (the collector's
+// are not counted), bytecode dispatches,
 // accepted OBJEKT commands, collector cycles and accepted store requests.
 // At the end of the second it latches the counts and converts them, one
 // after another, to eight decimal digits each (one digit per nibble), so the
@@ -9,7 +10,7 @@
 //
 // Rows:
 //   0  bytecodes per second
-//   1  microinstructions per second
+//   1  mutator microinstructions per second
 //   2  microinstructions per bytecode, in hundredths (00010123 is 101.23)
 //   3  OBJEKT commands per second
 //   4  cycles per second without a retirement (waiting or collecting)

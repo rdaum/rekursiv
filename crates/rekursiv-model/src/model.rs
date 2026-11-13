@@ -51,6 +51,12 @@ pub struct Model {
     /// A collection has committed since allocation last found an empty slot,
     /// so the pager is full of retained objects and allocation may evict.
     pub eviction_permitted: bool,
+    /// The allocation cursor at the last collection. A resident object whose
+    /// body starts here or above was allocated or refilled since: it is young.
+    pub young_boundary: u32,
+    /// One flag per pager slot: a reference was written into this slot's old
+    /// object since the last collection. A minor collection scans such objects.
+    pub remembered: Vec<bool>,
 }
 impl Model {
     /// Construct an empty pager and zero-filled RAM with no backing records.
@@ -95,6 +101,8 @@ impl Model {
             eviction_permitted: false,
             persistent_roots: vec![false; pager_entries],
             maintenance: false,
+            young_boundary: 0,
+            remembered: vec![false; pager_entries],
         }
     }
     /// Restore power-on state while retaining pager and RAM capacities.
@@ -111,6 +119,16 @@ impl Model {
     /// Identities not yet issued.
     pub fn free_identities(&self) -> u64 {
         (rekursiv_asm::ID_MASK + 1).saturating_sub(self.next_identity)
+    }
+    /// Whether an object was allocated or refilled since the last collection.
+    pub fn young(&self, e: &rekursiv_asm::Entry) -> bool {
+        e.base >= self.young_boundary
+    }
+    /// Whether a collection that must place `needed` more words may be minor:
+    /// a minor collection reclaims slots but no words, so it leaves an eighth
+    /// of a semispace free besides the request.
+    pub fn minor_possible(&self, needed: u32) -> bool {
+        self.free_words() >= u64::from(needed) + self.memory.len() as u64 / 16
     }
     /// The low-space line LOGIK tests with the LowSpace condition.
     pub fn low_space(&self) -> bool {

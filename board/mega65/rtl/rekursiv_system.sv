@@ -340,7 +340,7 @@ module rekursiv_system #(
     end
 
     perf_counters counters (
-        .clk_i, .rst_i, .retire_i(retired), .dispatch_i(dispatched),
+        .clk_i, .rst_i, .retire_i(retired && !gc_active), .dispatch_i(dispatched),
         .command_i(cmd_valid && cmd_ready), .collecting_i(gc_active),
         .store_i(store_valid && store_ready), .rows_o(perf_o));
 

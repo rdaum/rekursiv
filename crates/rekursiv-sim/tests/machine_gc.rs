@@ -715,3 +715,85 @@ fn tracing_cost_does_not_depend_on_chain_order() -> Result<()> {
     assert_eq!(cycles[0], cycles[1]);
     Ok(())
 }
+
+#[test]
+fn minor_collection_keeps_remembered_young_objects_and_drops_the_rest_in_place() -> Result<()> {
+    let rt = runtime()?;
+    let mut h = Harness::new(
+        &rt,
+        Timing {
+            request_delay: 2,
+            memory_latency: 3,
+            response_stall: 2,
+        },
+        None,
+    )?;
+    let class = Word::reference(100, true)?.bits();
+    // O is allocated and survives an explicit (full) collection, so it is old
+    // and NEW: no persistence obligation retains it, and only the write
+    // barrier makes its fields roots. Then A (in VR0), B (unreferenced) and C
+    // (stored only in O) are allocated, and one-word objects fill the 16-slot
+    // pager. The thirteenth finds no slot, and that collection is minor.
+    let mut source = format!(
+        "    d={class:#x}, page=Allocate, size=2, scan=1
+    d=Object, ldvr, vr=2
+    gc=Collect
+    d={class:#x}, page=Allocate, size=2, scan=0
+    d=Object, ldvr, vr=0
+    d={class:#x}, page=Allocate, size=2, scan=0
+    d={class:#x}, page=Allocate, size=2, scan=0
+    d=Object, ldvr, vr=1
+    read=Vr, vr=2
+    d=Object, page=Fetch
+    d=2, idx=Load
+    read=Vr, vr=1
+    d=Object, mem=Write
+    d=0, ldvr, vr=1
+"
+    );
+    for _ in 0..13 {
+        source += &format!("    d={class:#x}, page=Allocate, size=1, scan=0\n");
+    }
+    source += "    halt\n";
+    let (image, entry) = rekursiv_sim::processor::assembly_image(&source)?;
+    h.load_processor(&image)?;
+    h.start_processor(entry)?;
+    // Two collections, each scanning every control-store root.
+    h.run_processor(
+        &image,
+        &mut Processor::default(),
+        250_000 * CODE_WORDS.div_ceil(4096),
+    )?;
+    // The harness compared the RTL's pager and memory with the minor oracle
+    // after the second collection; check what that oracle decided.
+    assert_eq!(h.stats.collections, 2);
+    let oracle = &h.oracle;
+    assert_eq!(
+        oracle.allocation_limit, 512,
+        "only the explicit collection changed semispace"
+    );
+    let resident: Vec<_> = oracle
+        .entries
+        .iter()
+        .flatten()
+        .filter(|e| e.class.bits() == class)
+        .collect();
+    // 17 objects were allocated. B and the fillers allocated before the
+    // collection are dropped; O, A, C and the allocations after it remain.
+    assert_eq!(resident.len(), 5);
+    let o = resident
+        .iter()
+        .find(|e| e.reference == oracle.state.vr[2])
+        .unwrap();
+    assert!(
+        !oracle.young(o),
+        "O was old at the minor collection, and stays in place"
+    );
+    let c = oracle.memory[o.base as usize + 1];
+    assert!(
+        resident.iter().any(|e| e.reference == c),
+        "C survives through old O"
+    );
+    assert!(resident.iter().any(|e| e.reference == oracle.state.vr[0]));
+    Ok(())
+}

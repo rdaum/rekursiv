@@ -105,8 +105,86 @@ impl Model {
         candidate.body_cursor = cursor;
         candidate.allocation_limit = destination + half;
         candidate.eviction_permitted = true;
+        candidate.young_boundary = cursor;
+        candidate.remembered.fill(false);
         candidate.relocate_prepared();
         *self = candidate;
+        Ok(())
+    }
+
+    /// Compute the expected result of a minor collection: drop every young
+    /// object that is unreachable from the roots, the persistence roots, and
+    /// the old objects remembered by the write barrier. Old objects count as
+    /// live and are not traced. Nothing moves; afterwards every object is old.
+    ///
+    /// # Errors
+    ///
+    /// Invalid resident ranges return `BoundsError`, as for [`Self::collect_ram`].
+    /// Errors leave the model unchanged.
+    pub fn collect_minor(&mut self, roots: &[Word], from_upper: bool) -> Result<(), Status> {
+        let half = self.memory.len() as u32 / 2;
+        let source_start = if from_upper { half } else { 0 };
+        let mut work = roots.to_vec();
+        work.extend(self.state.vr);
+        if self.state.prepared.status == Status::Ok {
+            work.push(self.state.prepared.reference);
+        }
+        work.extend(self.classes.iter().flatten().copied());
+        if let Some(e) = self.state.selected.get() {
+            work.extend([e.reference, e.class]);
+        }
+        for (slot, e) in self.entries.iter().enumerate() {
+            let Some(e) = e.get() else { continue };
+            if e.base < source_start || e.base as u64 + e.size as u64 > (source_start + half) as u64
+            {
+                return Err(Status::BoundsError);
+            }
+            if (e.modified && !e.new)
+                || (e.new
+                    && (self.persistent_roots[slot]
+                        || self.store.records.contains_key(&e.reference.identity()?)))
+            {
+                work.push(e.reference);
+            }
+            // A remembered old object's fields are roots for the young.
+            if self.remembered[slot] && !self.young(&e) && e.reference.bits() & (1 << 37) != 0 {
+                work.extend(&self.memory[e.base as usize..(e.base + e.size) as usize]);
+            }
+        }
+        let mut retained = BTreeSet::new();
+        while let Some(word) = work.pop() {
+            if !word.is_reference() {
+                continue;
+            }
+            let Some(e) = self.entries[self.slot(word)].filter(|e| e.reference == word) else {
+                continue;
+            };
+            if !self.young(&e) || !retained.insert(e.reference.bits()) {
+                continue;
+            }
+            work.push(e.class);
+            if e.reference.bits() & (1 << 37) != 0 {
+                work.extend(&self.memory[e.base as usize..(e.base + e.size) as usize]);
+            }
+        }
+        for slot in 0..self.entries.len() {
+            let Some(e) = self.entries[slot].get() else {
+                continue;
+            };
+            if self.young(&e) && !retained.contains(&e.reference.bits()) {
+                if self
+                    .state
+                    .selected
+                    .is_some_and(|s| s.reference == e.reference)
+                {
+                    self.state.selected = None.into();
+                }
+                self.entries[slot] = None.into();
+            }
+        }
+        self.young_boundary = self.body_cursor;
+        self.remembered.fill(false);
+        self.eviction_permitted = true;
         Ok(())
     }
 }

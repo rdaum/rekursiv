@@ -314,7 +314,7 @@ module logik #(
                 instruction.shift!=SHIFT_NONE || instruction.carry!=CARRY_ZERO || instruction.estk==ESTK_COMPACT))) local_fault=FAULT_ENCODING;
         // Collect is an effect-free mutator request, never a maintenance op.
         // On return, retried permits this word to retire once without reentry.
-        else if(instruction.recovery>13 ||
+        else if(instruction.recovery>14 ||
             (instruction.recovery==11 && (gc_active_o || !gc_enable_i ||
                 instruction != (256'd11 << 212))) ||
             (instruction.recovery!=0 && instruction.recovery!=11 && !gc_active_o) ||

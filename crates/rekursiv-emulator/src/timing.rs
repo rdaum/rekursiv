@@ -223,7 +223,7 @@ impl Estimate {
             // table entry.
             let walk = matches!(
                 i.recovery,
-                Recovery::Begin | Recovery::Commit | Recovery::NextMarked
+                Recovery::Begin | Recovery::BeginMinor | Recovery::Commit | Recovery::NextMarked
             );
             let extra = 2 + u64::from(!walk) + if ram { self.config.ram.cycles() } else { 0 };
             self.cycles.maintenance_wait += extra;

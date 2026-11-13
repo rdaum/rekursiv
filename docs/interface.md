@@ -32,13 +32,13 @@ OBJEKT keeps the selected entry and the prepared entry in registers. They are au
 table write that touches their slot updates or invalidates them on the same edge. A command on the
 selected or prepared object therefore reads no table port and keeps the timing below. A command with
 a pager operation presents its key's slot on acceptance and executes one cycle later. Collector
-controls other than Begin, Commit, and NextMarked likewise take one cycle more than their handshake,
-and Exchange takes one more to drop its second entry.
+controls other than Begin, BeginMinor, Commit, and NextMarked likewise take one cycle more than
+their handshake, and Exchange takes one more to drop its second entry.
 
 Operations that must inspect every entry walk the table one slot per cycle, presenting each slot a
-cycle ahead: `2**PAGER_BITS` cycles for a raw service write, SetBodyCursor, collector Begin, and
-collector Commit, and up to that many for NextObject. Each walk runs while its operation holds the
-core exclusively and completes before the operation's response.
+cycle ahead: `2**PAGER_BITS` cycles for a raw service write, SetBodyCursor, collector Begin and
+BeginMinor, and collector Commit, and up to that many for NextObject. Each walk runs while its
+operation holds the core exclusively and completes before the operation's response.
 
 Reset cannot clear the RAM. After reset OBJEKT drops one entry per cycle and accepts no command,
 service, or collector operation for `2**PAGER_BITS` cycles.
@@ -780,22 +780,23 @@ Recovery controls 1–9 use an internal request/completion port to OBJEKT. Its v
 the ordinary command channel. The collector datapath never accepts host service requests and never
 issues backing-store transactions.
 
-| Value | Control    | D-bus operand and result                                                                                                                                 |
-| ----: | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-|     0 | None       | Ordinary local microinstruction                                                                                                                          |
-|     1 | Begin      | Walk every slot: validate source-space bounds, clear marks and the relocation plan, and mark and queue each slot whose retention flag is set             |
-|     2 | Root       | Index from the root table; return the 40-bit value                                                                                                       |
-|     3 | Slot       | Pager slot index; select it and return flags                                                                                                             |
-|     4 | Info       | Selected slot field: 0 reference, 1 class, 2 size                                                                                                        |
-|     5 | Mark       | Full reference; mark and queue a resident object on its first mark, and return 1 only then                                                               |
-|     6 | ReadBody   | Zero-based source offset; return and buffer a 40-bit word                                                                                                |
-|     7 | Stage      | Reserve destination range for the selected marked object                                                                                                 |
-|     8 | WriteBody  | Zero-based destination offset; write the matching buffered word                                                                                          |
-|     9 | Commit     | Walk every slot to publish completed relocation; exchange allocation spaces                                                                              |
-|    10 | Return     | Restore processor context and retry; requires successful Commit                                                                                          |
-|    11 | Collect    | Standalone mutator request for collection, with no allocation reservation                                                                                |
-|    12 | Next       | Take the most recently queued slot, select it, and return its flags; zero when the queue is empty                                                        |
-|    13 | NextMarked | Select the next marked slot in ascending order, from slot zero after Begin, and return its flags; zero when none remains. It examines one slot per cycle |
+| Value | Control    | D-bus operand and result                                                                                                                                                                                                              |
+| ----: | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|     0 | None       | Ordinary local microinstruction                                                                                                                                                                                                       |
+|     1 | Begin      | Walk every slot: validate source-space bounds, clear marks and the relocation plan, and mark and queue each slot whose retention flag is set                                                                                          |
+|     2 | Root       | Index from the root table; return the 40-bit value                                                                                                                                                                                    |
+|     3 | Slot       | Pager slot index; select it and return flags                                                                                                                                                                                          |
+|     4 | Info       | Selected slot field: 0 reference, 1 class, 2 size                                                                                                                                                                                     |
+|     5 | Mark       | Full reference; mark and queue a resident object on its first mark, and return 1 only then                                                                                                                                            |
+|     6 | ReadBody   | Zero-based source offset; return and buffer a 40-bit word                                                                                                                                                                             |
+|     7 | Stage      | Reserve destination range for the selected marked object                                                                                                                                                                              |
+|     8 | WriteBody  | Zero-based destination offset; write the matching buffered word                                                                                                                                                                       |
+|     9 | Commit     | Walk every slot to publish completed relocation; exchange allocation spaces                                                                                                                                                           |
+|    10 | Return     | Restore processor context and retry; requires successful Commit                                                                                                                                                                       |
+|    11 | Collect    | Standalone mutator request for collection, with no allocation reservation                                                                                                                                                             |
+|    12 | Next       | Take the most recently queued slot, select it, and return its flags; zero when the queue is empty                                                                                                                                     |
+|    13 | NextMarked | Select the next marked slot in ascending order, from slot zero after Begin, and return its flags; zero when none remains. It examines one slot per cycle                                                                              |
+|    14 | BeginMinor | Start a minor collection and return 1, walking as Begin and also queuing each remembered old slot; return 0 without walking for an explicit collection or when fewer than the request plus an eighth of a semispace of words are free |
 
 Slot flags are valid (bit 0), marked (1), scanned (2), retention root (3), and NEW (4). Retention
 roots include dirty persistent objects and NEW objects protected by committed saves or

@@ -280,7 +280,8 @@ impl Harness<'_> {
         let mut device_response = None;
         let mut wait = 0u32;
         let mut from_upper = self.oracle.allocation_limit as usize == self.backing.len();
-        let mut collection: Option<std::result::Result<rekursiv_model::Model, Status>> = None;
+        let mut collection: Option<std::result::Result<(rekursiv_model::Model, bool), Status>> =
+            None;
         for cycle in 0..limit {
             if self.rtl.cpu_halted_o != 0 || self.rtl.cpu_service_o != 0 {
                 ensure!(
@@ -299,11 +300,15 @@ impl Harness<'_> {
                         "machine collector failed: status {}",
                         self.rtl.cpu_last_status_o
                     );
-                    self.oracle = collection
+                    let (oracle, minor) = collection
                         .take()
                         .expect("collector entry observed")
                         .map_err(|e| eyre::eyre!("RTL collected despite model error {e:?}"))?;
-                    from_upper = !from_upper;
+                    self.oracle = oracle;
+                    // Only a full collection changes semispace.
+                    if !minor {
+                        from_upper = !from_upper;
+                    }
                     self.compare_state()?;
                     self.compare_processor(model)?;
                 }
@@ -493,7 +498,12 @@ impl Harness<'_> {
                         roots.push(record.class);
                     }
                 }
-                let needed = if ports.pager == 5 {
+                // An explicit collection has no pending request.
+                let explicit = image.code[model.pc as usize]
+                    .is_some_and(|i| i.recovery == rekursiv_asm::processor::Recovery::Collect);
+                let needed = if explicit {
+                    0
+                } else if ports.pager == 5 {
                     self.store
                         .records
                         .get(&Word::from_bits(ports.data)?.identity()?)
@@ -501,10 +511,16 @@ impl Harness<'_> {
                 } else {
                     ports.alloc_size
                 };
+                // The collector microcode tries a minor collection first; the
+                // datapath declines it when too few words remain.
+                let minor = !explicit && expected.minor_possible(needed);
                 collection = Some(
-                    expected
-                        .collect_ram(&roots, from_upper, needed)
-                        .map(|()| expected),
+                    if minor {
+                        expected.collect_minor(&roots, from_upper)
+                    } else {
+                        expected.collect_ram(&roots, from_upper, needed)
+                    }
+                    .map(|()| (expected, minor)),
                 );
                 response = None;
                 self.stats.collections += 1;

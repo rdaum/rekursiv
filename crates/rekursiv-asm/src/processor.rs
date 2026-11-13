@@ -42,7 +42,7 @@ field!(Fetch { Hold=0, Nam=1, Map=2, Both=3 });
 
 // Collect requests collection from the mutator. Other nonzero controls are
 // privileged operations inside the shared collection/recovery handler.
-field!(Recovery { None=0, Begin=1, Root=2, Slot=3, Info=4, Mark=5, ReadBody=6, Stage=7, WriteBody=8, Commit=9, Return=10, Collect=11, Next=12, NextMarked=13 });
+field!(Recovery { None=0, Begin=1, Root=2, Slot=3, Info=4, Mark=5, ReadBody=6, Stage=7, WriteBody=8, Commit=9, Return=10, Collect=11, Next=12, NextMarked=13, BeginMinor=14 });
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Instruction {

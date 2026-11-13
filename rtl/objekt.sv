@@ -409,6 +409,10 @@ module objekt #(
         else if(gc_data_i==9) gc_root=selected ? snapshot[103:64] : 40'b0;
         else if(gc_data_i<14) gc_root=class_valid[2'(gc_data_i-10)] ? classes[2'(gc_data_i-10)] : 40'b0;
     end
+    // The write barrier: a mutator write of a reference commits. The collector
+    // remembers the slot if the object is old.
+    wire remember=phase==WAIT_MEMORY && mem_rsp_valid_i && !mem_rsp_error_i &&
+        pending_mutator && pending_write && pending_data[39:38]==2'b10;
     objekt_gc #(.PAGER_BITS(PAGER_BITS),.MEMORY_WORDS(MEMORY_WORDS)) collector_datapath (
         .clk_i(clk_i),.rst_i(rst_i),.active_i(gc_active_i),
         .valid_i(gc_valid_i && phase==IDLE && !maintenance),.ready_o(gc_ready),
@@ -417,6 +421,9 @@ module objekt #(
         .status_o(gc_status_o),.result_o(gc_result_o),.committed_o(gc_committed_o),
         .slot_o(gc_slot),.entry_valid_i(aux_valid),.entry_i(aux_stored),
         .entry_persistent_i(aux_persistent),
+        .remember_i(remember),.remember_slot_i(pending_slot),
+        .remember_base_i(pending_memory_entry[127:104]),
+        .body_cursor_i(dbg_body_cursor_o),.free_words_i(free_words),.explicit_i(gc_explicit_i),
         .entry_prepared_i(prepared_access.status==OK && aux_stored[39:0]==prepared_access.reference),
         .relocate_o(gc_relocate),.commit_o(gc_commit),.relocate_slot_o(gc_relocate_slot),
         .retained_o(gc_retained),.base_o(gc_base),.cursor_o(gc_cursor),

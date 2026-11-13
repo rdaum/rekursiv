@@ -17,6 +17,8 @@ use std::mem::{offset_of, size_of};
 pub(super) struct MemoryView {
     entries: *mut Slot<Entry>,
     entries_len: usize,
+    /// One flag per pager slot, the same length as `entries`.
+    remembered: *mut bool,
     words: *mut Word,
     words_len: usize,
 }
@@ -25,6 +27,7 @@ impl MemoryView {
         Self {
             entries: model.entries.as_mut_ptr(),
             entries_len: model.entries.len(),
+            remembered: model.remembered.as_mut_ptr(),
             words: model.memory.as_mut_ptr(),
             words_len: model.memory.len(),
         }
@@ -149,6 +152,32 @@ impl Emit<'_> {
             offset_of!(MemoryView, entries) as i32,
         );
         self.b.ins().iadd(base, bytes)
+    }
+    /// The write barrier, as Model's datapath applies it: a reference stored
+    /// into an old object sets that slot's remembered flag.
+    fn remember(&mut self, e: Metadata, d: Value) {
+        let model = self.model();
+        let boundary = self.read32(model, offset_of!(Model, young_boundary));
+        let tag = self.b.ins().ushr_imm_u(d, 38);
+        let reference = self.b.ins().icmp_imm_s(IntCC::Equal, tag, 2);
+        let old = self.b.ins().icmp(IntCC::UnsignedLessThan, e.base, boundary);
+        let flag = self.b.ins().band(reference, old);
+        let flag = self.b.ins().uextend(I64, flag);
+        let view = self.view();
+        let len = self.view_length(offset_of!(MemoryView, entries_len));
+        let mask = self.b.ins().iadd_imm_s(len, -1);
+        let index = self.b.ins().band(e.reference, mask);
+        let index = self.pointer_index(index);
+        let flags = self.b.ins().load(
+            self.pointer,
+            MemFlagsData::trusted(),
+            view,
+            offset_of!(MemoryView, remembered) as i32,
+        );
+        let at = self.b.ins().iadd(flags, index);
+        let previous = self.read8(at, 0);
+        let updated = self.b.ins().bor(previous, flag);
+        self.write8(at, 0, updated);
     }
     fn load_metadata(&mut self, base: Value, offset: usize) -> Metadata {
         Metadata {
@@ -544,6 +573,7 @@ impl Emit<'_> {
             } else {
                 // All failure checks precede RAM or metadata publication.
                 self.write64(location, 0, d);
+                self.remember(e, d);
                 e.modified = one;
                 e.representation = self.b.ins().select(first, d, e.representation);
                 let slot = self.pager_slot(e.reference);

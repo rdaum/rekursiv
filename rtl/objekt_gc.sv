@@ -18,6 +18,16 @@
 // the slots that persistence requires in RAM. COMMIT walks every slot to hand
 // its staged base to the parent. The mutator is excluded throughout and a walk
 // performs no memory transaction, so it cannot fail part way.
+//
+// BEGIN_MINOR starts a minor collection when enough words remain free and the
+// request is not explicit, and otherwise answers zero so microcode can BEGIN a
+// full one. An object is
+// young if its body starts at or above the boundary: the allocation cursor at
+// the last commit. Old objects count as live and are not traced; the walk
+// also queues every old object whose remembered bit says a reference was
+// stored into it since. COMMIT then keeps every entry in place except the
+// unmarked young ones, leaves the cursor and semispace as they are, and makes
+// every object old. Both kinds of commit clear the remembered bits.
 module objekt_gc #(
     parameter integer PAGER_BITS=4, parameter integer MEMORY_WORDS=512
 )(
@@ -25,6 +35,14 @@ module objekt_gc #(
     input logic valid_i, output logic ready_o, input logic [3:0] operation_i,
     input logic [39:0] data_i, root_i,
     input logic [23:0] needed_i,
+    // The write barrier: a mutator stored a reference into this slot's object,
+    // whose body starts at remember_base_i.
+    input logic remember_i, input logic [PAGER_BITS-1:0] remember_slot_i,
+    input logic [23:0] remember_base_i,
+    // The allocator's cursor and free words, for a minor collection.
+    input logic [24:0] body_cursor_i, free_words_i,
+    // An explicit collection request, which always collects in full.
+    input logic explicit_i,
     output logic response_o, input logic response_ready_i,
     output logic [3:0] status_o, output logic [39:0] result_o,
     // The parent returns the entry for slot_o on the following cycle.
@@ -49,7 +67,8 @@ module objekt_gc #(
     localparam integer ENTRIES=1<<PAGER_BITS;
     localparam integer HALF=MEMORY_WORDS/2;
     localparam logic [3:0] BEGIN_GC=1, ROOT=2, SLOT=3, INFO=4,
-        MARK=5, READ_BODY=6, STAGE=7, WRITE_BODY=8, COMMIT=9, NEXT=12, NEXT_MARKED=13;
+        MARK=5, READ_BODY=6, STAGE=7, WRITE_BODY=8, COMMIT=9, NEXT=12, NEXT_MARKED=13,
+        BEGIN_MINOR=14;
     typedef enum logic [2:0] {IDLE, EXECUTE, REQUEST, WAIT_MEMORY, RESPONSE,
         CHECK_LAYOUT, RELOCATE, FIND_MARKED} phase_t;
     phase_t phase;
@@ -71,6 +90,13 @@ module objekt_gc #(
         if(plan_write) plan[plan_slot]<=plan_data;
         plan_q<=plan[slot_o];
     end
+    // Remembered bits: set by the write barrier while the mutator runs,
+    // cleared by the commit walk.
+    logic remembered [0:ENTRIES-1];
+    logic remembered_q;
+    logic [24:0] boundary;
+    logic minor;
+
     wire plan_mark=plan_q[PLAN_BITS-1];
     wire plan_staged=plan_q[PLAN_BITS-2];
     wire [23:0] plan_base=plan_q[PLAN_BITS-4 -: 24];
@@ -90,13 +116,18 @@ module objekt_gc #(
     logic [24:0] destination_end;
 
     wire walking=phase==CHECK_LAYOUT || phase==RELOCATE || phase==FIND_MARKED;
+    always_ff @(posedge clk_i) begin
+        if(phase==RELOCATE) remembered[walk_slot]<=1'b0;
+        else if(remember_i && {1'b0,remember_base_i}<boundary) remembered[remember_slot_i]<=1'b1;
+        remembered_q<=remembered[slot_o];
+    end
     wire walk_last=walk_slot==PAGER_BITS'(ENTRIES-1);
     // The address for the next cycle's entry and plan word.
     always_comb begin
         slot_o=selected_slot;
         if(walking) slot_o=walk_slot+1'b1;
         else if(phase==IDLE) case(operation_i)
-            BEGIN_GC, COMMIT: slot_o='0;
+            BEGIN_GC, BEGIN_MINOR, COMMIT: slot_o='0;
             NEXT_MARKED: slot_o=copy_scan[PAGER_BITS-1:0];
             MARK, SLOT: slot_o=data_i[PAGER_BITS-1:0];
             NEXT: slot_o=gray_head;
@@ -111,14 +142,19 @@ module objekt_gc #(
     wire retention=(entry.modified && !entry.is_new) || (entry.is_new && entry_persistent_i) ||
         entry_prepared_i;
     wire [39:0] slot_flags={35'b0,entry.is_new,retention,entry.reference[37],plan_mark,entry_valid_i};
-    wire mark_hit=data[39:38]==2'b10 && data[36:0]!=0 && entry_valid_i && entry.reference==data;
+    wire young={1'b0,entry.base}>=boundary;
+    // A minor collection treats old objects as live and does not trace them.
+    wire mark_hit=data[39:38]==2'b10 && data[36:0]!=0 && entry_valid_i && entry.reference==data &&
+        (!minor || young);
 
     assign ready_o=active_i && phase==IDLE && !rst_i;
     assign response_o=phase==RESPONSE && active_i && !rst_i;
     assign mem_valid_o=phase==REQUEST && active_i && !rst_i;
     assign mem_response_ready_o=phase==WAIT_MEMORY && active_i && !rst_i;
     assign mem_data_o=buffer;
-    assign destination_end=space_o ? 25'(HALF) : 25'(MEMORY_WORDS);
+    // A full collection copies into the inactive half; a minor one keeps the
+    // active half and its allocator.
+    assign destination_end=(space_o ^ minor) ? 25'(HALF) : 25'(MEMORY_WORDS);
     assign end_address={1'b0,cursor_o}+{2'b0,entry.size};
     // COMMIT is admitted only when every marked object is copied and the
     // destination leaves room for the pending request. Publication and the
@@ -127,12 +163,13 @@ module objekt_gc #(
     wire commit_room=({1'b0,cursor_o}+{2'b0,needed_i}) <= {1'b0,destination_end};
     assign relocate_o=phase==RELOCATE && active_i && !rst_i;
     assign relocate_slot_o=walk_slot;
-    assign retained_o=plan_mark;
-    assign base_o=plan_base;
+    assign retained_o=minor ? (entry_valid_i && (!young || plan_mark)) : plan_mark;
+    assign base_o=minor ? entry.base : plan_base;
     assign commit_o=relocate_o && walk_last;
 
     // The single plan write port.
-    wire push_retained=phase==CHECK_LAYOUT && entry_valid_i && retention;
+    wire push_retained=phase==CHECK_LAYOUT && entry_valid_i &&
+        (retention || (minor && remembered_q && !young));
     wire push_marked=phase==EXECUTE && operation==MARK && mark_hit && !plan_mark;
     wire stage_ok=phase==EXECUTE && operation==STAGE && entry_valid_i && plan_mark && !plan_staged &&
         end_address<={1'b0,destination_end};
@@ -158,30 +195,37 @@ module objekt_gc #(
             phase<=IDLE; write_offset<=0;
             selected_slot<='0; walk_slot<='0; held_slot<='0; layout_valid<=0; initialized<=0; committed_o<=0;
             gray_head<='0; gray_count<='0; marked_count<='0; done_count<='0; copy_scan<='0;
-            space_o<=0; cursor_o<=0; status_o<=0; result_o<=0;
+            space_o<=0; cursor_o<=0; status_o<=0; result_o<=0; boundary<=0; minor<=0;
             mem_write_o<=0; mem_addr_o<=0; buffer<=0;
             copied_word<=0; copied_offset<=0; operation<=0; data<=0; root<=0; held_plan<='0;
         end else if(!active_i) begin
-            phase<=IDLE; initialized<=0; committed_o<=0; copied_word<=0;
+            phase<=IDLE; initialized<=0; committed_o<=0; copied_word<=0; minor<=0;
         end else begin
             case(phase)
                 IDLE: if(valid_i && ready_o) begin
                     status_o<=0; result_o<=0;
                     operation<=operation_i; data<=data_i; root<=root_i; held_slot<=slot_o;
                     phase<=EXECUTE;
-                    if((!initialized && operation_i!=BEGIN_GC) || committed_o) begin
+                    if((!initialized && operation_i!=BEGIN_GC && operation_i!=BEGIN_MINOR) ||
+                        committed_o) begin
                         status_o<=1; phase<=RESPONSE;
                     end else case(operation_i)
-                        BEGIN_GC: begin
+                        BEGIN_GC, BEGIN_MINOR: begin
                             if(initialized) begin status_o<=6; phase<=RESPONSE; end
+                            // A minor collection reclaims no words: it leaves an
+                            // eighth of a semispace free besides the request.
+                            else if(operation_i==BEGIN_MINOR && (explicit_i ||
+                                free_words_i < 25'(needed_i) + 25'(HALF/8))) phase<=RESPONSE;
                             else begin
+                                minor<=operation_i==BEGIN_MINOR;
+                                result_o<={39'b0,operation_i==BEGIN_MINOR};
                                 walk_slot<='0; phase<=CHECK_LAYOUT;
                                 layout_valid<=MEMORY_WORDS>=2 && MEMORY_WORDS%2==0;
                                 gray_count<='0; marked_count<='0; done_count<='0; copy_scan<='0;
                             end
                         end
                         COMMIT: begin
-                            if(marked_count!=done_count) begin status_o<=1; phase<=RESPONSE; end
+                            if(!minor && marked_count!=done_count) begin status_o<=1; phase<=RESPONSE; end
                             else if(!commit_room) begin status_o<=11; phase<=RESPONSE; end
                             else begin walk_slot<='0; phase<=RELOCATE; end
                         end
@@ -266,13 +310,16 @@ module objekt_gc #(
                         if(!layout_valid || (entry_valid_i && !entry_in_source)) status_o<=6;
                         else begin
                             write_offset<=0; initialized<=1;
-                            cursor_o<=space_o ? 25'b0 : 25'(HALF);
+                            cursor_o<=minor ? body_cursor_i : (space_o ? 25'b0 : 25'(HALF));
                         end
                     end
                 end
                 RELOCATE: begin
                     walk_slot<=walk_slot+1'b1;
-                    if(walk_last) begin committed_o<=1; space_o<=!space_o; phase<=RESPONSE; end
+                    if(walk_last) begin
+                        committed_o<=1; phase<=RESPONSE; boundary<=cursor_o;
+                        if(!minor) space_o<=!space_o;
+                    end
                 end
                 // One slot per cycle until a marked slot or the end.
                 FIND_MARKED: begin
