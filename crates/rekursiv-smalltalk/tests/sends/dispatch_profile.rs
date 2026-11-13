@@ -55,13 +55,6 @@ fn profile(
                     opcode,
                 ));
             }
-            if address == pc("cycle") {
-                // The optimized loop must continue to expose IP/SP in the
-                // actual context object before every guest bytecode.
-                let e = m.objekt.resolve(m.objekt.state.vr[0])?;
-                assert_eq!(m.objekt.memory[e.base as usize + 2], i(m.cpu.rf[8] as i32));
-                assert_eq!(m.objekt.memory[e.base as usize + 3], i(m.cpu.rf[9] as i32));
-            }
         }
         let dispatch = m.image().code[address as usize]
             .is_some_and(|i| i.seq == rekursiv_asm::processor::Seq::Dispatch);
@@ -154,7 +147,11 @@ fn profile_bytecode_loop() -> Result<()> {
                     16,
                     vec![302, oop(0), oop(0), oop(0), oop(0), oop(0), oop(0)],
                 );
-                pointers(&mut source, 304, 16, vec![2, 2, 2, oop(0)]);
+                // Root 29's private Array has 43 fields; the last holds the
+                // method cache, created on the first miss.
+                let mut device = vec![2, 2, 2, oop(0)];
+                device.resize(43, 2);
+                pointers(&mut source, 304, 16, device);
             }
             let assembly = if let Ok(path) = std::env::var("DISPATCH_PROFILE_SOURCE") {
                 rekursiv_asm::text::assemble(

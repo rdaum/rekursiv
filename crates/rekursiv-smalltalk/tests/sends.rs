@@ -343,13 +343,13 @@ fn execute_machine(
             }
             if h.rtl.cpu_pc_o == cycle {
                 let reference = h.oracle.state.vr[0];
-                let entry = h.oracle.resolve(reference)?;
-                let body =
-                    &h.backing[entry.base as usize..entry.base as usize + entry.size as usize];
-                ensure!(
-                    body[2] == i(cpu.rf[8] as i32) && body[3] == i(cpu.rf[9] as i32),
-                    "context register materialization"
-                );
+                // The active context need not be resident between bytecodes.
+                let body = match h.oracle.resolve(reference) {
+                    Ok(entry) => {
+                        &h.backing[entry.base as usize..entry.base as usize + entry.size as usize]
+                    }
+                    Err(_) => h.store.records[&reference.identity()?].body.as_slice(),
+                };
                 let sp = cpu.rf[9] as usize;
                 ensure!(
                     body[7 + sp..].iter().all(|&x| x == r(2)),

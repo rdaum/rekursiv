@@ -148,6 +148,7 @@ sample_interval_value:
 ;   components 38/39: registered cursor/display Forms
 ;   component 40: copied snapshot serial number and virtual leader address.
 ;   components 41..43: previous input timestamp, low14/mid14/high4.
+;   component 44: the method cache (see cache_lookup in sends.uc), or nil.
 ; Component 41 is nil until the first packet establishes absolute time.
 ; Each component is a canonical guest SmallInteger or reference. No unrooted
 ; pointer or host queue contains converted guest words. R7 supplies the return
@@ -159,10 +160,10 @@ input_buffer_load:
     d=Symbol, page=Fetch
     d=Register, ra=7, seq=Bus
 input_buffer_allocate:
-    d=0xa000000008, page=Allocate, size=43, scan=1
+    d=0xa000000008, page=Allocate, size=44, scan=1
     d=Object, ldvr, vr=3
     d=1, idx=Load
-    d=336, mem=Write
+    d=344, mem=Write
     d=2, r=Bus, rb=0, ldrb
 input_buffer_zero:
     d=Register, ra=0, idx=Load
@@ -179,6 +180,8 @@ input_buffer_zero:
     idx=Increment
     d=NIL, mem=Write
     idx=Increment
+    d=NIL, mem=Write
+    d=44, idx=Load
     d=NIL, mem=Write
     d=29, r=Bus, rb=0, ldrb
     read=Vr, vr=3

@@ -2,7 +2,7 @@
 ; (all zero arguments); scheduler_load also accepts asynchronous signal with
 ; R0=85, R1=1, VR6=Semaphore. R1 distinguishes event delivery from guest sends.
 ; For ordinary success return receiver, except suspend returns guest nil.
-; flushCache is a no-op because lookup has no cache. Invalid async state halts;
+; flushCache drops the method cache (cache_flush in sends.uc). Invalid async state halts;
 ; it has no guest primitive fallback. Some queue invariants are trusted.
 ;
 ; Processor association identity 4, component 3, roots the ProcessScheduler.
@@ -36,7 +36,7 @@ primitive_scheduler:
     ra=1, flags
     seq=ConditionalJump, cc=!Zero, brch=primitive_failed
     ra=0, s=Branch, brch=89, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=scheduler_result
+    seq=ConditionalJump, cc=Zero, brch=scheduler_flush
 scheduler_load:
     d=0xa000000004, page=Fetch
     d=3, idx=Load
@@ -270,11 +270,16 @@ scheduler_failed:
     ; An asynchronous signal has no guest fallback activation.
     seq=Jump, brch=bad_state
 
-; Enter only after save_context materialized the completed bytecode. The pending
-; process has a root even after boundary cleared the ordinary scratch VRs.
+; The pending process has a root even after boundary cleared the ordinary
+; scratch VRs.
 check_process_switch:
     d=Sp, r=Bus, flags
     seq=ConditionalJump, cc=Zero, brch=check_low_space
+    ; The outgoing process keeps this context: write its IP and SP now.
+    d=CTX_IP, idx=Load, read=Vr, vr=0, ra=8, estk=Compact, compact=2
+    d=Object, page=Fetch
+    d=Estk, mem=Write, idx=Increment, ra=9, estk=Compact, compact=2
+    d=Estk, mem=Write
     d=1, esp=Bus
     estk=Read
     d=Estk, ldvr, vr=7
@@ -304,3 +309,7 @@ check_process_switch:
     d=Object, ldvr, vr=0
     d=NIL, mem=Write
     d=0, r=Bus, rb=15, ldrb, seq=Jump, brch=load_context
+
+; flushCache: drop the method cache, then answer the receiver.
+scheduler_flush:
+    d=scheduler_result, r=Bus, rb=7, ldrb, seq=Jump, brch=cache_flush

@@ -194,5 +194,8 @@ primitive_become:
     d=Object, ldvr, vr=3
     read=Vr, vr=6
     d=Object, page=Exchange, vr=3
+    ; Exchanged classes or methods would leave stale cache entries.
+    d=become_done, r=Bus, rb=7, ldrb, seq=Jump, brch=cache_flush
+become_done:
     read=Vr, vr=6
     d=Object, ldvr, vr=5, seq=Jump, brch=send_result

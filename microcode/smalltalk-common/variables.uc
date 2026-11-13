@@ -62,6 +62,20 @@ receiver_target:
     d=Q, idx=Load
     seq=Jump, brch=access_variable
 temporary_target:
+    ; A MethodContext with temporaries is its own home, and R12 is its
+    ; temporary count. A block, where R12 is zero, resolves its home.
+    ra=12, flags
+    seq=ConditionalJump, cc=Zero, brch=temporary_resolve
+    ra=12, rb=1, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=bad_state
+    seq=ConditionalJump, cc=Sign, brch=bad_state
+    read=Vr, vr=0
+    d=Object, ldvr, vr=3
+    read=Vr, vr=0
+    d=Object, page=Fetch, ra=1, s=Branch, brch=CTX_STACK+1, alu=Add, ldq
+    d=Q, idx=Load
+    seq=Jump, brch=access_variable
+temporary_resolve:
     d=temporary_home_ready, r=Bus, rb=6, ldrb, seq=Jump, brch=context_home
 temporary_home_ready:
     ; Read the home method's temporary count. R12 is the evaluation-stack floor,

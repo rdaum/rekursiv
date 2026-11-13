@@ -146,8 +146,8 @@ fn run_source(source: source::Image, force_collection: bool) -> Result<(Vec<Boun
             // Inspect external RAM written by actual RTL memory transactions.
             let context_base = h.oracle.resolve(layout::reference(CONTEXT)?)?.base as usize;
             let body = &h.backing[context_base..context_base + 39];
-            ensure!(target::source_oop(body[2])? == layout::integer_oop(ip as i32)?);
-            ensure!(target::source_oop(body[3])? == layout::integer_oop(sp as i32)?);
+            // IP and SP live in R8/R9 between bytecodes; the context's own
+            // fields are written at sends, process switches and stops.
             let slots = body[7..7 + sp]
                 .iter()
                 .map(|&w| target::source_oop(w))

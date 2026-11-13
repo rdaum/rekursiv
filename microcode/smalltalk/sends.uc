@@ -7,7 +7,7 @@
 ; lookup -> header decoding -> quick result / primitive / context activation.
 ; Lookup is bounded per dictionary, then follows superclass links. Dictionaries
 ; must have power-of-two selector capacity; this code assumes a valid class
-; hierarchy. No method cache is maintained, so flushCache is a successful no-op.
+; hierarchy. A method cache, described at cache_lookup, precedes the search.
 ;
 ; Primitive ABI: R0 number, R1 arity, VR6 receiver, VR7 fallback method,
 ; R8/R9 advanced caller IP/SP, R15 failure microaddress. Success normally places
@@ -159,12 +159,14 @@ lookup_receiver_class:
     read=Vr, vr=6
     d=Object, page=Fetch
     read=Type
-    d=Object, ldvr, vr=3, seq=Jump, brch=lookup_class
+    d=Object, ldvr, vr=3, seq=Jump, brch=cache_lookup
 integer_class:
-    d=0xa000000006, ldvr, vr=3, seq=Jump, brch=lookup_class
+    d=0xa000000006, ldvr, vr=3, seq=Jump, brch=cache_lookup
 super_class:
     ; Super starts above the method's defining class, not above self's class.
     ; The last literal is that class's Association, whose value is guest field 1.
+    ; Super sends bypass the method cache: R6=0 asks for no fill.
+    d=0, r=Bus, rb=6, ldrb
     ra=10, flags
     seq=ConditionalJump, cc=Zero, brch=bad_state
     read=Vr, vr=1
@@ -176,6 +178,80 @@ super_class:
     mem=Read
     d=Object, ldvr, vr=3
     seq=Jump, brch=superclass
+
+; Method cache. Component 44 of root 29's private Array holds an Array of 512
+; entries, three components each: receiver class, selector, method. A send's
+; entry is component 2 + 3 * ((class ^ selector) & 511), from the low
+; identity bits. When class and selector match, the send uses the method
+; without searching dictionaries. A miss leaves the entry's component in R6
+; and the class in ESTKR, and method_found stores the result there. Empty
+; entries hold machine NIL, which matches no class. flushCache (89) and
+; become: (72) drop the cache; the next miss allocates a fresh one. The
+; cache is private and is not reachable from guest objects.
+cache_lookup:
+    d=0, r=Bus, rb=6, ldrb
+    d=NIL, ldsym, r=Branch, brch=29, rb=0, ldrb
+    ra=0, d=Root, ldsym, ldvr, vr=5, seq=ConditionalJump, cc=Symbol, brch=lookup_class
+    d=Symbol, page=Fetch
+    d=44, idx=Load
+    mem=Read
+    d=Object, ldsym, ldvr, vr=5
+    d=NIL, seq=ConditionalJump, cc=Symbol, brch=cache_create
+cache_probe:
+    read=Vr, vr=3
+    d=Object, r=Bus, rb=4, ldrb
+    read=Vr, vr=4
+    d=Object, r=Bus, alu=Xor, rb=4, ldrb
+    ra=4, s=Bus, d=511, alu=And, rb=4, ldrb
+    ra=4, shift=Left, rb=5, ldrb
+    ra=4, rb=5, alu=Add, ldrb
+    ra=5, s=Branch, brch=2, alu=Add, rb=6, ldrb
+    read=Vr, vr=5
+    d=Object, page=Fetch
+    d=Register, ra=6, idx=Load
+    mem=Read, idx=Increment
+    d=Object, ldsym
+    read=Vr, vr=3
+    d=Object, seq=ConditionalJump, cc=!Symbol, brch=cache_miss
+    mem=Read, idx=Increment
+    d=Object, ldsym
+    read=Vr, vr=4
+    d=Object, seq=ConditionalJump, cc=!Symbol, brch=cache_miss
+    mem=Read
+    d=Object, ldvr, vr=7, seq=Jump, brch=method_ready
+cache_miss:
+    ; The class waits in ESTKR; lookup changes VR3 as it climbs.
+    read=Vr, vr=3
+    d=Object, estk=Bus, seq=Jump, brch=lookup_class
+cache_create:
+    ; 512 entries after the descriptor, initially machine NIL. A small heap
+    ; goes without: create the cache only with at least 16384 words free.
+    read=FreeWords
+    d=Object, r=Bus, s=Branch, brch=16384, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Sign, brch=cache_skip
+    d=0xa000000008, page=Allocate, size=1537, scan=1
+    d=Object, ldvr, vr=5
+    d=1, idx=Load
+    d=12288, mem=Write
+    d=29, r=Bus, rb=0, ldrb
+    ra=0, d=Root, ldsym
+    d=Symbol, page=Fetch
+    d=44, idx=Load
+    read=Vr, vr=5
+    d=Object, mem=Write, seq=Jump, brch=cache_probe
+cache_skip:
+    d=0, r=Bus, rb=6, ldrb, seq=Jump, brch=lookup_class
+
+; Drop the method cache; the next miss allocates a fresh one. Returns via R7;
+; R2 is scratch.
+cache_flush:
+    d=NIL, ldsym, r=Branch, brch=29, rb=2, ldrb
+    ra=2, d=Root, ldsym, seq=ConditionalJump, cc=Symbol, brch=cache_flushed
+    d=Symbol, page=Fetch
+    d=44, idx=Load
+    d=NIL, mem=Write
+cache_flushed:
+    d=Register, ra=7, seq=Bus
 
 ; Linear probing starts at identity_hash & (capacity-1), and wraps exactly
 ; once. The dictionary has two fixed fields followed by a power-of-two table.
@@ -233,6 +309,24 @@ method_found:
     d=Q, idx=Load
     mem=Read
     d=Object, ldvr, vr=7
+    ; Fill the method cache entry chosen by cache_lookup, if any.
+    ra=6, flags
+    seq=ConditionalJump, cc=Zero, brch=method_ready
+    d=NIL, ldsym, r=Branch, brch=29, rb=0, ldrb
+    ra=0, d=Root, ldsym, seq=ConditionalJump, cc=Symbol, brch=method_ready
+    d=Symbol, page=Fetch
+    d=44, idx=Load
+    mem=Read
+    d=Object, ldsym
+    d=NIL, seq=ConditionalJump, cc=Symbol, brch=method_ready
+    d=Symbol, page=Fetch
+    d=Register, ra=6, idx=Load
+    d=Estk, mem=Write, idx=Increment
+    read=Vr, vr=4
+    d=Object, mem=Write, idx=Increment
+    read=Vr, vr=7
+    d=Object, mem=Write
+method_ready:
     ra=15, s=Branch, brch=perform_found, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=perform_found
     d=2, idx=Load, read=Vr, vr=7

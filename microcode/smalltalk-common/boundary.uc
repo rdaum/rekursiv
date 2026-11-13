@@ -6,6 +6,10 @@ boundary:
     d=0, ldvr, vr=5
     d=0, ldvr, vr=6
     d=0, ldvr, vr=7, r=Bus, rb=15, ldrb
+    ; IP and SP stay in R8 and R9 between bytecodes. They are written into
+    ; the context where something can observe it: a send (send_prepare), a
+    ; process switch (check_process_switch), and a stop (save_context).
+    seq=Jump, brch=check_process_switch
 save_context:
     ; Select the caller and prepare IDX/IP in parallel. Fetch preserves IDX,
     ; including through refill/collection. Writes consume old IDX/ESTKR.
