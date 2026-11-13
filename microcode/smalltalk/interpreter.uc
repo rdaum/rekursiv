@@ -125,13 +125,12 @@ context_stack_floor:
 fetch_byte:
     ra=10, shift=Left, rb=0, ldrb
     ra=0, s=Branch, brch=3, alu=Add, rb=0, ldrb
-    ra=8, rb=0, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Sign, brch=bad_state
-    ra=11, rb=8, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Sign, brch=bad_state
-    read=Vr, vr=1
-    ; A stalled/refilled fetch retains the old CPU operands until completion.
-    d=Object, page=Fetch, ra=8, rb=10, alu=Sub, cin=One, ldq
+    ; Each bounds check branches one word later, on the flags it set, while
+    ; the method is fetched. A stalled/refilled fetch retains the old CPU
+    ; operands until completion.
+    ra=8, rb=0, alu=Sub, cin=One, flags, read=Vr, vr=1
+    ra=11, rb=8, alu=Sub, cin=One, flags, d=Object, page=Fetch, seq=ConditionalJump, cc=Sign, brch=bad_state
+    ra=8, rb=10, alu=Sub, cin=One, ldq, seq=ConditionalJump, cc=Sign, brch=bad_state
     d=Q, idx=Load
     mem=Read
     d=Object, r=Bus, rb=0, ldrb
