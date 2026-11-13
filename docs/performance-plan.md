@@ -33,28 +33,57 @@ OBJEKT command stalls it until the command completes. On the board it is about 2
   reused by the next send needing that frame size. Boot allocations fell from 240,235 to 11,318.
 - **Block-RAM memory cache** (`fd785fa`). 16,384 words, direct mapped, write-through with a write
   queue. A read hit takes 2 cycles instead of about 9.
-- **IP and SP in registers.** They are written into the context only at sends, process switches and
-  stops, not at every bytecode. A method's own temporaries are read without resolving its home.
-- **Method cache.** 512 entries of class, selector and method in a private array. 94% of sends hit;
-  dictionary searches per keystroke fell from about 11,800 to 480.
+- **IP and SP in registers** (`a2cdbec`). They are written into the context only at sends, process
+  switches and stops, not at every bytecode. A method's own temporaries are read without resolving
+  its home.
+- **Method cache** (`a2cdbec`). 512 entries of class, selector and method in a private array. 94% of
+  sends hit; dictionary searches per keystroke fell from about 11,800 to 480.
+
+## Where the time goes now
+
+Profile of the 30,000 bytecodes after a keystroke, with all of the above in place, under the fast
+memory model (1.79 cycles per microinstruction):
+
+| Routine                                                                        | Microinstructions per bytecode | Share of cycles |
+| ------------------------------------------------------------------------------ | -----------------------------: | --------------: |
+| BitBlt                                                                         |                           36.6 |           19.7% |
+| Bytecode fetch (`fetch_byte`)                                                  |                           13.5 |            9.5% |
+| Context reload after sends and returns (`load_context`, `context_home`, floor) |                           13.4 |           10.6% |
+| Bytecode boundary and dispatch (`boundary`, `decoded`, events)                 |                           11.0 |            8.1% |
+| Sends: preparation, method cache, activation                                   |                           20.1 |           17.0% |
+| Evaluation stack (`push`, `peek`, `pop`)                                       |                            7.4 |            6.9% |
+| Variable access                                                                |                            7.9 |            5.8% |
+| Argument copying and result handling                                           |                            6.9 |            6.2% |
+
+Typing redraws text glyph by glyph, which is why BitBlt leads. `fetch_byte` spends six
+microinstructions per byte recomputing and checking the method's bytecode bounds and five more
+re-selecting the method and reading the byte. Each context reload is about 90 microinstructions that
+re-derive the method, receiver, header fields and stack floor, often from a header the send path
+decoded moments earlier.
+
+## Order of work
+
+1. Context reload (item 1): microcode only, about 10%.
+2. Streams and the BitBlt combiner (item 10): hardware, the largest remaining share.
+3. Bytecode prefetch (item 8) and background object commands (item 7): hardware, attacking fetch,
+   dispatch and the stall cycles everywhere.
+4. Packing the hot paths and avoiding re-selection (items 2 and 3) as each path is touched.
+5. The evaluation stack (item 6): the smallest share of the major items and the most disruptive,
+   because its hardware is already used for other purposes.
 
 ## Planned: microcode
 
-### 1. Evaluation stack in the hardware stack
+### 1. Carry decoded state across sends and returns
 
-LOGIK has a 32-entry evaluation stack with a top-of-stack register, which the original Rekursiv used
-for expression evaluation. The Smalltalk microcode keeps each context's stack in the context object,
-so every push and pop is an OBJEKT command and a memory access.
-
-Keep the active frame's stack in the hardware stack instead, and spill it into the context at the
-points where the context must be complete: a send that activates a new frame (the arguments move
-into the new frame anyway), a process switch, `thisContext`, a primitive that can reach a context,
-and a collection. Reload on return. These are the same capture points that context recycling and the
-IP/SP change already identify.
-
-Things to settle: frames deeper than the hardware stack (spill the bottom); the collector must treat
-the live stack entries as roots, which it already does for entries below SP; and `peek`, `push` and
-`pop` become register operations, which removes most of `stack.uc`'s memory traffic.
+`load_context` runs after every send and return. It fetches the context, validates its size and its
+IP and SP, resolves the home context, reads the method and receiver, fetches the method, reads its
+descriptor for the byte length, decodes the header for the literal and temporary counts, and
+computes the stack floor. On activation the send path has just fetched and decoded the same method
+header, so the new frame's caches (R10 to R14, VR1, VR2) can be set directly from it. On return, the
+sender's decoded values could be saved where the return can find them without re-deriving them, for
+example in the returning frame's spare fields or a small per-frame record, or validated only once
+per method. The validation that protects against malformed contexts must stay where a context can
+come from the guest (process switches, `thisContext` users, the debugger).
 
 ### 2. Pack the hot paths
 
@@ -96,9 +125,30 @@ next method-cache component while comparing the previous one.
 - Preload the whole image at boot in one sequential pass, which removes the slow first use of each
   menu and editor.
 
+### 6. Evaluation stack in the hardware stack
+
+LOGIK has a 32-entry evaluation stack with a top-of-stack register, which the original Rekursiv used
+for expression evaluation. The Smalltalk microcode keeps each context's stack in the context object,
+so every push and pop is an OBJEKT command and a memory access.
+
+Keep the active frame's stack in the hardware stack instead, and spill it into the context at the
+points where the context must be complete: a send that activates a new frame (the arguments move
+into the new frame anyway), a process switch, `thisContext`, a primitive that can reach a context,
+and a collection. Reload on return. These are the same capture points that context recycling and the
+IP/SP change already identify.
+
+Things to settle: frames deeper than the hardware stack (spill the bottom); the collector must treat
+the live stack entries as roots, which it already does for entries below SP; and `peek`, `push` and
+`pop` become register operations, which removes most of `stack.uc`'s memory traffic.
+
+Its hardware is not free: the stack pointer register currently doubles as the "process switch
+pending" flag that `check_process_switch` tests, BitBlt keeps seventeen rooted values in slots 15 to
+31, and `perform:` uses slots 1 to 3. Those would move first. The evaluation stack is about 7% of a
+keystroke, so this follows the larger items.
+
 ## Planned: hardware
 
-### 6. Object commands in the background
+### 7. Object commands in the background
 
 Today the sequencer stalls on every OBJEKT command until it completes, except one launched memory
 read. A scoreboard would let it continue until an instruction actually uses a result (Object, a VR,
@@ -108,19 +158,20 @@ into work. It is the largest single hardware gain available, and the largest cha
 logic, OBJEKT's command interface, the reference model, the emulator's cycle estimator and the
 differential tests all change.
 
-### 7. Bytecode prefetch and dispatch
+### 8. Bytecode prefetch and dispatch
 
-Every bytecode pays `boundary → cycle → fetch_byte → decoded → dispatch`, about 15 to 20
-microinstructions. A next-byte register that OBJEKT fills from the running method while the current
-bytecode executes, feeding the NAM/MAP dispatch directly, would make dispatch nearly free. This is
-close to how the original Rekursiv fetched its own instruction stream.
+Every bytecode pays `boundary → cycle → fetch_byte → decoded → dispatch`, about 25
+microinstructions, nearly a fifth of all of them. A next-byte register that OBJEKT fills from the
+running method while the current bytecode executes, feeding the NAM/MAP dispatch directly, would
+make dispatch nearly free. This is close to how the original Rekursiv fetched its own instruction
+stream.
 
-### 8. A LUT-RAM cache in front of the block-RAM cache
+### 9. A LUT-RAM cache in front of the block-RAM cache
 
 A few dozen of the hottest words in distributed RAM answer in one cycle instead of two. Smaller gain
-than items 6 and 7, and it lengthens a path with little timing slack.
+than items 7 and 8, and it lengthens a path with little timing slack.
 
-### 9. Streaming memory access and a BitBlt combiner
+### 10. Streaming memory access and a BitBlt combiner
 
 BitBlt is 13% of a keystroke and about 33% of drawing the desktop, plus 9% more uploading changed
 words to the display. Its inner loop reads a source word, reads a destination word and writes the
@@ -165,7 +216,7 @@ Design points:
 - Expected gain: plausibly 10 times or more on BitBlt itself with the combiner; streams alone
   perhaps 2 to 3 times on BitBlt and string operations.
 
-### 10. Faster clock
+### 11. Faster clock
 
 25.2 MHz closes with about 1.7 ns of slack. The SDRAM controller is written for at most about 33
 MHz. A faster machine clock needs the controller to count its intervals in cycles, and the full
@@ -190,7 +241,7 @@ The obstacle is not size but semantics:
 Uses that respect those constraints, roughly from most to least practical:
 
 - **A dedicated BitBlt or stream engine** that runs a blit while the main sequencer continues, with
-  the guest seeing completion at its next use of the destination. This is item 9 with its own
+  the guest seeing completion at its next use of the destination. This is item 10 with its own
   sequencer rather than fixed logic.
 - **A background collector** running concurrently with the mutator. It needs a write barrier on
   every pointer store, which the processor would have to provide.
@@ -198,5 +249,5 @@ Uses that respect those constraints, roughly from most to least practical:
   not share mutable objects, or share them only through explicit synchronization, could run one
   process per sequencer.
 
-For the Smalltalk-80 image, items 6 and 7 extract more parallelism, inside one instruction stream,
+For the Smalltalk-80 image, items 7 and 8 extract more parallelism, inside one instruction stream,
 for less effort than a second sequencer.
