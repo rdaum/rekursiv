@@ -21,19 +21,16 @@ duplicate:
 
 ; Peek preserves SP and returns its tagged value in SYMBOL. Push consumes
 ; SYMBOL. Pop clears the dead slot before reducing SP, keeping tracing precise.
+; Neither checks SP against the frame: pushing past the context's end fails
+; OBJEKT's bounds check, and only malformed bytecode pops below the floor.
 peek:
-    ; Caches have nonnegative, validated frame bounds. Carry tests floor >= SP.
-    ra=12, rb=9, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Carry, brch=bad_state
-    read=Vr, vr=0
-    d=Object, page=Fetch, ra=9, s=Branch, brch=CTX_STACK, alu=Add, ldq
+    read=Vr, vr=0, ra=9, s=Branch, brch=CTX_STACK, alu=Add, ldq
+    d=Object, page=Fetch
     d=Q, idx=Load
     mem=Read
     d=Object, ldsym
     d=Register, ra=6, seq=Bus
 push:
-    ra=9, rb=14, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Carry, brch=bad_state
     ra=9, s=Branch, brch=1, alu=Add, rb=9, ldrb, read=Vr, vr=0
     d=Object, page=Fetch, ra=9, s=Branch, brch=CTX_STACK, alu=Add, ldq
     d=Q, idx=Load

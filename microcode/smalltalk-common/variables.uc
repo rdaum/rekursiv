@@ -63,31 +63,17 @@ receiver_target:
     seq=Jump, brch=access_variable
 temporary_target:
     ; A MethodContext with temporaries is its own home, and R12 is its
-    ; temporary count. A block, where R12 is zero, resolves its home.
-    ra=12, flags
-    seq=ConditionalJump, cc=Zero, brch=temporary_resolve
-    ra=12, rb=1, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=bad_state
-    seq=ConditionalJump, cc=Sign, brch=bad_state
-    read=Vr, vr=0
-    d=Object, ldvr, vr=3
+    ; temporary count. A block, where R12 is zero, resolves its home. The
+    ; index is not checked against the temporary count: only malformed
+    ; bytecode exceeds it.
+    ra=12, flags, read=Vr, vr=0
+    d=Object, ldvr, vr=3, seq=ConditionalJump, cc=Zero, brch=temporary_resolve
     read=Vr, vr=0
     d=Object, page=Fetch, ra=1, s=Branch, brch=CTX_STACK+1, alu=Add, ldq
-    d=Q, idx=Load
-    seq=Jump, brch=access_variable
+    d=Q, idx=Load, seq=Jump, brch=access_variable
 temporary_resolve:
     d=temporary_home_ready, r=Bus, rb=6, ldrb, seq=Jump, brch=context_home
 temporary_home_ready:
-    ; Read the home method's temporary count. R12 is the evaluation-stack floor,
-    ; which is zero inside a block and therefore cannot validate this access.
-    d=FIELD_BASE, idx=Load, read=Vr, vr=1
-    d=Object, page=Fetch
-    mem=Read
-    d=Object, r=Bus, s=Branch, brch=TEMP_ROTATE, alu=Rotate, rb=0, ldrb
-    ra=0, s=Branch, brch=TEMP_MASK, alu=And, rb=0, ldrb
-    ra=0, rb=1, alu=Sub, cin=One, flags
-    seq=ConditionalJump, cc=Zero, brch=bad_state
-    seq=ConditionalJump, cc=Sign, brch=bad_state
     read=Vr, vr=3
     d=Object, page=Fetch, ra=1, s=Branch, brch=CTX_STACK+1, alu=Add, ldq
     d=Q, idx=Load

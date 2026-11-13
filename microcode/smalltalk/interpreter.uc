@@ -51,8 +51,6 @@
 .equ FALSE = 0xa000000002
 .equ TRUE = 0xa000000003
 .equ FIELD_BASE = 2
-.equ TEMP_ROTATE = 25
-.equ TEMP_MASK = 31
 .equ CTX_STACK = 7
 .equ CTX_IP = 3
 .entry start
@@ -120,6 +118,19 @@ context_stack_floor:
     ra=15, s=Branch, brch=16, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=resume_result
     seq=Jump, brch=boundary
+
+; The main loop's fetch: the next bytecode into R0 and the APC, IP advanced,
+; then decode. Bytecodes are one per component, at IP minus the literal
+; count. An IP past the method's end fails OBJEKT's bounds check; one below
+; the first bytecode reads the header or a literal, which is no valid NAM
+; address. Extended bytecodes fetch operands through fetch_byte, which checks
+; both bounds.
+cycle:
+    ra=8, rb=10, alu=Sub, cin=One, ldq, read=Vr, vr=1
+    d=Object, page=Fetch
+    d=Q, idx=Load
+    mem=Read, ra=8, s=Branch, brch=1, alu=Add, rb=8, ldrb
+    d=Object, r=Bus, rb=0, ldrb, apc=Bus, seq=Jump, brch=decoded
 
 ; Return a byte in R0 through R7. Physical component is IP - literal count.
 fetch_byte:

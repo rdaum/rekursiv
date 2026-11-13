@@ -10,8 +10,6 @@ processing or new hardware instructions are needed.
 | `FIELD_BASE`  |     2 |      3 | First guest field; also method-header and context-sender component |
 | `CTX_IP`      |     3 |      4 | Context IP; SP immediately follows                                 |
 | `CTX_STACK`   |     7 |      8 | Receiver component; stack top is this offset plus R9               |
-| `TEMP_ROTATE` |    25 |     14 | Left rotation extracting method-header temporary count             |
-| `TEMP_MASK`   |    31 |     63 | Temporary-count mask after rotation                                |
 
 The profile also supplies `NIL`, `TRUE`, `FALSE`, `ACTIVE_CONTEXT` and the labels called by these
 routines. Registers retain the documented interpreter ABI: VR0–VR2 root context/method/receiver,

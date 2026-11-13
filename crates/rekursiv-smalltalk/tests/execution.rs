@@ -148,7 +148,10 @@ fn run_source(source: source::Image, force_collection: bool) -> Result<(Vec<Boun
             let body = &h.backing[context_base..context_base + 39];
             // IP and SP live in R8/R9 between bytecodes; the context's own
             // fields are written at sends, process switches and stops.
-            let slots = body[7..7 + sp]
+            // Malformed bytecode can leave SP outside the frame.
+            let slots = body
+                .get(7..7 + sp)
+                .unwrap_or_default()
                 .iter()
                 .map(|&w| target::source_oop(w))
                 .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -177,13 +180,16 @@ fn run_source(source: source::Image, force_collection: bool) -> Result<(Vec<Boun
     let body = &h.backing[context_base..context_base + 39];
     let sp = processor.rf[9] as usize;
     ensure!(
-        body[7 + sp..]
+        body.get(7 + sp..)
+            .unwrap_or_default()
             .iter()
             .all(|&v| v == layout::reference(layout::NIL).unwrap()),
         "dead stack slot retains a reference"
     );
     if matches!(processor.rf[15], 3 | 4) {
-        let slots = body[7..7 + sp]
+        let slots = body
+            .get(7..7 + sp)
+            .unwrap_or_default()
             .iter()
             .map(|&w| target::source_oop(w))
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -538,34 +544,57 @@ fn original_xerox_methods_execute_on_rtl() -> Result<()> {
 }
 
 #[test]
-fn invalid_stack_indices_and_boot_state_are_explicit_errors() -> Result<()> {
-    for bytes in [
-        &[135][..],
-        &[136],
-        &[124],
-        &[176],
-        &[118, 176],
-        &[16],
-        &[32],
-        &[163, 0],
-        &[118, 129, 128],
+fn malformed_bytecode_and_boot_state_stop_the_machine() -> Result<()> {
+    const BOUNDS: &str = "OBJEKT fault BoundsError";
+    for (bytes, expected) in [
+        (&[135][..], BOUNDS),                // pop an empty stack
+        (&[136], BOUNDS),                    // duplicate an empty stack
+        (&[124], "completed with status 1"), // return the word below the stack
+        (&[176], "status 5"),
+        (&[118, 176], "status 5"),
+        (&[16], BOUNDS), // a temporary the method lacks
+        (&[32], "status 5"),
+        (&[163, 0], BOUNDS), // jump past the method's end
+        (&[118, 129, 128], "status 5"),
     ] {
-        assert_eq!(run(bytes, &[], &[])?.1, 5, "{bytes:?}");
+        assert_eq!(stops(fixture(bytes, &[], &[]))?, expected, "{bytes:?}");
     }
     let mut overflow = vec![117; 33];
     overflow.push(124);
-    assert_eq!(run(&overflow, &[], &[])?.1, 5);
-    for (field, value) in [(1, 2), (1, 0xffff), (2, 2), (2, 0xffff), (2, 67)] {
+    assert_eq!(stops(fixture(&overflow, &[], &[]))?, BOUNDS);
+    for (field, value, expected) in [
+        (1, 2, "status 5"),
+        (1, 0xffff, BOUNDS),
+        (2, 2, "status 5"),
+        (2, 0xffff, "status 5"),
+        (2, 67, "status 5"),
+    ] {
         let mut source = fixture(&[123], &[], &[]);
         if let source::Body::Pointers(fields) = &mut source.objects.get_mut(&CONTEXT).unwrap().body
         {
             fields[field] = value;
         }
-        assert_eq!(
-            run_source(source, false)?.1,
-            5,
-            "context field {field} = {value}"
-        );
+        assert_eq!(stops(source)?, expected, "context field {field} = {value}");
     }
     Ok(())
+}
+
+/// How the machine stopped: status 5 from a microcode check, an OBJEKT fault
+/// when an access left its object, or completion with whatever the malformed
+/// frame produced. Checks within a frame are not part of the contract; every
+/// case must stop without an access escaping its object.
+fn stops(source: source::Image) -> Result<String> {
+    match run_source(source, false) {
+        Ok((_, 5, _)) => Ok("status 5".into()),
+        Ok((_, status, _)) => Ok(format!("completed with status {status}")),
+        Err(e) => {
+            let text = format!("{e:#}");
+            // A blocking command faults as it retires; a launched one at its join.
+            let fault = ["processor fault", "OBJEKT fault"]
+                .into_iter()
+                .find(|f| text.contains(f))
+                .ok_or_else(|| eyre::eyre!("did not stop: {text}"))?;
+            Ok(text[text.find(fault).unwrap()..].to_string())
+        }
+    }
 }

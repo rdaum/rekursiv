@@ -10,8 +10,6 @@
 ; 7 argument mismatch, 8 unimplemented required primitive, 9 no runnable process.
 ; No host code interprets bytecodes or supplies language primitive results.
 .equ FIELD_BASE = 3
-.equ TEMP_ROTATE = 14
-.equ TEMP_MASK = 63
 .equ CTX_STACK = 8
 .equ CTX_IP = 4
 .entry start
@@ -77,6 +75,9 @@ context_stack_floor:
     seq=ConditionalJump, cc=Zero, brch=resume_result
     seq=Jump, brch=boundary
 
+; The main loop's fetch, through the checked fetch_byte.
+cycle:
+    d=decode_byte, r=Bus, rb=7, ldrb, seq=Jump, brch=fetch_byte
 fetch_byte:
     ; Guest IP counts four bytes per header/literal; physical fields count one.
     ; First byte is 4*(literals+1)+1; its component is literals+4.
