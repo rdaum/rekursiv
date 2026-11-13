@@ -111,13 +111,18 @@ from the quadrature lines of the joystick port. The machine runs at 25.2 MHz, wh
 usable but not yet brisk; [docs/performance-plan.md](docs/performance-plan.md) records where the
 time goes and what comes next.
 
+Holding RESTORE shows the status panels over the running desktop, with live counters: bytecodes,
+microinstructions and object commands per second. RUN/STOP+RESTORE freezes the machine at a
+microinstruction boundary into a monitor of its registers, value registers and stacks; RESTORE
+resumes it.
+
 For a period yardstick, Allen Wirfs-Brock's 1983 talk
 [_A High Performance Smalltalk-80 Interpreter_](https://www.wirfs-brock.com/allen/files/tek/Tek-Smalltalk-history-slides.pdf)
 (Tektronix Computer Research Lab) charts the implementations of the day in bytecodes per second: the
 Xerox Dorado at 300,000, Peter Deutsch's 68000 at 100,000, Tektronix's 68000 at 60,000, and the Xerox
 Dolphin and Berkeley's VAX-11/780 at 35,000. Early ports, the talk says, "ranged between abysmal and
-poor". The cycle estimator puts the Rekursiv on the MEGA65 at roughly 100,000 to 200,000 bytecodes per
-second while handling a keystroke, depending on how often SDRAM reads miss the cache. The talk's own
+poor". Measured on the board (hold RESTORE for the live counters), the Rekursiv on the MEGA65 runs
+162,000 to 188,000 bytecodes per second while handling keystrokes. The talk's own
 recipe (a message lookup cache, cheap leaf contexts, context state cached in machine registers, no
 reference counting) reads like a list of what this machine's microcode does.
 
