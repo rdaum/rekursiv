@@ -58,8 +58,9 @@ The machine currently runs **Smalltalk-80** from a converted Xerox image, with a
 keyboard, and mouse. The "Blue Book" was used as a reference to write the microcode which ultimately
 executes on the emulated Rekursiv hardware.
 
-A separate microcode profile runs the **Squeak 1.1** colour desktop, with binary64 Floats and mouse menus.
-Both desktops are tested only in the native software emulator. MEGA65 board integration remains unfinished.
+A separate microcode profile runs the **Squeak 1.1** colour desktop, with binary64 Floats and mouse
+menus. The Smalltalk-80 desktop also boots on the MEGA65 from an SD card, without keyboard or mouse
+so far. Squeak is tested only in the native software emulator.
 
 ![Smalltalk-80 desktop and System Browser in the Rekursiv emulator](docs/images/st80.png)
 
@@ -83,10 +84,11 @@ simulation harness supplies external memory and backing storage. The allocation 
 examples execute their program control flow and garbage collection on the RTL processor.
 
 The Smalltalk microcode executes bytecodes, runtime primitives, and process scheduling. NUMERIK
-supports integer, binary32 and binary64 arithmetic. BitBlt runs in microcode and refreshes the display as the
-original Smalltalk image draws its desktop. Disk transfers, snapshot saving, and MEGA65 board
-integration remain unfinished. The RTL passes generic synthesis checks and Vivado synthesis for the
-MEGA65's FPGA, but has not yet run on the board.
+supports integer, binary32 and binary64 arithmetic. BitBlt runs in microcode and refreshes the
+display as the original Smalltalk image draws its desktop. Snapshot saving and the board's keyboard
+and mouse remain unfinished. On the MEGA65 the machine runs at 12.6 MHz with its object memory in
+SDRAM, a 32,768-entry pager in block RAM, and its object store in a file on the SD card;
+`board/mega65/smalltalk.sh` builds the card's files from the Xerox image.
 
 ## Build and run
 
@@ -106,8 +108,9 @@ cargo run --release --locked -p rekursiv-emulator -- \
   --squeak artifacts/squeak-1.1/Squeak1.1.image
 ```
 
-Middle-click the background for the system menu. The [Squeak guide](docs/squeak-1.1.md)
-covers supported primitives and remaining work. File writes remain in memory; snapshots cannot yet be saved.
+Middle-click the background for the system menu. The [Squeak guide](docs/squeak-1.1.md) covers
+supported primitives and remaining work. File writes remain in memory; snapshots cannot yet be
+saved.
 
 For the standalone display and input demo:
 
