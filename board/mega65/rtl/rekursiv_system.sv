@@ -43,6 +43,15 @@ module rekursiv_system #(
     output logic [31:0] debug_o [8],
     output logic [31:0] perf_o [8],        // see perf_counters
     output logic [79:0] keys_held_o,       // keyboard state by key bit
+    // The monitor: pause_i holds LOGIK at its next instruction boundary.
+    // Page 0 shows R0-R15 on the left; VR0-VR7, Symbol, Object, PC,
+    // {SP, ESP, CSP}, ESTKR, CSTKR, OBJEKT's index and selected object on the
+    // right. Page 1 shows the evaluation stack from SP down on the left and
+    // the control stack from CSP down on the right.
+    input  logic        pause_i,
+    input  logic        monitor_page_i,
+    output logic [39:0] monitor_left_o [16],
+    output logic [39:0] monitor_right_o [16],
     // The display, scanned out on the video clock (synchronous to clk_i).
     input  logic        video_clk_i,
     input  logic [9:0]  video_x_i,
@@ -108,6 +117,10 @@ module rekursiv_system #(
     logic [39:0] gc_data, gc_root, gc_result;
 
     logic cmd_valid, cmd_ready, rsp_ready, retired, dispatched;
+    logic [23:0] sp, esp, csp, cstkr, scan_control;
+    logic [39:0] estkr, symbol, object, scan_evaluation, scan_vr, objekt_index, objekt_selected;
+    logic [31:0] scan_register;
+    logic [15:0] scan_address;
     logic [3:0] pager, index, read, rsp_status;
     logic [2:0] register, vr;
     logic [1:0] memory;
@@ -144,7 +157,7 @@ module rekursiv_system #(
         .start_i(start), .entry_i(record[15:0]), .resume_i(1'b0), .irq_i(irq),
         .low_space_i(low_space), .pending_o(),
         .halted_o, .service_o, .service_code_o(), .fault_o, .retire_o(retired),
-        .dispatch_o(dispatched),
+        .dispatch_o(dispatched), .pause_i,
         .cmd_valid_o(cmd_valid), .cmd_ready_i(cmd_ready),
         .pager_o(pager), .index_o(index), .register_o(register), .memory_o(memory),
         .prepare_o(prepare), .prepared_o(prepared),
@@ -158,11 +171,12 @@ module rekursiv_system #(
         .io_response_i(io_response), .io_response_ready_o(io_response_ready),
         .io_error_i(io_error), .io_result_i(io_result),
         .device_result_o(),
-        .pc_o, .upcor_o(), .mark_o(), .sp_o(), .esp_o(), .csp_o(), .ap_o(), .apc_o(),
-        .estkr_o(), .cstkr_o(), .symbol_o(), .object_o(),
+        .pc_o, .upcor_o(), .mark_o(), .sp_o(sp), .esp_o(esp), .csp_o(csp), .ap_o(), .apc_o(),
+        .estkr_o(estkr), .cstkr_o(cstkr), .symbol_o(symbol), .object_o(object),
         .q_o(), .product_o(), .flags_o(), .fp_flags_o(), .lastcc_o(),
         .ucar_o(), .namarg_o(),
-        .dbg_addr_i(16'd0), .dbg_rf_o(), .dbg_estk_o(), .dbg_cstk_o(),
+        .dbg_addr_i(scan_address), .dbg_rf_o(scan_register), .dbg_estk_o(scan_evaluation),
+        .dbg_cstk_o(scan_control),
         .dbg_code_valid_o(), .dbg_code_data_o(), .dbg_code_type_o(), .dbg_root_o()
     );
 
@@ -198,9 +212,9 @@ module rekursiv_system #(
         .store_rsp_data_i(store_rsp_data),
         .dbg_next_identity_o(), .dbg_body_cursor_o(), .dbg_maintenance_o(),
         .dbg_class_code_i(2'd0), .dbg_class_valid_o(), .dbg_compact_class_o(),
-        .dbg_vr_i(3'd0), .dbg_vr_o(), .dbg_idx_o(), .dbg_reg_o(),
+        .dbg_vr_i(scan_slot[2:0]), .dbg_vr_o(scan_vr), .dbg_idx_o(objekt_index), .dbg_reg_o(),
         .dbg_prepared_ref_o(), .dbg_prepared_index_o(), .dbg_prepared_address_o(),
-        .dbg_prepared_status_o(), .dbg_selected_o(), .dbg_ref_o(),
+        .dbg_prepared_status_o(), .dbg_selected_o(), .dbg_ref_o(objekt_selected),
         .dbg_class_o(), .dbg_size_o(), .dbg_base_o(), .dbg_repr_o(), .dbg_flags_o(),
         .dbg_slot_i('0), .dbg_valid_o(),
         .dbg_entry_ref_o(), .dbg_entry_class_o(), .dbg_entry_size_o(), .dbg_entry_base_o(),
@@ -329,4 +343,55 @@ module rekursiv_system #(
         .clk_i, .rst_i, .retire_i(retired), .dispatch_i(dispatched),
         .command_i(cmd_valid && cmd_ready), .collecting_i(gc_active),
         .store_i(store_valid && store_ready), .rows_o(perf_o));
+
+    // The monitor's snapshot. A scan visits each register, VR and the top 16
+    // entries of each stack in turn, holding each address for two cycles so
+    // that a read with one cycle of latency is also captured.
+    logic [5:0]  scan_slot;
+    logic        scan_hold;
+    logic [31:0] snap_register [16];
+    logic [39:0] snap_evaluation [16], snap_vr [8];
+    logic [23:0] snap_control [16];
+    always_comb begin
+        unique case (scan_slot[5:4])
+            2'd0: scan_address = {12'd0, scan_slot[3:0]};
+            2'd1: scan_address = 16'(sp - 24'(scan_slot[3:0]));
+            2'd2: scan_address = 16'(csp - 24'(scan_slot[3:0]));
+            default: scan_address = '0;
+        endcase
+    end
+    always_ff @(posedge clk_i) begin
+        if (rst_i) begin
+            scan_slot <= '0;
+            scan_hold <= 1'b0;
+        end else begin
+            scan_hold <= !scan_hold;
+            if (scan_hold) begin
+                unique case (scan_slot[5:4])
+                    2'd0: snap_register[scan_slot[3:0]] <= scan_register;
+                    2'd1: snap_evaluation[scan_slot[3:0]] <= scan_evaluation;
+                    2'd2: snap_control[scan_slot[3:0]] <= scan_control;
+                    default: if (scan_slot[3] == 1'b0) snap_vr[scan_slot[2:0]] <= scan_vr;
+                endcase
+                scan_slot <= scan_slot == 6'd55 ? '0 : scan_slot + 1'b1;
+            end
+        end
+    end
+    always_comb begin
+        for (int i = 0; i < 16; i++) begin
+            monitor_left_o[i] = monitor_page_i ? snap_evaluation[i] : {8'd0, snap_register[i]};
+            monitor_right_o[i] = monitor_page_i ? {16'd0, snap_control[i]} : '0;
+        end
+        if (!monitor_page_i) begin
+            for (int i = 0; i < 8; i++) monitor_right_o[i] = snap_vr[i];
+            monitor_right_o[8]  = symbol;
+            monitor_right_o[9]  = object;
+            monitor_right_o[10] = {24'd0, pc_o};
+            monitor_right_o[11] = {4'd0, sp[11:0], esp[11:0], csp[11:0]};
+            monitor_right_o[12] = estkr;
+            monitor_right_o[13] = {16'd0, cstkr};
+            monitor_right_o[14] = objekt_index;
+            monitor_right_o[15] = objekt_selected;
+        end
+    end
 endmodule

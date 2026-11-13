@@ -191,6 +191,8 @@ module mega65_top (
 
     logic [31:0] disk_rows [8], perf_rows [8];
     logic [79:0] keys_held;
+    logic [39:0] monitor_left [16], monitor_right [16];
+    logic        monitor, monitor_page;
     logic        frame_visible, frame_inside, frame_cursor;
     logic [23:0] frame_rgb;
     logic [31:0] build, io_refused;
@@ -211,7 +213,9 @@ module mega65_top (
         .sdram_dq_o(sdram_dq_out), .sdram_dq_oe_o(sdram_dq_oe), .sdram_dq_i(sdram_dq_io),
         .memory_tested_o(memory_tested), .memory_failed_o(memory_failed),
         .memory_failed_address_o(memory_failed_address),
-        .debug_o(debug), .perf_o(perf_rows), .keys_held_o(keys_held), .video_clk_i(clk_pix), .video_x_i(x), .video_y_i(y),
+        .debug_o(debug), .perf_o(perf_rows), .keys_held_o(keys_held),
+        .pause_i(monitor), .monitor_page_i(monitor_page),
+        .monitor_left_o(monitor_left), .monitor_right_o(monitor_right), .video_clk_i(clk_pix), .video_x_i(x), .video_y_i(y),
         .video_visible_o(frame_visible), .video_inside_o(frame_inside), .video_rgb_o(frame_rgb),
         .video_cursor_o(frame_cursor),
         .kb_clock_o(kb_io0_o), .kb_data_o(kb_io1_o), .kb_data_i(kb_io2_i),
@@ -258,7 +262,35 @@ module mega65_top (
 
     // Holding RESTORE shows the panels over the desktop, with the live
     // performance counters in place of the disk processor's rows.
-    wire peek = keys_held[75];
+    //
+    // RUN/STOP+RESTORE enters the monitor: LOGIK pauses at its next
+    // instruction boundary and the screen shows its registers and stacks.
+    // A cursor key turns the page; RESTORE leaves and the machine resumes.
+    // The monitor also works on a halted or faulted machine.
+    localparam int KEY_CURSOR_RIGHT = 2, KEY_CURSOR_DOWN = 7, KEY_RUN_STOP = 63,
+                   KEY_CURSOR_UP = 73, KEY_CURSOR_LEFT = 74, KEY_RESTORE = 75;
+    wire restore = keys_held[KEY_RESTORE];
+    wire cursor = keys_held[KEY_CURSOR_RIGHT] || keys_held[KEY_CURSOR_DOWN] ||
+                  keys_held[KEY_CURSOR_UP] || keys_held[KEY_CURSOR_LEFT];
+    logic restore_q, cursor_q;
+    always_ff @(posedge clk_cpu) begin
+        restore_q <= restore;
+        cursor_q <= cursor;
+        if (rst_cpu) begin
+            monitor <= 1'b0;
+            monitor_page <= 1'b0;
+        end else begin
+            if (restore && !restore_q) begin
+                if (monitor) monitor <= 1'b0;
+                else if (keys_held[KEY_RUN_STOP]) begin
+                    monitor <= 1'b1;
+                    monitor_page <= 1'b0;
+                end
+            end
+            if (monitor && cursor && !cursor_q) monitor_page <= !monitor_page;
+        end
+    end
+    wire peek = restore && !monitor;
 
     // The disk processor's display, in a second panel on the right.
     assign sd_clk_o   = 1'b0;
@@ -268,11 +300,15 @@ module mega65_top (
     // Sample both panels' values once per frame, during vertical blanking,
     // so a value that changes mid-frame is not drawn half old, half new.
     logic [31:0] rows_shown [10], disk_shown [8];
-    logic        peek_shown;
+    logic        peek_shown, monitor_shown;
+    logic [39:0] monitor_left_shown [16], monitor_right_shown [16];
     always_ff @(posedge clk_pix) if (x == 0 && y == V_ACTIVE) begin
         rows_shown <= rows;
         disk_shown <= peek ? perf_rows : disk_rows;
         peek_shown <= peek;
+        monitor_shown <= monitor;
+        monitor_left_shown <= monitor_left;
+        monitor_right_shown <= monitor_right;
     end
 
     logic ink, panel, sd_ink, sd_panel;
@@ -281,6 +317,15 @@ module mega65_top (
     hex_display #(.ROWS(8), .LEFT(320)) sd_text (.clk_i(clk_pix), .x_i(x), .y_i(y),
                                                  .values_i(disk_shown), .ink_o(sd_ink),
                                                  .panel_o(sd_panel));
+
+    // The monitor's two panels: sixteen 40-bit rows each, at three times scale.
+    logic mon_ink_l, mon_panel_l, mon_ink_r, mon_panel_r;
+    hex_display #(.ROWS(16), .LEFT(16), .TOP(16), .DIGITS(10), .SCALE(3), .PITCH(28)) monitor_l (
+        .clk_i(clk_pix), .x_i(x), .y_i(y), .values_i(monitor_left_shown),
+        .ink_o(mon_ink_l), .panel_o(mon_panel_l));
+    hex_display #(.ROWS(16), .LEFT(336), .TOP(16), .DIGITS(10), .SCALE(3), .PITCH(28)) monitor_r (
+        .clk_i(clk_pix), .x_i(x), .y_i(y), .values_i(monitor_right_shown),
+        .ink_o(mon_ink_r), .panel_o(mon_panel_r));
 
     // Match the display's one-cycle latency for position and blanking.
     logic [9:0] x_d, y_d;
@@ -293,6 +338,9 @@ module mega65_top (
         // A published frame replaces the panels unless the processor faults
         // or RESTORE is held.
         if (!active)        {r, g, b} = '0;
+        else if (monitor_shown)
+            {r, g, b} = mon_ink_l || mon_ink_r ? 24'hFFFFFF :
+                        mon_panel_l || mon_panel_r ? 24'h604010 : 24'h000000;
         else if (frame_visible && fault == 0 && !peek_shown)
             {r, g, b} = !frame_inside ? 24'h303030 : frame_cursor ? ~frame_rgb : frame_rgb;
         else if (ink || sd_ink) {r, g, b} = 24'hFFFFFF;

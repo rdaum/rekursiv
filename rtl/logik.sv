@@ -45,6 +45,10 @@ module logik #(
     // collection. A bytecode interpreter dispatching each bytecode through
     // one such instruction can count bytecodes with it.
     output logic dispatch_o,
+    // While high, LOGIK holds at the next instruction boundary: an
+    // instruction in EXECUTE neither retires, issues, joins nor faults, and
+    // collection does not start. A launched command's reply is still taken.
+    input logic pause_i,
     output logic cmd_valid_o, input logic cmd_ready_i,
     output logic [3:0] pager_o, output logic [3:0] index_o,
     output logic [2:0] register_o, output logic [1:0] memory_o,
@@ -115,14 +119,14 @@ module logik #(
     assign response_valid=gc_active_o ? gc_response_i : rsp_valid_i;
     assign response_status=gc_active_o ? gc_status_i : rsp_status_i;
     assign response_data=gc_active_o ? gc_result_i : rsp_data_i;
-    assign gc_request=state==EXECUTE && !blocked && !gc_active_o && !retried &&
+    assign gc_request=state==EXECUTE && !pause_i && !blocked && !gc_active_o && !retried &&
         instruction.recovery==11 && local_fault==FAULT_NONE;
     assign gc_enter=gc_request || (state==WAIT_RESPONSE && !gc_active_o && rsp_valid_i &&
         rsp_status_i==11 && gc_enable_i && !retried &&
         (instruction.object_pager==6 || instruction.object_pager==5));
-    assign gc_failed=gc_active_o && ((state==EXECUTE && local_fault!=FAULT_NONE) ||
+    assign gc_failed=gc_active_o && ((state==EXECUTE && !pause_i && local_fault!=FAULT_NONE) ||
         (state==WAIT_RESPONSE && gc_response_i && gc_status_i!=0));
-    assign gc_exit=gc_failed || (gc_active_o && state==EXECUTE &&
+    assign gc_exit=gc_failed || (gc_active_o && state==EXECUTE && !pause_i &&
         local_fault==FAULT_NONE && instruction.recovery==10);
     assign gc_valid_o=state==ISSUE && gc_active_o && !rst_i;
     assign gc_response_ready_o=state==WAIT_RESPONSE && gc_active_o && !rst_i;
@@ -165,12 +169,12 @@ module logik #(
     // edge, because collector entry saves Object on that edge.
     // Decided from the instruction's fields alone: the forwarded Object can
     // raise a local fault, which must not feed back into this decision.
-    assign joined = state == EXECUTE && async_pending && static_barrier && (async_done || rsp_valid_i) &&
+    assign joined = state == EXECUTE && !pause_i && async_pending && static_barrier && (async_done || rsp_valid_i) &&
         async_completion_status == 0 && instruction.recovery == 0;
     assign blocked = async_pending && async_barrier && !joined;
     // Offered from EXECUTE: a validated command outside collection. Collector
     // controls keep the ISSUE cycle.
-    wire direct_issue = state == EXECUTE && !blocked &&
+    wire direct_issue = state == EXECUTE && !pause_i && !blocked &&
         local_fault == FAULT_NONE && !gc_request && instruction.sequence_op != SEQ_HOLD &&
         instruction.device == 0 && instruction.alu != ALU_FLOAT && instruction.object_enable &&
         instruction.recovery == 0;
@@ -182,7 +186,7 @@ module logik #(
     assign async_barrier=static_barrier || local_fault!=FAULT_NONE;
     assign async_completion_status=async_done ? async_status : rsp_status_i;
     assign async_completion_data=async_done ? async_data : rsp_data_i;
-    assign async_join=state==EXECUTE && async_pending && async_barrier && (async_done || rsp_valid_i);
+    assign async_join=state==EXECUTE && !pause_i && async_pending && async_barrier && (async_done || rsp_valid_i);
 
     logik_store #(.CODE_WORDS(CODE_WORDS), .NAM_WORDS(NAM_WORDS)) instruction_store (
         .clk_i(clk_i), .rst_i(rst_i), .retire_i(retire && !gc_active_o),
@@ -331,7 +335,8 @@ module logik #(
         unique case (state)
             HALTED: if (start) next_state = EXECUTE;
             EXECUTE: begin
-                if (blocked) begin
+                if (pause_i) begin end
+                else if (blocked) begin
                     if(async_join && async_completion_status!=0) next_state=HALTED;
                 end
                 else if (local_fault != FAULT_NONE) next_state = HALTED;
@@ -406,7 +411,7 @@ module logik #(
             if (boot_fault) fault_o <= FAULT_ENCODING;
             if (start) begin fault_o <= FAULT_NONE; retried<=0; end
             if (state == EXECUTE) begin
-                if (local_fault != FAULT_NONE && !blocked) fault_o <= local_fault;
+                if (local_fault != FAULT_NONE && !blocked && !pause_i) fault_o <= local_fault;
                 else if (next_state == ISSUE || next_state == WAIT_RESPONSE || next_state == NUMERIC_WAIT || next_state == DEVICE_WAIT) issued_condition <= (!gc_active_o && retried) ? saved_issued_condition : condition_value;
             end
             if(async_pending && !async_done && rsp_valid_i) begin

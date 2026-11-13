@@ -28,7 +28,9 @@ module system_tb #(parameter integer PAGER_BITS = 10);
         .sdram_we_n_o(m_we_n), .sdram_ba_o(m_ba), .sdram_a_o(m_a), .sdram_dqml_o(), .sdram_dqmh_o(),
         .sdram_dq_o(m_dq_out), .sdram_dq_oe_o(m_dq_oe), .sdram_dq_i(m_dq_in),
         .memory_tested_o(memory_tested), .memory_failed_o(memory_failed), .memory_failed_address_o(),
-        .halted_o(halted), .service_o(service), .fault_o(fault), .pc_o(pc));
+        .halted_o(halted), .service_o(service), .fault_o(fault), .pc_o(pc),
+        .pause_i(pause), .monitor_page_i(1'b0), .monitor_left_o(monitor_left),
+        .monitor_right_o(monitor_right));
     sd_card_model #(.IMAGE("build/sim/card.img"), .SECTORS(81920)) card (
         .sd_clk_i(sd_clk), .sd_cs_n_i(sd_cs_n), .sd_mosi_i(sd_mosi), .sd_miso_o(sd_miso));
     // An Atari ST mouse on port A, {fire, right, left, down, up}. +mouse=N
@@ -51,6 +53,36 @@ module system_tb #(parameter integer PAGER_BITS = 10);
             end
             repeat (1000000) @(posedge clk); joy_a[4] = 0;
             repeat (2000000) @(posedge clk); joy_a[4] = 1;
+        end
+    end
+    // +pause=CYCLE pauses LOGIK at that cycle for 100,000 cycles. Nothing may
+    // retire while it is held after the first 1,000 cycles, which allow an
+    // instruction already past EXECUTE to finish; the monitor's PC row must
+    // match the processor's.
+    logic pause = 0;
+    logic [39:0] monitor_left [16], monitor_right [16];
+    longint pause_at = 0;
+    initial begin
+        if ($value$plusargs("pause=%d", pause_at)) begin
+            logic [15:0] held_pc;
+            repeat (pause_at) @(posedge clk);
+            pause = 1;
+            repeat (1000) @(posedge clk);
+            held_pc = pc;
+            for (int i = 0; i < 99000; i++) begin
+                @(posedge clk);
+                if (machine.retired || pc != held_pc) begin
+                    $display("FAIL: retired while paused at pc %0d", held_pc);
+                    $fatal(1);
+                end
+            end
+            if (monitor_right[10] != {24'd0, pc}) begin
+                $display("FAIL: monitor PC %h, processor %h", monitor_right[10], pc);
+                $fatal(1);
+            end
+            $display("paused at pc %0d for 99,000 cycles; R0=%h VR0=%h", held_pc,
+                     monitor_left[0], monitor_right[0]);
+            pause = 0;
         end
     end
     // Progress, for long runs.
