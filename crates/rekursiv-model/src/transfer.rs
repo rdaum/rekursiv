@@ -96,6 +96,11 @@ impl Model {
             }
             let mut incoming = if c.pager == Pager::Allocate {
                 let identity = self.free_identity()?;
+                if self.entries[identity as usize & (self.entries.len() - 1)].is_none() {
+                    self.eviction_permitted = false;
+                } else if self.collect_before_evict && !self.eviction_permitted {
+                    return Err(Status::OutOfSpace);
+                }
                 Entry {
                     reference: Word::reference(identity, c.alloc_scan)?,
                     class: c.data,

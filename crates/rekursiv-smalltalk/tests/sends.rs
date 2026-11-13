@@ -160,7 +160,6 @@ struct Execution {
     collections: u64,
     proactive_collections: usize,
     low_space_checks: Vec<(u32, u32)>,
-    saves: u64,
     allocation_retries: usize,
     refill_retries: usize,
     recovery_after_exchange: bool,
@@ -490,7 +489,6 @@ fn execute_machine(
         collections: h.stats.collections,
         proactive_collections,
         low_space_checks,
-        saves: h.stats.saved_objects,
         allocation_retries: h
             .commands
             .iter()
@@ -671,7 +669,6 @@ fn imported_send_allocates_objects_and_returns_a_reference_after_collection() ->
     assert_eq!(e.allocations, 32);
     assert_eq!(e.result, Word::reference(32769, true)?);
     assert!(e.collections > 0, "no machine collection");
-    assert!(e.saves > 0, "no eviction saves");
     // Which command meets the exhausted heap depends on what is resident.
     assert!(
         e.allocation_retries + e.refill_retries > 0,

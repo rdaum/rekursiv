@@ -17,7 +17,24 @@ fn transport(c: Channel) -> Timing {
 }
 
 fn native(source: &str, config: Option<Config>, jit: bool, budget: u64) -> Result<Machine> {
+    native_with(source, config, jit, budget, true)
+}
+
+/// Without a collector a full pager evicts, so unreachable objects reach the
+/// backing store instead of being collected.
+fn native_with(
+    source: &str,
+    config: Option<Config>,
+    jit: bool,
+    budget: u64,
+    collector: bool,
+) -> Result<Machine> {
     let mut m = boot::microcode_with_pager(source, 512, 16)?.machine;
+    if !collector {
+        m.image_mut().collector_entry = None;
+        m.objekt.collect_before_evict = false;
+        m.objekt.allocation_limit = 512;
+    }
     m.devices.registers.insert(0, 0);
     if let Some(config) = config {
         m.enable_cycle_estimate(config)?;
@@ -61,7 +78,11 @@ fn rtl_cycles(m: &Machine, config: Config) -> Result<u64> {
 }
 
 fn calibrate(source: &str, config: Config) -> Result<()> {
-    let m = native(source, Some(config), true, 1000)?;
+    calibrate_with(source, config, true)
+}
+
+fn calibrate_with(source: &str, config: Config, collector: bool) -> Result<()> {
+    let m = native_with(source, Some(config), true, 1000, collector)?;
     let measured = rtl_cycles(&m, config)?;
     let estimate = m.cycle_estimate().unwrap();
     assert_eq!(estimate.work().approximate_objects, 0);
@@ -109,10 +130,10 @@ fn resident_transfer_directory_and_device_costs_match_rtl() -> Result<()> {
         // repeated exchange then reads both bodies from backing storage.
         let exchange = include_str!("../../../microcode/allocation.uc").replace(
             "    halt", "    d=0xa000000011, ldvr, vr=0\n    d=0xa000000001, page=Exchange, vr=0\n    d=0xa000000001, page=Exchange, vr=0\n    halt");
-        calibrate(&exchange, config)?;
+        calibrate_with(&exchange, config, false)?;
         let dirty = include_str!("../../../microcode/allocation.uc").replace(
             "    halt", "    d=7, mem=Write\n    d=0xa000000011, page=Fetch\n    d=0xa000000001, page=Fetch\n    halt");
-        calibrate(&dirty, config)?;
+        calibrate_with(&dirty, config, false)?;
     }
     Ok(())
 }

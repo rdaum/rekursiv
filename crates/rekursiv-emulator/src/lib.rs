@@ -134,6 +134,7 @@ impl Machine {
         let mut objekt = Model::new(pager_entries, memory_words);
         if image.collector_entry.is_some() {
             objekt.allocation_limit = memory_words as u32 / 2;
+            objekt.collect_before_evict = true;
         }
         let cpu = Processor {
             pc: entry,

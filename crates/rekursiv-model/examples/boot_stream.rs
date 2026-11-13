@@ -1,11 +1,13 @@
 //! Assemble a microprogram into a boot stream for a board's boot sequencer.
 //!
-//!   cargo run -p rekursiv-model --example boot_stream -- PROGRAM.uc OUT.mem CODE_WORDS PAGER_ENTRIES
+//!   cargo run -p rekursiv-model --example boot_stream -- PROGRAM.uc OUT.mem CODE_WORDS PAGER_ENTRIES [none]
 //!
 //! CODE_WORDS and PAGER_ENTRIES describe the board's machine; programs can use
 //! both as constants. Unless the
 //! program defines its own collector, the standard RAM collector is placed at
-//! the top of the control store, sized for that configuration.
+//! the top of the control store, sized for that configuration. A final
+//! `none` leaves the collector out and starts the machine with collection
+//! disabled, so a full pager evicts to the backing store.
 //!
 //! The stream replays the halted programming interface that the simulator
 //! drives, then starts the processor. An output named `*.boo` holds the
@@ -20,8 +22,12 @@ use std::fmt::Write as _;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let [source, output, code_words, pager_entries] = args.as_slice() else {
-        return Err("usage: boot_stream PROGRAM.uc OUT.mem CODE_WORDS PAGER_ENTRIES".into());
+    let (args, collector) = match args.as_slice() {
+        [rest @ .., last] if last == "none" => (rest, false),
+        all => (all, true),
+    };
+    let [source, output, code_words, pager_entries] = args else {
+        return Err("usage: boot_stream PROGRAM.uc OUT.mem CODE_WORDS PAGER_ENTRIES [none]".into());
     };
     let code_words: usize = code_words.parse()?;
     let pager_entries: usize = pager_entries.parse()?;
@@ -39,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .map_err(|e| format!("{source}: {e:?}"))?;
     let mut image = Image::from_assembly(&assembly).map_err(|e| format!("{e:?}"))?;
-    if image.collector_entry.is_none() {
+    if collector && image.collector_entry.is_none() {
         let length = rekursiv_asm::collector::program(0, root_count)
             .map_err(|e| format!("{e:?}"))?
             .len();

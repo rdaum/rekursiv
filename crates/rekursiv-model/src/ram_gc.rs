@@ -104,6 +104,7 @@ impl Model {
         }
         candidate.body_cursor = cursor;
         candidate.allocation_limit = destination + half;
+        candidate.eviction_permitted = true;
         candidate.relocate_prepared();
         *self = candidate;
         Ok(())

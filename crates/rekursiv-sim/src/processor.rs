@@ -69,6 +69,7 @@ impl Harness<'_> {
         self.rtl.cpu_gc_enable_i = image.collector_entry.is_some() as u8;
         if image.collector_entry.is_some() {
             self.oracle.allocation_limit = self.backing.len() as u32 / 2;
+            self.oracle.collect_before_evict = true;
         }
         self.rtl.cpu_gc_entry_i = image.collector_entry.unwrap_or(0);
         for (address, word) in image.roots.iter().enumerate() {
@@ -534,10 +535,10 @@ pub fn allocation_example(h: &mut Harness<'_>) -> Result<String> {
     let limit = 100_000 * rekursiv_model::processor::CODE_WORDS.div_ceil(1024);
     let retired = h.run_processor(&image, &mut model, limit)?;
     ensure!(
-        model.rf[0] == 0 && model.estkr == Word::signed(1234).bits() && h.stats.saved_objects >= 5,
+        model.rf[0] == 0 && model.estkr == Word::signed(1234).bits() && h.stats.collections >= 1,
         "processor allocation example failed"
     );
-    Ok(format!("{retired} RTL microinstructions; 21 allocations, dirty eviction and refill, recovered field=1234"))
+    Ok(format!("{retired} RTL microinstructions; 21 allocations, collection under pager pressure, recovered field=1234"))
 }
 
 /// Repeated allocations force autonomous collections. The Rust loop only clocks

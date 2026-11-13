@@ -257,6 +257,15 @@ module objekt #(
     wire allocate_last=allocate_probe==PAGER_BITS'(ENTRIES-1);
     wire allocate_found=phase==ALLOCATE_SCAN && (allocate_evict || !aux_valid || allocate_candidate[37]);
     wire start_transfer=start_fetch || allocate_now || allocate_found;
+    // With a collector, allocation into a full table first reports
+    // OUT_OF_SPACE, so collection can drop unreachable entries instead of
+    // saving a victim that may be garbage. Once a collection has committed,
+    // allocation may evict, until it next finds an empty slot.
+    logic eviction_permitted;
+    wire allocate_refuse=phase==ALLOCATE_SCAN && allocate_evict && aux_valid &&
+        gc_enable_i && !eviction_permitted;
+    wire allocate_empty=(accept_allocate && !aux_valid && !dbg_next_identity_o[37]) ||
+        (phase==ALLOCATE_SCAN && !allocate_evict && !aux_valid && !allocate_candidate[37]);
     wire [PAGER_BITS-1:0] transfer_slot=phase==ALLOCATE_SCAN ? allocate_candidate[PAGER_BITS-1:0] :
         c_pager==6 ? dbg_next_identity_o[PAGER_BITS-1:0] : c_data[PAGER_BITS-1:0];
     wire [170:0] transfer_victim=start_fetch ? page_stored : aux_stored;
@@ -313,7 +322,7 @@ module objekt #(
         .size_i(phase==ALLOCATE_SCAN ? allocate_size : c_alloc_size),
         .scan_i(phase==ALLOCATE_SCAN ? allocate_scan_tag : c_alloc_scan),
         .identity_i(phase==ALLOCATE_SCAN ? allocate_candidate : dbg_next_identity_o),
-        .victim_valid_i(start_fetch ? page_stored_valid : allocate_evict && aux_valid),
+        .victim_valid_i(start_fetch ? page_stored_valid : allocate_evict && aux_valid && !allocate_refuse),
         .victim_i(start_fetch ? page_stored : aux_stored),
         .seed_i(seed_transfer),.seed_ref_i(svc_ref_i),.seed_base_i(svc_base_i),.seed_size_i(svc_size_i),
         .cursor_set_i(gc_commit || scan_cursor_set),
@@ -321,7 +330,7 @@ module objekt #(
         .identity_floor_valid_i(svc_valid_i && svc_ready_o && svc_op_i==8 &&
             svc_repr_i!=0 && svc_repr_i<=40'h2000000000),
         .identity_floor_i(svc_repr_i[37:0]),
-        .allocation_limit_i(allocation_limit),
+        .allocation_limit_i(allocation_limit),.refuse_i(allocate_refuse),
         .required_size_o(gc_needed),.required_class_o(gc_needed_class),.saved_victim_o(saved_victim),
         .next_identity_o(dbg_next_identity_o),.body_cursor_o(dbg_body_cursor_o),
         .done_o(transfer_done),.status_o(transfer_status),.entry_o(transfer_entry),
@@ -648,7 +657,7 @@ module objekt #(
         a_data[39:0]==prepared_access.reference;
     always_ff @(posedge clk_i) begin
         if(rst_i) begin
-            phase<=CLEAR; clear_slot<='0;
+            phase<=CLEAR; clear_slot<='0; eviction_permitted<=0;
             maintenance<=0; class_valid<=0; selected<=0; snapshot<=0;
             selected_live<=0; selected_persistent<=0; prepared_entry<=0; prepared_persistent<=0;
             prepared_access.reference<=NIL; prepared_access.index<=0; prepared_access.address<=0; prepared_access.status<=NO_SELECTION;
@@ -689,6 +698,8 @@ module objekt #(
                 ((phase==TRANSFER && (store_op_o==2 || (store_op_o==3 && victim_scan))) ||
                  (phase==EXCHANGE && (store_op_o==2 || (store_op_o==3 && store_ref_o[37]))));
             edge_key_q<=edge_key;
+            if(gc_commit) eviction_permitted<=1;
+            else if(allocate_empty) eviction_permitted<=0;
             // Collector commit visits one slot per cycle. The write port moves
             // a retained entry to its staged base or drops the entry; the
             // registers that cache that slot follow on the same edge.

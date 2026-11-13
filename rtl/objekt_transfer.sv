@@ -23,6 +23,8 @@ module objekt_transfer #(
     input logic cursor_set_i, input logic [24:0] cursor_i,
     input logic identity_floor_valid_i, input logic [37:0] identity_floor_i,
     input logic [24:0] allocation_limit_i,
+    // Report OUT_OF_SPACE for this allocation without consuming anything.
+    input logic refuse_i,
     output logic [23:0] required_size_o, output logic [39:0] required_class_o, output logic saved_victim_o,
     output logic [37:0] next_identity_o, output logic [24:0] body_cursor_o,
     output logic done_o, output logic [3:0] status_o, output logic [170:0] entry_o,
@@ -134,6 +136,9 @@ module objekt_transfer #(
                                 2'b10, scan_i, identity_i[36:0]};
                             if (identity_i[37]) begin
                                 status_o <= IDENTITY_EXHAUSTED;
+                                phase <= DONE;
+                            end else if (refuse_i) begin
+                                status_o <= OUT_OF_SPACE;
                                 phase <= DONE;
                             end else phase <= RESERVE;
                         end else begin

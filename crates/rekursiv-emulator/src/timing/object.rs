@@ -6,7 +6,7 @@ use rekursiv_model::{Model, Outcome};
 pub(crate) enum ObjectPath {
     Resident,
     /// Carries the cycles OBJEKT spends finding a free identity.
-    Transfer(u64),
+    Transfer(u64, bool),
     /// Carries the cycles OBJEKT spends scanning resident metadata.
     Directory(u64),
     Exchange,
@@ -31,9 +31,17 @@ fn directory_scan(model: &Model, c: Command) -> u64 {
 impl ObjectPath {
     pub(crate) fn capture(model: &Model, c: Command) -> Self {
         match c.pager {
-            Pager::Allocate => Self::Transfer(model.allocation_skips()),
+            Pager::Allocate => {
+                let skips = model.allocation_skips();
+                // A full pager refuses the allocation before RESERVE when a
+                // collection is due first.
+                let refused = skips == model.entries.len() as u64
+                    && model.collect_before_evict
+                    && !model.eviction_permitted;
+                Self::Transfer(skips, refused)
+            }
             Pager::Fetch if c.data.is_reference() && model.resolve(c.data).is_err() => {
-                Self::Transfer(0)
+                Self::Transfer(0, false)
             }
             Pager::NextObject | Pager::FindObject => Self::Directory(directory_scan(model, c)),
             Pager::Exchange => Self::Exchange,
@@ -71,8 +79,8 @@ impl Estimate {
             // this estimator assumes no response-consumption backpressure.
             ObjectPath::Resident if ram != 0 => service -= 1,
             ObjectPath::Resident => (),
-            ObjectPath::Transfer(skips) => {
-                service += skips;
+            ObjectPath::Transfer(skips, refused) => {
+                service += skips - u64::from(refused);
                 // RESERVE and DONE/publication, plus one initial FILL.
                 // Subsequent words go directly to WRITE (allocation) or
                 // GET (refill). Victim reads are distinct.

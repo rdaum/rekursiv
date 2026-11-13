@@ -174,17 +174,16 @@ needed to finish the operation. The sender may then change its inputs. Changing 
 later acceptance; it does not cancel an accepted operation.
 
 Resident operations without memory commit on their acceptance edge, or one edge later when they
-carry a pager operation. Resident memory operations
-commit on the successful memory-completion edge. Fetch misses and allocations commit their pager
-entry and selection after the complete transfer succeeds. Allocator reservations and transfer side
-effects have the separate failure rules specified below. That commit is architectural retirement:
-registers, metadata, and flags change together. OBJEKT state remains unchanged while a resident
-memory command waits. A resident RAM completion drives the result directly, allowing the
-response handshake and architectural commit on the same edge. If `rsp_ready_i` is low,
-the core captures that result in RESPONSE and holds it stable until accepted; the RAM
-completion and commit still occur exactly once. Other paths register their result after
-retirement. Response consumption does not execute or commit the operation again.
-Neither input channel accepts another operation while a response is pending.
+carry a pager operation. Resident memory operations commit on the successful memory-completion edge.
+Fetch misses and allocations commit their pager entry and selection after the complete transfer
+succeeds. Allocator reservations and transfer side effects have the separate failure rules specified
+below. That commit is architectural retirement: registers, metadata, and flags change together.
+OBJEKT state remains unchanged while a resident memory command waits. A resident RAM completion
+drives the result directly, allowing the response handshake and architectural commit on the same
+edge. If `rsp_ready_i` is low, the core captures that result in RESPONSE and holds it stable until
+accepted; the RAM completion and commit still occur exactly once. Other paths register their result
+after retirement. Response consumption does not execute or commit the operation again. Neither input
+channel accepts another operation while a response is pending.
 
 The memory request channel uses `mem_valid_o`, `mem_ready_i`, `mem_write_o`, `mem_addr_o`, and
 `mem_data_o`. The request remains stable until accepted. The core then waits for `mem_rsp_valid_i`
@@ -256,8 +255,8 @@ setup. ReadMemory returns the physical word. Other successful service operations
 BeginRecovery rejects an already held lock. SetBodyCursor and EndRecovery require the lock.
 SetBodyCursor rejects values above memory capacity or below the end of any valid resident body. It
 never decreases the identity high-water mark. A raw write and SetBodyCursor each check every pager
-slot before taking effect; the write reaches memory, and the cursor changes, only after a clean walk. The [recovery contract](recovery.md) defines the
-required copy and publication order.
+slot before taking effect; the write reaches memory, and the cursor changes, only after a clean
+walk. The [recovery contract](recovery.md) defines the required copy and publication order.
 
 ## Errors and precedence
 
@@ -325,9 +324,9 @@ publish pager entries.
 `Command::allocate(class, size, scan)` selects Allocate with the corresponding operands. The 38-bit
 identity counter starts at one and represents exhaustion without wrapping. The 25-bit body cursor
 starts at zero and can represent the end of the 24-bit address space. Successful halted
-installations advance both counters without moving them backward. Allocation first chooses its identity, then checks identity
-exhaustion, then body capacity. It reserves the identity and complete body range before any victim
-transfer. An empty object consumes an identity but no body words.
+installations advance both counters without moving them backward. Allocation first chooses its
+identity, then checks identity exhaustion, then body capacity. It reserves the identity and complete
+body range before any victim transfer. An empty object consumes an identity but no body words.
 
 Allocation takes the first identity, at or after the counter, whose pager slot is empty. It examines
 one candidate per pager slot, one per cycle after the acceptance cycle. Identities are never reused,
@@ -335,6 +334,14 @@ so without this rule an allocation would displace a long-lived object while othe
 Identities it passes over are never issued. When every slot is occupied, allocation takes the
 counter's identity and its slot's occupant becomes the victim. A failed attempt that reserves no
 identity leaves the counter unchanged.
+
+With collection enabled, a full pager is first a reason to collect. Most new objects are short
+lived, and saving one to the backing store costs far more than discarding it. An allocation that
+finds every slot occupied therefore reports OutOfSpace without reserving anything, and LOGIK's
+ordinary recovery runs the collector, which drops unreachable mappings, and retries. After a
+collection commits, allocation may evict: the pager then holds retained objects. That permission
+ends when an allocation next finds an empty slot. Objects that nothing references are consequently
+discarded, not saved. Without a collector a full pager always evicts.
 
 `Command::fetch(reference)` selects Fetch. Resident hits and supported compact values complete
 without a backing-store request. A miss first obtains and validates backing metadata, then reserves
@@ -353,11 +360,11 @@ zero. Refill copies exact 40-bit words from the backing record. Each operation u
 range beyond the body cursor. The engine derives the representation cache from the first
 successfully written word. An empty object's representation is nil.
 
-The transfer engine enters FILL once to select initialization or refill. After each
-successful body write, it advances directly to the next RAM write (allocation) or
-backing read (refill). Allocation retains the same nil/zero fill word in its buffer.
-Channels still allow only one outstanding request each; this removes a control cycle
-between words without introducing bursts, speculative reads, or different error effects.
+The transfer engine enters FILL once to select initialization or refill. After each successful body
+write, it advances directly to the next RAM write (allocation) or backing read (refill). Allocation
+retains the same nil/zero fill word in its buffer. Channels still allow only one outstanding request
+each; this removes a control cycle between words without introducing bursts, speculative reads, or
+different error effects.
 
 After the complete body succeeds, the core replaces the target slot and selects the incoming object
 on one clock edge. A new allocation has new set, modified clear, and cond clear. A refilled object
@@ -396,11 +403,11 @@ enumeration succeeds with machine nil in both places.
 OBJEKT first scans resident metadata. FindObject reads the single slot its identity selects.
 NextObject probes the slots of the following identities in order and keeps the smallest resident
 identity above the request. It stops early at a slot that holds exactly the probed identity, since
-no later slot can hold a smaller one; otherwise it visits every slot.
-`rtl/objekt_directory.sv` then combines that resident candidate with committed backing-store metadata.
-Resident metadata wins when both sources contain the same identity. The engine never reads bodies, refills
-RAM, or changes the selected object, pager entries, or allocation counters. It can enumerate objects
-larger than RAM. Class filtering and language identity-number conversion belong in microcode.
+no later slot can hold a smaller one; otherwise it visits every slot. `rtl/objekt_directory.sv` then
+combines that resident candidate with committed backing-store metadata. Resident metadata wins when
+both sources contain the same identity. The engine never reads bodies, refills RAM, or changes the
+selected object, pager entries, or allocation counters. It can enumerate objects larger than RAM.
+Class filtering and language identity-number conversion belong in microcode.
 
 The request is exclusive until its response completes. A store error leaves the destination value
 register unchanged. Malformed returned references, classes, or identity ordering also produce
@@ -754,21 +761,21 @@ Recovery controls 1–9 use an internal request/completion port to OBJEKT. Its v
 the ordinary command channel. The collector datapath never accepts host service requests and never
 issues backing-store transactions.
 
-| Value | Control   | D-bus operand and result                                                              |
-| ----: | --------- | ------------------------------------------------------------------------------------- |
-|     0 | None      | Ordinary local microinstruction                                                       |
-|     1 | Begin     | Walk every slot: validate source-space bounds, clear marks and the relocation plan, and mark and queue each slot whose retention flag is set |
-|     2 | Root      | Index from the root table; return the 40-bit value                                    |
-|     3 | Slot      | Pager slot index; select it and return flags                                          |
-|     4 | Info      | Selected slot field: 0 reference, 1 class, 2 size                                     |
-|     5 | Mark      | Full reference; mark and queue a resident object on its first mark, and return 1 only then |
-|     6 | ReadBody  | Zero-based source offset; return and buffer a 40-bit word                             |
-|     7 | Stage     | Reserve destination range for the selected marked object                              |
-|     8 | WriteBody | Zero-based destination offset; write the matching buffered word                       |
-|     9 | Commit    | Walk every slot to publish completed relocation; exchange allocation spaces           |
-|    10 | Return    | Restore processor context and retry; requires successful Commit                       |
-|    11 | Collect   | Standalone mutator request for collection, with no allocation reservation             |
-|    12 | Next      | Take the most recently queued slot, select it, and return its flags; zero when the queue is empty |
+| Value | Control    | D-bus operand and result                                                                                                                                 |
+| ----: | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|     0 | None       | Ordinary local microinstruction                                                                                                                          |
+|     1 | Begin      | Walk every slot: validate source-space bounds, clear marks and the relocation plan, and mark and queue each slot whose retention flag is set             |
+|     2 | Root       | Index from the root table; return the 40-bit value                                                                                                       |
+|     3 | Slot       | Pager slot index; select it and return flags                                                                                                             |
+|     4 | Info       | Selected slot field: 0 reference, 1 class, 2 size                                                                                                        |
+|     5 | Mark       | Full reference; mark and queue a resident object on its first mark, and return 1 only then                                                               |
+|     6 | ReadBody   | Zero-based source offset; return and buffer a 40-bit word                                                                                                |
+|     7 | Stage      | Reserve destination range for the selected marked object                                                                                                 |
+|     8 | WriteBody  | Zero-based destination offset; write the matching buffered word                                                                                          |
+|     9 | Commit     | Walk every slot to publish completed relocation; exchange allocation spaces                                                                              |
+|    10 | Return     | Restore processor context and retry; requires successful Commit                                                                                          |
+|    11 | Collect    | Standalone mutator request for collection, with no allocation reservation                                                                                |
+|    12 | Next       | Take the most recently queued slot, select it, and return its flags; zero when the queue is empty                                                        |
 |    13 | NextMarked | Select the next marked slot in ascending order, from slot zero after Begin, and return its flags; zero when none remains. It examines one slot per cycle |
 
 Slot flags are valid (bit 0), marked (1), scanned (2), retention root (3), and NEW (4). Retention
@@ -777,6 +784,6 @@ backing-record edges, and the valid prepared reference. ReadBody and WriteBody u
 request/completion channel. Stage and Commit return `OUT_OF_SPACE` when their capacity conditions
 fail. Slot on an invalid slot returns zero. Info on an invalid slot returns `NOT_RESIDENT`; invalid
 indices return `BOUNDS`. Mark ignores nonreferences, nonresident objects, and collisions without
-faulting or fetching. Controls 1–10, 12, and 13 require an active collector invocation. `gc=Collect` requires mutator mode and an enabled collector,
-and rejects all other control fields. Collector instructions cannot combine an OBJEKT mutator
-command or alter frozen stacks and fetch state.
+faulting or fetching. Controls 1–10, 12, and 13 require an active collector invocation. `gc=Collect`
+requires mutator mode and an enabled collector, and rejects all other control fields. Collector
+instructions cannot combine an OBJEKT mutator command or alter frozen stacks and fetch state.

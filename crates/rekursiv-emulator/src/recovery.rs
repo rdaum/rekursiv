@@ -229,6 +229,7 @@ impl RecoveryState {
                 model.relocate_prepared();
                 model.body_cursor = self.cursor;
                 model.allocation_limit = self.end;
+                model.eviction_permitted = true;
                 self.committed = true;
             }
             _ => return Err(Status::BadCommand),

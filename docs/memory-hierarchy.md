@@ -156,8 +156,10 @@ These change documented behaviour and need matching changes in `docs/interface.m
    traces with a work list, and allocation prefers empty slots. OBJEKT is under 10,000 LUTs at
    16,384 or 32,768 entries.
 3. **SDRAM object table,** if a runtime needs more than 32,768 resident objects.
-4. **Heap-pressure eviction:** a better victim than the next identity's slot, and collection before
-   eviction.
+4. **Collection before eviction.** Done: with a collector, allocation into a full table collects
+   first and evicts only if the table is still full. The emulator's Smalltalk-80 boot at the board's
+   sizes went from 175,450 new objects saved to 177, with 7 collections costing 3.7% of the run. A
+   better victim than the next identity's slot remains open.
 5. **Body cache and store cache,** if measurements justify them.
 
 ## Revised contracts for the object table

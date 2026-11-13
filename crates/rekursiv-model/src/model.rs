@@ -38,6 +38,13 @@ pub struct Model {
     pub persistent_roots: Vec<bool>,
     /// Maintenance lock. Normal object commands are rejected while it is set.
     pub maintenance: bool,
+    /// Set by an executor that has a collector. Allocation into a full pager
+    /// then reports `OutOfSpace` so the collector can drop unreachable
+    /// mappings, instead of saving a victim that may be garbage.
+    pub collect_before_evict: bool,
+    /// A collection has committed since allocation last found an empty slot,
+    /// so the pager is full of retained objects and allocation may evict.
+    pub eviction_permitted: bool,
 }
 impl Model {
     /// Construct an empty pager and zero-filled RAM with no backing records.
@@ -76,6 +83,8 @@ impl Model {
             next_identity: 1,
             body_cursor: 0,
             allocation_limit: memory_words as u32,
+            collect_before_evict: false,
+            eviction_permitted: false,
             persistent_roots: vec![false; pager_entries],
             maintenance: false,
         }

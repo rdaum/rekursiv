@@ -2,6 +2,10 @@
 ; 276 objects, so OBJEKT saves that many new victims to the disk processor's
 ; store. Fetching early objects by reference then refills them from the card.
 ;
+; Build it without a collector (COLLECTOR=none): these objects are
+; unreachable, and a machine with a collector drops them instead of saving
+; them.
+;
 ; Object n (the nth allocation, identity n, opaque) holds COUNT + 1 - n in
 ; field 2. Debug display, with the board's 32,768-entry table (COUNT 33044):
 ;   0  0x50414745 ("PAGE") once the allocations finish
