@@ -5,10 +5,15 @@ boundary:
     d=0, ldvr, vr=4
     d=0, ldvr, vr=5
     d=0, ldvr, vr=6
-    d=0, ldvr, vr=7, r=Bus, rb=15, ldrb
     ; IP and SP stay in R8 and R9 between bytecodes. They are written into
     ; the context where something can observe it: a send (send_prepare), a
     ; process switch (check_process_switch), and a stop (save_context).
+    ; Deferred work raises the pending flag: a pending process switch, idle,
+    ; or input words awaiting signals. With it clear, the low-space line low
+    ; and no interrupt, the next bytecode starts at once.
+    d=0, ldvr, vr=7, r=Bus, rb=15, ldrb, seq=ConditionalJump, cc=Pending, brch=check_process_switch
+    seq=ConditionalJump, cc=LowSpace, brch=check_process_switch
+    seq=ConditionalJump, cc=!Interrupt, brch=cycle
     seq=Jump, brch=check_process_switch
 save_context:
     ; Select the caller and prepare IDX/IP in parallel. Fetch preserves IDX,

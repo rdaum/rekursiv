@@ -129,7 +129,7 @@ scheduler_resume:
     d=1, esp=Bus
     read=Vr, vr=5
     d=Object, estk=Bus
-    d=1, sp=Bus
+    d=1, sp=Bus, pend=Set
     d=0, esp=Bus
     read=Vr, vr=4
     d=Object, ldvr, vr=5
@@ -245,7 +245,7 @@ scheduler_chosen:
     d=1, esp=Bus
     read=Vr, vr=5
     d=Object, estk=Bus
-    d=1, sp=Bus
+    d=1, sp=Bus, pend=Set
     d=0, esp=Bus
 scheduler_result:
     ; R1=0 is a guest primitive. R1=1 is a boundary event: no caller stack
@@ -262,7 +262,7 @@ scheduler_no_runnable:
     ; Finish the wait/suspend send and materialize its continuation before idle.
     d=0, cstk=Bus
     d=31, r=Bus, rb=7, ldrb
-    ra=7, d=1, ldroot
+    ra=7, d=1, ldroot, pend=Set
     seq=Jump, brch=scheduler_result
 scheduler_failed:
     ra=1, flags
