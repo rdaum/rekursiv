@@ -456,13 +456,14 @@ impl Processor {
                     Alu::Xor => r ^ s,
                     Alu::Not => !r,
                     Alu::Rotate => r.rotate_left(s & 31),
+                    // A multiply only loads the product; its result is zero.
                     Alu::MultiplySigned => {
                         n.product = ((r as i32 as i64) * (s as i32 as i64)) as u64;
-                        n.product as u32
+                        0
                     }
                     Alu::MultiplyUnsigned => {
                         n.product = r as u64 * s as u64;
-                        n.product as u32
+                        0
                     }
                     Alu::ProductHigh => (self.product >> 32) as u32,
                     Alu::ProductLow => self.product as u32,

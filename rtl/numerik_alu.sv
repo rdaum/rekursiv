@@ -47,16 +47,11 @@ module numerik_alu (
             // distance modulo 32. A distance of zero must return R unchanged.
             ALU_ROTATE: wide = {1'b0, (r_i << s_i[4:0]) |
                 (r_i >> (6'd32 - {1'b0, s_i[4:0]}))};
-            // Multiplication retains all 64 bits; its low word also supplies F.
+            // Multiplication only loads the 64-bit product; its F is zero, so
+            // the multiplier feeds the product register and nothing else.
             // The parent latches product_o only on instruction retirement.
-            ALU_MULTIPLY_SIGNED: begin
-                product_o = $signed(r_i) * $signed(s_i);
-                wide = {1'b0, product_o[31:0]};
-            end
-            ALU_MULTIPLY_UNSIGNED: begin
-                product_o = r_i * s_i;
-                wide = {1'b0, product_o[31:0]};
-            end
+            ALU_MULTIPLY_SIGNED: product_o = $signed(r_i) * $signed(s_i);
+            ALU_MULTIPLY_UNSIGNED: product_o = r_i * s_i;
             ALU_PRODUCT_HIGH: wide = {1'b0, product_i[63:32]};
             ALU_PRODUCT_LOW: wide = {1'b0, product_i[31:0]};
             default: wide = {1'b0, r_i};

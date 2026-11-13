@@ -127,11 +127,11 @@ impl ScalarInstruction {
                         Alu::Rotate => r.rotate_left(s & 31),
                         Alu::MultiplySigned => {
                             product = ((r as i32 as i64) * (s as i32 as i64)) as u64;
-                            product as u32
+                            0
                         }
                         Alu::MultiplyUnsigned => {
                             product = r as u64 * s as u64;
-                            product as u32
+                            0
                         }
                         Alu::ProductHigh => (cpu.product >> 32) as u32,
                         Alu::ProductLow => cpu.product as u32,

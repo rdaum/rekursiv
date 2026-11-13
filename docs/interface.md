@@ -734,9 +734,9 @@ signed/unsigned multiplication. The [floating-point extension](numerik-floating-
 binary32 arithmetic, conversions, comparison, and square root. Its result completion uses a
 handshake; LOGIK waits before retiring architectural effects. Carry input is zero, one, or the
 previous zero flag. Subtraction computes `A - B - 1 + carry`; ordinary subtraction therefore selects
-carry one. Its carry-out means no borrow. Multiplication retains a 64-bit product, with separate
-high-word and low-word reads. Destination shifts support left, logical right, and arithmetic right
-by one bit. Q and register B independently load the shifted output.
+carry one. Its carry-out means no borrow. Multiplication only loads a 64-bit product, with separate
+high-word and low-word reads; its own result F is zero. Destination shifts support left, logical
+right, and arithmetic right by one bit. Q and register B independently load the shifted output.
 
 Zero, sign, carry, overflow, and corrected sign describe the unshifted result. Corrected sign is
 sign XOR overflow. Full object equality uses the separate 40-bit symbol register. Compact

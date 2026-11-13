@@ -258,7 +258,7 @@ impl Emit<'_> {
                         (self.wide(r), self.wide(s))
                     };
                     product = self.b.ins().imul(r, s);
-                    self.b.ins().ireduce(I32, product)
+                    self.b.ins().iconst(I32, 0)
                 }
                 Alu::ProductHigh => {
                     let high = self.b.ins().ushr_imm_s(product, 32);
