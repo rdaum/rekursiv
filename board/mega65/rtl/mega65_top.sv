@@ -101,7 +101,20 @@ module mega65_top (
     output logic       audio_pdn_n_o,
     output logic       joystick_5v_disable_o,
     output logic       pmod1_en_o,
-    output logic       pmod2_en_o
+    output logic       pmod2_en_o,
+
+    // Keyboard: clock and LED data out, key data in.
+    output logic       kb_io0_o,
+    output logic       kb_io1_o,
+    input  logic       kb_io2_i,
+
+    // Joystick ports. Each line has an input and an output that pulls it
+    // low; the outputs stay high. The paddle capacitors are left to charge.
+    input  logic       fa_up_n_i, fa_down_n_i, fa_left_n_i, fa_right_n_i, fa_fire_n_i,
+    input  logic       fb_up_n_i, fb_down_n_i, fb_left_n_i, fb_right_n_i, fb_fire_n_i,
+    output logic       fa_up_n_o, fa_down_n_o, fa_left_n_o, fa_right_n_o, fa_fire_n_o,
+    output logic       fb_up_n_o, fb_down_n_o, fb_left_n_o, fb_right_n_o, fb_fire_n_o,
+    output logic       paddle_drain_o
 );
     // ---------------------------------------------------------------------
     // Idle levels, matching the MiSTer2MEGA65 R6 top level.
@@ -127,6 +140,9 @@ module mega65_top (
     assign joystick_5v_disable_o = 1'b0;
     assign pmod1_en_o            = 1'b0;
     assign pmod2_en_o            = 1'b0;
+    assign {fa_up_n_o, fa_down_n_o, fa_left_n_o, fa_right_n_o, fa_fire_n_o} = '1;
+    assign {fb_up_n_o, fb_down_n_o, fb_left_n_o, fb_right_n_o, fb_fire_n_o} = '1;
+    assign paddle_drain_o        = 1'b0;
 
     // ---------------------------------------------------------------------
     // Clocks: VCO = 100 / 5 * 31.5 = 630 MHz.
@@ -174,9 +190,9 @@ module mega65_top (
     logic [15:0] pc;
 
     logic [31:0] disk_rows [8];
-    logic        frame_visible, frame_inside;
+    logic        frame_visible, frame_inside, frame_cursor;
     logic [23:0] frame_rgb;
-    logic [31:0] build;
+    logic [31:0] build, io_refused;
     logic [15:0] sdram_dq_out;
     logic        sdram_dq_oe, memory_tested, memory_failed;
     logic [22:0] memory_failed_address;
@@ -196,7 +212,11 @@ module mega65_top (
         .memory_failed_address_o(memory_failed_address),
         .debug_o(debug), .video_clk_i(clk_pix), .video_x_i(x), .video_y_i(y),
         .video_visible_o(frame_visible), .video_inside_o(frame_inside), .video_rgb_o(frame_rgb),
-        .build_o(build), .booted_o(booted), .halted_o(halted), .service_o(service),
+        .video_cursor_o(frame_cursor),
+        .kb_clock_o(kb_io0_o), .kb_data_o(kb_io1_o), .kb_data_i(kb_io2_i),
+        .joy_a_n_i({fa_fire_n_i, fa_right_n_i, fa_left_n_i, fa_down_n_i, fa_up_n_i}),
+        .joy_b_n_i({fb_fire_n_i, fb_right_n_i, fb_left_n_i, fb_down_n_i, fb_up_n_i}),
+        .build_o(build), .io_refused_o(io_refused), .booted_o(booted), .halted_o(halted), .service_o(service),
         .fault_o(fault), .pc_o(pc)
     );
 
@@ -230,6 +250,8 @@ module mega65_top (
         // Memory check: 1 passed, e failed (rows 6 shows the failing address).
         rows[8] = {pc, fault, memory_failed ? 4'he : {3'b0, memory_tested}, 3'b0, halted, 3'b0, booted};
         rows[9] = build;
+        // After a fault, row 7 shows the last refused device request.
+        if (fault != 0) rows[7] = io_refused;
         if (memory_failed) rows[6] = {9'd0, memory_failed_address};
     end
 
@@ -263,7 +285,8 @@ module mega65_top (
         active = (x_d < H_ACTIVE) && (y_d < V_ACTIVE);
         // A published frame replaces the panels unless the processor faults.
         if (!active)        {r, g, b} = '0;
-        else if (frame_visible && fault == 0) {r, g, b} = frame_inside ? frame_rgb : 24'h303030;
+        else if (frame_visible && fault == 0)
+            {r, g, b} = !frame_inside ? 24'h303030 : frame_cursor ? ~frame_rgb : frame_rgb;
         else if (ink || sd_ink) {r, g, b} = 24'hFFFFFF;
         else if (panel)     {r, g, b} = fault != 0 ? 24'h800000 : 24'h102060;
         else if (sd_panel)  {r, g, b} = 24'h104020;

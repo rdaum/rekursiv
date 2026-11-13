@@ -22,7 +22,8 @@ module system_tb #(parameter integer PAGER_BITS = 10);
         .sd_clk_o(sd_clk), .sd_cs_n_o(sd_cs_n), .sd_mosi_o(sd_mosi), .sd_miso_i(sd_miso),
         .disk_display_o(disk), .debug_o(debug), .booted_o(booted),
         .video_clk_i(clk), .video_x_i(10'd0), .video_y_i(10'd0),
-        .video_visible_o(), .video_inside_o(), .video_rgb_o(), .build_o(),
+        .video_visible_o(), .video_inside_o(), .video_rgb_o(), .build_o(), .video_cursor_o(), .io_refused_o(),
+        .kb_clock_o(), .kb_data_o(), .kb_data_i(1'b1), .joy_a_n_i(joy_a), .joy_b_n_i(5'b11111),
         .sdram_cke_o(m_cke), .sdram_cs_n_o(m_cs_n), .sdram_ras_n_o(m_ras_n), .sdram_cas_n_o(m_cas_n),
         .sdram_we_n_o(m_we_n), .sdram_ba_o(m_ba), .sdram_a_o(m_a), .sdram_dqml_o(), .sdram_dqmh_o(),
         .sdram_dq_o(m_dq_out), .sdram_dq_oe_o(m_dq_oe), .sdram_dq_i(m_dq_in),
@@ -30,6 +31,28 @@ module system_tb #(parameter integer PAGER_BITS = 10);
         .halted_o(halted), .service_o(service), .fault_o(fault), .pc_o(pc));
     sd_card_model #(.IMAGE("build/sim/card.img"), .SECTORS(81920)) card (
         .sd_clk_i(sd_clk), .sd_cs_n_i(sd_cs_n), .sd_mosi_i(sd_mosi), .sd_miso_o(sd_miso));
+    // An Atari ST mouse on port A, {fire, right, left, down, up}. +mouse=N
+    // moves it N steps along both axes from cycle 60 million, then presses
+    // and releases the button.
+    logic [4:0] joy_a = 5'b11111;
+    integer mouse_steps = 0;
+    initial begin
+        void'($value$plusargs("mouse=%d", mouse_steps));
+        if (mouse_steps != 0) begin
+            repeat (60000000) @(posedge clk);
+            for (int i = 0; i < mouse_steps; i++) begin
+                repeat (20000) @(posedge clk);
+                unique case (i % 4)
+                    0: begin joy_a[1] = 0; joy_a[2] = 0; end
+                    1: begin joy_a[0] = 0; joy_a[3] = 0; end
+                    2: begin joy_a[1] = 1; joy_a[2] = 1; end
+                    3: begin joy_a[0] = 1; joy_a[3] = 1; end
+                endcase
+            end
+            repeat (1000000) @(posedge clk); joy_a[4] = 0;
+            repeat (2000000) @(posedge clk); joy_a[4] = 1;
+        end
+    end
     // Progress, for long runs.
     longint cycle = 0;
     logic booted_q = 0, visible_q = 0;
@@ -56,6 +79,10 @@ module system_tb #(parameter integer PAGER_BITS = 10);
             machine.screen.visible_o, machine.screen.visible_width, machine.screen.visible_height,
             machine.screen.visible_stride, machine.screen.frame[0], machine.screen.frame[319],
             machine.screen.frame[320], machine.screen.frame[9599]);
+        $display("mouse=(%0d,%0d) cursor=(%0d,%0d) fifo count=%0d input events=%0d irq=%0d",
+            machine.station.mouse_x, machine.station.mouse_y, machine.station.cursor_x_o,
+            machine.station.cursor_y_o, machine.station.count, machine.station.input_events,
+            machine.station.irq_o);
         if ($value$plusargs("frame=%s", frame_file)) $writememh(frame_file, machine.screen.frame);
         for (int i = 0; i < 8; i++) $display("debug[%0d] = %08x   disk[%0d] = %08x", i, debug[i], i, disk[i]);
         $finish;

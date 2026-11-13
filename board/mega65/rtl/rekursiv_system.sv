@@ -3,10 +3,11 @@
 //
 // - Object memory is the board's SDRAM: 2^23 words.
 // - The disk processor serves the backing store from the SD card.
-// - The device channel serves identification (0x000-0x008), the pointer
-//   position (0x300, 0x304; always zero), the cursor bitmap bank
-//   (0x410-0x447; stored, not yet drawn), the display bitmap bank
-//   (0x510-0x547) and the debug display (0xf00-0xf1f).
+// - The device channel serves identification (0x000-0x008), events, clocks,
+//   the pointer and the input FIFO (0x100-0x40f), the cursor bitmap bank
+//   (0x410-0x447), the display bitmap bank (0x510-0x547) and the debug
+//   display (0xf00-0xf1f). Input comes from the MEGA65's keyboard and an
+//   Atari ST mouse on either joystick port.
 // - The disk processor loads the microcode: it replays a boot stream from a
 //   file on the card through LOGIK's halted programming port, then starts
 //   the processor. The start record says whether collection is enabled and
@@ -44,11 +45,21 @@ module rekursiv_system #(
     input  logic        video_clk_i,
     input  logic [9:0]  video_x_i,
     input  logic [9:0]  video_y_i,
+    output logic        video_cursor_o,    // the cursor covers this position
+    // Keyboard and mouse.
+    output logic        kb_clock_o,
+    output logic        kb_data_o,
+    input  logic        kb_data_i,
+    input  logic [4:0]  joy_a_n_i,         // {fire, right, left, down, up}
+    input  logic [4:0]  joy_b_n_i,
     output logic        video_visible_o,
     output logic        video_inside_o,
     output logic [23:0] video_rgb_o,
     // The table and control store sizes, for the status display.
     output logic [31:0] build_o,
+    // The last device request that was refused: its address, and bit 31 for
+    // a write. A refused request faults the processor.
+    output logic [31:0] io_refused_o,
     output logic        booted_o,
     output logic        halted_o,
     output logic        service_o,
@@ -102,7 +113,7 @@ module rekursiv_system #(
     logic [23:0] alloc_size;
     logic [39:0] data, expected_type, rsp_data;
 
-    logic io_valid, io_ready, io_write, io_response, io_response_ready, io_error;
+    logic io_valid, io_ready, io_write, io_response, io_response_ready, io_error, irq;
     logic [31:0] io_address, io_data, io_result;
 
     logic mem_valid, mem_ready, mem_write, mem_rsp_valid, mem_rsp_ready, mem_rsp_error;
@@ -128,7 +139,7 @@ module rekursiv_system #(
         .gc_response_i(gc_response), .gc_response_ready_o(gc_response_ready),
         .gc_status_i(gc_status), .gc_result_i(gc_result),
         .gc_committed_i(gc_committed), .last_status_o(),
-        .start_i(start), .entry_i(record[15:0]), .resume_i(1'b0), .irq_i(1'b0),
+        .start_i(start), .entry_i(record[15:0]), .resume_i(1'b0), .irq_i(irq),
         .halted_o, .service_o, .service_code_o(), .fault_o, .retire_o(),
         .cmd_valid_o(cmd_valid), .cmd_ready_i(cmd_ready),
         .pager_o(pager), .index_o(index), .register_o(register), .memory_o(memory),
@@ -238,20 +249,49 @@ module rekursiv_system #(
     wire  io_display = io_address >= 32'h510 && io_address < 32'h548;
     wire [31:0] io_cursor_bank = io_address - 32'h410;
     wire  io_cursor = io_address >= 32'h410 && io_address < 32'h448;
-    wire  io_pointer = (io_address == 32'h300 || io_address == 32'h304) && !io_write;
-    logic [31:0] identity, display_result, cursor_result;
-    logic display_error, cursor_error;
-    /* verilator lint_off PINCONNECTEMPTY */
+    wire  io_station = io_address >= 32'h100 && io_address < 32'h410;
+    logic [31:0] identity, display_result, cursor_result, station_result;
+    logic display_error, cursor_error, station_error;
+
+    // The cursor bitmap is scanned out at the cursor's position; its set
+    // pixels (palette entry one, black) mark where the cursor covers the frame.
+    logic [10:0] cursor_x, cursor_y;
+    logic        cursor_visible, cursor_inside;
+    logic [23:0] cursor_rgb;
     display #(.MAX_WIDTH(16), .MAX_HEIGHT(16)) cursor (
         .clk_i, .rst_i, .valid_i(io_valid && io_ready && io_cursor), .write_i(io_write),
         .offset_i(io_cursor_bank[5:0]), .data_i(io_data), .result_o(cursor_result),
         .error_o(cursor_error),
-        .video_clk_i, .x_i(10'd0), .y_i(10'd0), .visible_o(), .inside_o(), .rgb_o());
-    /* verilator lint_on PINCONNECTEMPTY */
+        .video_clk_i, .x_i(video_x_i - cursor_x[9:0]), .y_i(video_y_i - cursor_y[9:0]),
+        .visible_o(cursor_visible), .inside_o(cursor_inside), .rgb_o(cursor_rgb));
+    assign video_cursor_o = cursor_visible && cursor_inside && cursor_rgb == 24'h000000;
+
+    // Either joystick port takes the mouse.
+    logic key_valid, key_down, button_a, button_b;
+    logic [7:0] key_code;
+    logic [1:0] x_step, x_negative, y_step, y_negative;
+    keyboard keys (.clk_i, .rst_i, .kb_clock_o, .kb_data_o, .kb_data_i,
+                   .key_valid_o(key_valid), .key_code_o(key_code), .key_down_o(key_down));
+    mouse mouse_a (.clk_i, .rst_i, .up_n_i(joy_a_n_i[0]), .down_n_i(joy_a_n_i[1]),
+                   .left_n_i(joy_a_n_i[2]), .right_n_i(joy_a_n_i[3]), .fire_n_i(joy_a_n_i[4]),
+                   .x_step_o(x_step[0]), .x_negative_o(x_negative[0]),
+                   .y_step_o(y_step[0]), .y_negative_o(y_negative[0]), .button_o(button_a));
+    mouse mouse_b (.clk_i, .rst_i, .up_n_i(joy_b_n_i[0]), .down_n_i(joy_b_n_i[1]),
+                   .left_n_i(joy_b_n_i[2]), .right_n_i(joy_b_n_i[3]), .fire_n_i(joy_b_n_i[4]),
+                   .x_step_o(x_step[1]), .x_negative_o(x_negative[1]),
+                   .y_step_o(y_step[1]), .y_negative_o(y_negative[1]), .button_o(button_b));
+    workstation station (
+        .clk_i, .rst_i, .valid_i(io_valid && io_ready && io_station), .write_i(io_write),
+        .address_i(io_address[11:0]), .data_i(io_data), .result_o(station_result),
+        .error_o(station_error), .irq_o(irq),
+        .x_step_i(|x_step), .x_negative_i(x_step[0] ? x_negative[0] : x_negative[1]),
+        .y_step_i(|y_step), .y_negative_i(y_step[0] ? y_negative[0] : y_negative[1]),
+        .key_valid_i(key_valid), .key_code_i(key_code), .key_down_i(key_down),
+        .button_i(button_a || button_b), .cursor_x_o(cursor_x), .cursor_y_o(cursor_y));
     always_comb unique case (io_address[3:2])
         2'd0: identity = 32'h524b494f;       // "RKIO"
         2'd1: identity = 32'h00010001;
-        default: identity = 32'h00000040;    // display bitmap upload
+        default: identity = 32'h0000007f;    // everything but block storage
     endcase
     display screen (
         .clk_i, .rst_i, .valid_i(io_valid && io_ready && io_display), .write_i(io_write),
@@ -265,13 +305,17 @@ module rekursiv_system #(
     always_ff @(posedge clk_i) begin
         if (rst_i) begin
             io_pending <= 1'b0;
+            io_refused_o <= '0;
             for (int i = 0; i < 8; i++) debug_o[i] <= '0;
         end else if (io_valid && io_ready) begin
+            if (io_display ? display_error : io_cursor ? cursor_error :
+                io_station ? station_error : !(io_debug || io_identity))
+                io_refused_o <= {io_write, io_address[30:0]};
             io_pending <= 1'b1;
             io_error   <= io_display ? display_error : io_cursor ? cursor_error :
-                          !(io_debug || io_identity || io_pointer);
+                          io_station ? station_error : !(io_debug || io_identity);
             io_result  <= io_display ? display_result : io_cursor ? cursor_result :
-                          io_identity ? identity : io_pointer ? 32'd0 :
+                          io_station ? station_result : io_identity ? identity :
                           io_write ? 32'd0 : debug_o[io_address[4:2]];
             if (io_write && io_debug) debug_o[io_address[4:2]] <= io_data;
         end else if (io_response && io_response_ready) io_pending <= 1'b0;
