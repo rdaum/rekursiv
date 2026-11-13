@@ -227,6 +227,7 @@ struct Batch {
     count: usize,
 }
 
+#[derive(Clone, Copy)]
 struct Record {
     reference: u64,
     class: u64,
@@ -242,6 +243,9 @@ pub struct Store<D> {
     current: u32,
     cache: Sector,
     cache_sector: Option<u32>,
+    /// The record last looked up. Reading an object word by word would
+    /// otherwise alternate between its index sector and its body.
+    found: Option<Record>,
     /// Next free log sector, counting records staged in an open batch.
     head: u32,
     save: Option<Save>,
@@ -275,6 +279,7 @@ impl<D: Disk> Store<D> {
             current,
             cache: [0; SECTOR],
             cache_sector: None,
+            found: None,
             head: sb.log_head,
             save: None,
             batch: None,
@@ -307,6 +312,7 @@ impl<D: Disk> Store<D> {
         if self.cache_sector == Some(sector) {
             self.cache_sector = None;
         }
+        self.found = None;
         self.disk.write(sector, data).map_err(|_| ())
     }
 
@@ -431,7 +437,12 @@ impl<D: Disk> Store<D> {
     }
 
     fn metadata(&mut self, id: u64) -> Result<Option<Record>, u8> {
-        self.record(id).map_err(|_| status::SERVICE_ERROR)
+        if let Some(found) = self.found.filter(|r| r.reference & ID_MASK == id) {
+            return Ok(Some(found));
+        }
+        let record = self.record(id).map_err(|_| status::SERVICE_ERROR)?;
+        self.found = record;
+        Ok(record)
     }
 
     /// Serve one request.

@@ -1,6 +1,6 @@
 // Runs rekursiv_system from build/sim/boot.mem and prints its debug display.
 // Built and run by sim.sh.
-module system_tb;
+module system_tb #(parameter integer PAGER_BITS = 10);
     logic clk = 0, rst = 1;
     integer cycles;
     always #5 clk = ~clk;
@@ -17,7 +17,7 @@ module system_tb;
         .clk_i(~clk), .cke_i(m_cke), .cs_n_i(m_cs_n), .ras_n_i(m_ras_n), .cas_n_i(m_cas_n),
         .we_n_i(m_we_n), .ba_i(m_ba), .a_i(m_a), .dq_i(m_dq_out), .dq_driven_i(m_dq_oe), .dq_o(m_dq_in));
     logic [31:0] disk [8];
-    rekursiv_system #(.PAGER_BITS(10), .FIRMWARE("build/sim/loader.mem")) machine (
+    rekursiv_system #(.PAGER_BITS(PAGER_BITS), .FIRMWARE("build/sim/loader.mem")) machine (
         .clk_i(clk), .rst_i(rst),
         .sd_clk_o(sd_clk), .sd_cs_n_o(sd_cs_n), .sd_mosi_o(sd_mosi), .sd_miso_i(sd_miso),
         .disk_display_o(disk), .debug_o(debug), .booted_o(booted),
@@ -30,6 +30,20 @@ module system_tb;
         .halted_o(halted), .service_o(service), .fault_o(fault), .pc_o(pc));
     sd_card_model #(.IMAGE("build/sim/card.img"), .SECTORS(81920)) card (
         .sd_clk_i(sd_clk), .sd_cs_n_i(sd_cs_n), .sd_mosi_i(sd_mosi), .sd_miso_o(sd_miso));
+    // Progress, for long runs.
+    longint cycle = 0;
+    logic booted_q = 0, visible_q = 0;
+    always @(posedge clk) begin
+        cycle <= cycle + 1;
+        booted_q <= booted;
+        visible_q <= machine.screen.visible_o;
+        if (booted && !booted_q) $display("cycle %0d: booted", cycle);
+        if (machine.screen.visible_o && !visible_q)
+            $display("cycle %0d: first frame published; %0d store requests", cycle, disk[6]);
+        if (cycle % 10000000 == 0 && cycle != 0)
+            $display("cycle %0d: pc=%0d fault=%0d store requests=%0d last=%h", cycle, pc, fault, disk[6], disk[7]);
+    end
+    string frame_file;
     initial begin
         repeat (4) @(posedge clk);
         rst = 0;
@@ -42,6 +56,7 @@ module system_tb;
             machine.screen.visible_o, machine.screen.visible_width, machine.screen.visible_height,
             machine.screen.visible_stride, machine.screen.frame[0], machine.screen.frame[319],
             machine.screen.frame[320], machine.screen.frame[9599]);
+        if ($value$plusargs("frame=%s", frame_file)) $writememh(frame_file, machine.screen.frame);
         for (int i = 0; i < 8; i++) $display("debug[%0d] = %08x   disk[%0d] = %08x", i, debug[i], i, disk[i]);
         $finish;
     end

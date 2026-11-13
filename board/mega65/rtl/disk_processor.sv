@@ -28,7 +28,9 @@
 //                        4 a programming write is still pending
 //                  +0x04 (w) low half of a boot_stream record
 //                  +0x08 (w) high half; a programming record (kind 1) is then
-//                        written to LOGIK, a start record (kind 2) starts it
+//                        written to LOGIK, a service record (kind 3) runs an
+//                        OBJEKT service operation, a start record (kind 2)
+//                        starts the processor
 module disk_processor #(
     parameter integer RAM_BYTES = 65536,
     parameter FIRMWARE = "firmware.mem"
@@ -258,7 +260,7 @@ module disk_processor #(
                 if (mem_addr[7:0] == 8'h04) boot_record_o[31:0] <= mem_wdata;
                 if (mem_addr[7:0] == 8'h08) begin
                     boot_record_o[63:32] <= mem_wdata;
-                    if (mem_wdata[31:30] == 2'd1) boot_valid_o <= 1'b1;
+                    if (mem_wdata[31:30] == 2'd1 || mem_wdata[31:30] == 2'd3) boot_valid_o <= 1'b1;
                     if (mem_wdata[31:30] == 2'd2) start_o <= 1'b1;
                 end
             end

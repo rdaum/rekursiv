@@ -42,6 +42,7 @@ mod slot;
 mod state;
 mod transfer;
 
+pub mod boot_stream;
 pub mod float;
 pub mod processor;
 pub mod ram_gc;

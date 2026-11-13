@@ -3,8 +3,10 @@
 //
 // - Object memory is the board's SDRAM: 2^23 words.
 // - The disk processor serves the backing store from the SD card.
-// - The device channel serves identification (0x000-0x008), the display
-//   bitmap bank (0x510-0x547) and the debug display (0xf00-0xf1f).
+// - The device channel serves identification (0x000-0x008), the pointer
+//   position (0x300, 0x304; always zero), the cursor bitmap bank
+//   (0x410-0x447; stored, not yet drawn), the display bitmap bank
+//   (0x510-0x547) and the debug display (0xf00-0xf1f).
 // - The disk processor loads the microcode: it replays a boot stream from a
 //   file on the card through LOGIK's halted programming port, then starts
 //   the processor. The start record says whether collection is enabled and
@@ -59,6 +61,12 @@ module rekursiv_system #(
     // ---------------------------------------------------------------------
     logic [63:0] record;
     logic        boot_valid, boot_ready, start_request, start;
+    // A service record runs one halted OBJEKT service operation and is
+    // acknowledged by that operation's response.
+    logic        logik_boot_ready, svc_ready, svc_sent, rsp_valid;
+    wire         record_service = record[63:62] == 2'd3;
+    wire         svc_valid = boot_valid && record_service && !svc_sent;
+    assign boot_ready = record_service ? svc_sent && rsp_valid : logik_boot_ready;
     logic        gc_enable;
     logic [15:0] gc_entry;
 
@@ -73,6 +81,11 @@ module rekursiv_system #(
             gc_entry  <= record[47:32];
         end else if (start_request && !halted_o) booted_o <= 1'b1;
     end
+    always_ff @(posedge clk_i) begin
+        if (rst_i) svc_sent <= 1'b0;
+        else if (svc_valid && svc_ready) svc_sent <= 1'b1;
+        else if (svc_sent && rsp_valid) svc_sent <= 1'b0;
+    end
 
     // ---------------------------------------------------------------------
     // LOGIK <-> OBJEKT
@@ -81,7 +94,7 @@ module rekursiv_system #(
     logic [3:0] gc_operation, gc_status;
     logic [39:0] gc_data, gc_root, gc_result;
 
-    logic cmd_valid, cmd_ready, rsp_valid, rsp_ready;
+    logic cmd_valid, cmd_ready, rsp_ready;
     logic [3:0] pager, index, read, rsp_status;
     logic [2:0] register, vr;
     logic [1:0] memory;
@@ -105,7 +118,7 @@ module rekursiv_system #(
     /* verilator lint_off PINCONNECTEMPTY */
     logik #(.CODE_WORDS(CODE_WORDS)) processor (
         .clk_i, .rst_i,
-        .boot_valid_i(boot_valid), .boot_ready_o(boot_ready),
+        .boot_valid_i(boot_valid && !record_service), .boot_ready_o(logik_boot_ready),
         .boot_space_i(record[57:56]), .boot_addr_i(record[47:32]),
         .boot_lane_i(record[50:48]), .boot_data_i(record[31:0]),
         .gc_enable_i(gc_enable), .gc_entry_i(gc_entry),
@@ -139,7 +152,7 @@ module rekursiv_system #(
     );
 
     objekt #(.PAGER_BITS(PAGER_BITS), .MEMORY_WORDS(MEMORY_WORDS), .DEBUG_PORT(0)) core (
-        .clk_i, .rst_i, .run_i(1'b1),
+        .clk_i, .rst_i, .run_i(!halted_o),
         .gc_enable_i(gc_enable), .gc_active_i(gc_active), .gc_explicit_i(gc_explicit),
         .gc_valid_i(gc_valid), .gc_ready_o(gc_ready), .gc_operation_i(gc_operation),
         .gc_data_i(gc_data), .gc_root_i(gc_root),
@@ -151,10 +164,10 @@ module rekursiv_system #(
         .read_i(read), .load_vr_i(load_vr), .vr_i(vr),
         .alloc_size_i(alloc_size), .alloc_scan_i(alloc_scan),
         .data_i(data), .check_type_i(check_type), .expected_type_i(expected_type),
-        .svc_valid_i(1'b0), .svc_ready_o(), .svc_op_i(4'd0),
-        .svc_ref_i('0), .svc_class_i('0), .svc_base_i('0), .svc_size_i('0),
-        .svc_repr_i('0), .svc_flags_i('0), .svc_code_i('0),
-        .rsp_valid_o(rsp_valid), .rsp_ready_i(rsp_ready),
+        .svc_valid_i(svc_valid), .svc_ready_o(svc_ready), .svc_op_i(record[61:58]),
+        .svc_ref_i('0), .svc_class_i(record[39:0]), .svc_base_i('0), .svc_size_i('0),
+        .svc_repr_i(record[39:0]), .svc_flags_i('0), .svc_code_i(record[57:52]),
+        .rsp_valid_o(rsp_valid), .rsp_ready_i(rsp_ready || halted_o),
         .rsp_status_o(rsp_status), .rsp_data_o(rsp_data),
         .mem_valid_o(mem_valid), .mem_ready_i(mem_ready),
         .mem_write_o(mem_write), .mem_addr_o(mem_addr), .mem_data_o(mem_data),
@@ -223,8 +236,18 @@ module rekursiv_system #(
     wire  io_identity = io_address < 32'h00c && !io_write;
     wire [31:0] io_bank = io_address - 32'h510;
     wire  io_display = io_address >= 32'h510 && io_address < 32'h548;
-    logic [31:0] identity, display_result;
-    logic display_error;
+    wire [31:0] io_cursor_bank = io_address - 32'h410;
+    wire  io_cursor = io_address >= 32'h410 && io_address < 32'h448;
+    wire  io_pointer = (io_address == 32'h300 || io_address == 32'h304) && !io_write;
+    logic [31:0] identity, display_result, cursor_result;
+    logic display_error, cursor_error;
+    /* verilator lint_off PINCONNECTEMPTY */
+    display #(.MAX_WIDTH(16), .MAX_HEIGHT(16)) cursor (
+        .clk_i, .rst_i, .valid_i(io_valid && io_ready && io_cursor), .write_i(io_write),
+        .offset_i(io_cursor_bank[5:0]), .data_i(io_data), .result_o(cursor_result),
+        .error_o(cursor_error),
+        .video_clk_i, .x_i(10'd0), .y_i(10'd0), .visible_o(), .inside_o(), .rgb_o());
+    /* verilator lint_on PINCONNECTEMPTY */
     always_comb unique case (io_address[3:2])
         2'd0: identity = 32'h524b494f;       // "RKIO"
         2'd1: identity = 32'h00010001;
@@ -245,8 +268,10 @@ module rekursiv_system #(
             for (int i = 0; i < 8; i++) debug_o[i] <= '0;
         end else if (io_valid && io_ready) begin
             io_pending <= 1'b1;
-            io_error   <= io_display ? display_error : !(io_debug || io_identity);
-            io_result  <= io_display ? display_result : io_identity ? identity :
+            io_error   <= io_display ? display_error : io_cursor ? cursor_error :
+                          !(io_debug || io_identity || io_pointer);
+            io_result  <= io_display ? display_result : io_cursor ? cursor_result :
+                          io_identity ? identity : io_pointer ? 32'd0 :
                           io_write ? 32'd0 : debug_o[io_address[4:2]];
             if (io_write && io_debug) debug_o[io_address[4:2]] <= io_data;
         end else if (io_response && io_response_ready) io_pending <= 1'b0;

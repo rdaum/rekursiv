@@ -68,12 +68,23 @@ pub fn smalltalk_with_pager(
     memory_words: usize,
     pager_entries: usize,
 ) -> Result<Loaded> {
-    load_smalltalk(bytes, memory_words, pager_entries, true)
+    smalltalk_with_display(bytes, memory_words, pager_entries, DEFAULT_DISPLAY_SIZE)
+}
+
+/// As [`smalltalk_with_pager`], with the guest's display configured to
+/// `display` pixels, for a device smaller than the default.
+pub fn smalltalk_with_display(
+    bytes: &[u8],
+    memory_words: usize,
+    pager_entries: usize,
+    display: (u32, u32),
+) -> Result<Loaded> {
+    load_smalltalk(bytes, memory_words, pager_entries, Some(display))
 }
 
 /// Preserve the saved display and 16-entry RTL test configuration for trace comparisons.
 pub fn smalltalk_saved_display(bytes: &[u8], memory_words: usize) -> Result<Loaded> {
-    load_smalltalk(bytes, memory_words, 16, false)
+    load_smalltalk(bytes, memory_words, 16, None)
 }
 
 pub fn validate_pager_entries(entries: usize) -> Result<()> {
@@ -88,7 +99,7 @@ fn load_smalltalk(
     bytes: &[u8],
     memory_words: usize,
     pager_entries: usize,
-    configure_display: bool,
+    display: Option<(u32, u32)>,
 ) -> Result<Loaded> {
     validate_pager_entries(pager_entries)?;
     ensure!(
@@ -97,8 +108,8 @@ fn load_smalltalk(
     );
     let mut source = source::Image::parse(bytes)?;
     let context = source.initial_context()?;
-    if configure_display {
-        configure_saved_display(&mut source, context)?;
+    if let Some(display) = display {
+        configure_saved_display(&mut source, context, display)?;
     }
     let converted = target::Image::convert(&source, &layout::BOOT_ROOTS)?;
     converted.verify_against(&source)?;
@@ -166,8 +177,11 @@ fn load_smalltalk(
 /// DisplayScreen displayHeight: height, which takes the width from Display.
 /// Set those two inputs; the guest still allocates/registers its full display
 /// and restores the desktop through its own displayExtent: implementation.
-fn configure_saved_display(source: &mut source::Image, context: u16) -> Result<()> {
-    let (width, height) = DEFAULT_DISPLAY_SIZE;
+fn configure_saved_display(
+    source: &mut source::Image,
+    context: u16,
+    (width, height): (u32, u32),
+) -> Result<()> {
     let saved = source.objects.get_mut(&context).unwrap();
     ensure!(
         saved.pointer(layout::context::METHOD_OR_ARGUMENT_COUNT)? == 0x6b64
