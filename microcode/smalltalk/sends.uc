@@ -406,7 +406,8 @@ activate:
     seq=ConditionalJump, cc=Zero, brch=context_size
     d=39, r=Bus, rb=6, ldrb
 context_size:
-    ra=6, s=Branch, brch=7, alu=Sub, cin=One, ldq
+    ; R14 becomes the new frame's stack capacity; activation keeps it.
+    ra=6, s=Branch, brch=7, alu=Sub, cin=One, ldq, rb=14, ldrb
     d=Q, r=Bus, s=Register, rb=4, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Sign, brch=bad_state
     ; Count this activation as recyclable; see "Context recycling" below.
