@@ -31,7 +31,8 @@
 ; ESTK is a private rooted frame during this primitive (SP=31). Slot 0 is
 ; validation scratch. 1..3 Forms; 4 rule; 5..14 the ten rectangle fields;
 ; 15/16 destination/source strides; 17..20 Form dimensions; 21 staged source;
-; 22 words/row; 23 first destination word; 24 pass (1 direct, 2 snapshot); 25/26 edge masks;
+; 22 words/row; 23 first destination word; 24 pass (1 general direct, 2 snapshot,
+; 5/6/7 draw loop forward/bottom-up/right-to-left); 25/26 edge masks;
 ; 27/28 saved IP/SP; 29 failure continuation; 30 Form validation continuation;
 ; 31 staged word count. VR0..2 retain caller state, VR6 receiver, VR7 method.
 ; VR3/4/5 hold destination/source/halftone bitmaps. No reference lives solely
@@ -368,16 +369,242 @@ bb_stage_next:
     seq=ConditionalJump, cc=Zero, brch=bb_refresh
     seq=Jump, brch=bb_staged
 bb_preflight_done:
-    ; Compare storage identities, not Form identities. This also covers a
-    ; halftone sharing destination storage. Nonaliasing copies need no object.
+    ; Compare storage identities, not Form identities. A halftone sharing the
+    ; destination's storage, or a source sharing it with a different stride,
+    ; is staged through a temporary object (pass 2). A copy without a source
+    ; uses the general direct pass (1). Every other copy uses the draw loop
+    ; below, in an order that needs no staging (passes 5, 6 and 7).
+    read=Vr, vr=3
+    d=Object, ldsym
+    read=Vr, vr=5
+    d=Object, seq=ConditionalJump, cc=Symbol, brch=bb_stage_allocate
+    d=NIL, ldsym
+    read=Vr, vr=4
+    d=Object, seq=ConditionalJump, cc=Symbol, brch=bb_general_direct
     read=Vr, vr=3
     d=Object, ldsym
     read=Vr, vr=4
-    d=Object, seq=ConditionalJump, cc=Symbol, brch=bb_stage_allocate
-    read=Vr, vr=5
-    d=Object, seq=ConditionalJump, cc=Symbol, brch=bb_stage_allocate
+    d=Object, seq=ConditionalJump, cc=!Symbol, brch=bb_draw_forward
+    d=15, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=2, ldrb
+    d=16, esp=Bus
+    estk=Read
+    ra=2, s=Bus, d=Estk, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_stage_allocate
+    ; Shared storage and stride. A source above the destination is copied
+    ; bottom-up; on the same rows, a source to the left is copied right to
+    ; left. Slot 9 is the first source column, slot 23 the first destination
+    ; word: the source is to the left exactly when slot 9 < slot 23.
+    d=10, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=2, ldrb
+    d=6, esp=Bus
+    estk=Read
+    ra=2, s=Bus, d=Estk, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Sign, brch=bb_draw_up
+    seq=ConditionalJump, cc=!Zero, brch=bb_draw_forward
+    d=9, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=2, ldrb
+    d=23, esp=Bus
+    estk=Read
+    ra=2, s=Bus, d=Estk, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Sign, brch=bb_draw_back
+bb_draw_forward:
+    d=24, esp=Bus
+    d=5, estk=Bus, seq=Jump, brch=bb_draw_start
+bb_draw_up:
+    d=24, esp=Bus
+    d=6, estk=Bus, seq=Jump, brch=bb_draw_start
+bb_draw_back:
+    d=24, esp=Bus
+    d=7, estk=Bus, seq=Jump, brch=bb_draw_start
+bb_general_direct:
     d=24, esp=Bus
     d=1, estk=Bus, seq=Jump, brch=bb_pass_start
+
+; The draw loop. Each source word is read once and carried in R10 as half of
+; the next window. Registers: R0 destination component of the row's first
+; word, R1 source row offset, R6 words per row, R7 rule address, R8 row,
+; R9 word, R11 source column, R12 source row width in words, R13 alignment,
+; R14 halftone word, R15 continuation after each write. bb_merged/bb_write
+; are shared with the general passes and return through R15.
+bb_draw_start:
+    d=24, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, s=Branch, brch=6, alu=Sub, cin=One, flags
+    d=0, r=Bus, rb=8, ldrb
+    seq=ConditionalJump, cc=!Zero, brch=bb_draw_row
+    d=8, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, s=Branch, brch=1, alu=Sub, cin=One, rb=8, ldrb
+bb_draw_row:
+    d=6, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=2, ldrb
+    ra=8, rb=2, alu=Add, ldq, ldrb
+    d=15, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=3, ldrb
+    ra=2, rb=3, alu=MultiplyUnsigned
+    alu=ProductLow, rb=0, ldrb
+    d=23, esp=Bus
+    estk=Read
+    ra=0, s=Bus, d=Estk, alu=Add, rb=0, ldrb
+    ra=0, s=Branch, brch=2, alu=Add, rb=0, ldrb
+    d=10, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=2, ldrb
+    ra=8, rb=2, alu=Add, ldq, ldrb
+    d=16, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=12, ldrb
+    ra=2, rb=12, alu=MultiplyUnsigned
+    alu=ProductLow, rb=1, ldrb
+    ; Halftone word for this row, all ones without a halftone.
+    d=6, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=2, ldrb
+    ra=2, rb=8, alu=Add, ldq
+    r=Q, s=Branch, brch=15, alu=And, rb=2, ldrb
+    ra=2, s=Branch, brch=2, alu=Add, rb=2, ldrb
+    d=65535, r=Bus, rb=14, ldrb
+    d=NIL, ldsym
+    read=Vr, vr=5
+    d=Object, seq=ConditionalJump, cc=Symbol, brch=bb_draw_invariants
+    d=Object, page=Fetch
+    d=Register, ra=2, idx=Load
+    mem=Read
+    d=Object, r=Bus, rb=14, ldrb
+bb_draw_invariants:
+    d=0, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=13, ldrb
+    d=22, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=6, ldrb
+    d=4, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=7, ldrb
+    d=24, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, s=Branch, brch=7, alu=Sub, cin=One, flags
+    d=9, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=11, ldrb
+    seq=ConditionalJump, cc=Zero, brch=bb_back_row
+    ; Left to right: carry the first word's left half, then read rightward.
+    d=0, r=Bus, rb=9, ldrb
+    d=bb_draw_next, r=Bus, rb=15, ldrb
+    d=bb_draw_word, r=Bus, rb=5, ldrb, seq=Jump, brch=bb_draw_load
+bb_back_row:
+    ; Right to left: carry the last word's right half, then read leftward.
+    ra=6, s=Branch, brch=1, alu=Sub, cin=One, rb=9, ldrb
+    ra=6, rb=11, alu=Add, ldrb
+    d=bb_back_next, r=Bus, rb=15, ldrb
+    d=bb_back_first, r=Bus, rb=5, ldrb, seq=Jump, brch=bb_draw_load
+bb_back_first:
+    ra=11, s=Bus, d=1, alu=Sub, cin=One, rb=11, ldrb, seq=Jump, brch=bb_back_word
+
+; R10 = source word at column R11, zero outside the row. Returns via R5.
+bb_draw_load:
+    d=0, r=Bus, rb=10, ldrb
+    ra=11, flags
+    seq=ConditionalJump, cc=Sign, brch=bb_draw_loaded
+    ra=11, rb=12, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Carry, brch=bb_draw_loaded
+    read=Vr, vr=4
+    d=Object, page=Fetch, ra=1, rb=11, alu=Add, ldq
+    r=Q, s=Branch, brch=2, alu=Add, ldq
+    d=Q, idx=Load
+    mem=Read
+    d=Object, r=Bus, rb=10, ldrb
+    ra=10, s=Bus, d=65535, alu=And, rb=10, ldrb
+bb_draw_loaded:
+    d=Register, ra=5, seq=Bus
+
+bb_draw_word:
+    ; The next source word, at column R11+1, completes this word's window.
+    ra=11, s=Branch, brch=1, alu=Add, rb=11, ldrb
+    d=0, r=Bus, rb=2, ldrb
+    ra=11, flags
+    seq=ConditionalJump, cc=Sign, brch=bb_draw_window
+    ra=11, rb=12, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Carry, brch=bb_draw_window
+    read=Vr, vr=4
+    d=Object, page=Fetch, ra=1, rb=11, alu=Add, ldq
+    r=Q, s=Branch, brch=2, alu=Add, ldq
+    d=Q, idx=Load
+    mem=Read
+    d=Object, r=Bus, rb=2, ldrb
+    ra=2, s=Bus, d=65535, alu=And, rb=2, ldrb
+bb_draw_window:
+    ra=10, s=Branch, brch=16, alu=Rotate, ldq
+    r=Q, rb=2, alu=Or, ldq
+    ra=2, rb=10, ldrb, seq=Jump, brch=bb_draw_merge
+
+bb_back_word:
+    ; The source word at column R11 completes this word's window on the left.
+    d=0, r=Bus, rb=2, ldrb
+    ra=11, flags
+    seq=ConditionalJump, cc=Sign, brch=bb_back_window
+    ra=11, rb=12, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Carry, brch=bb_back_window
+    read=Vr, vr=4
+    d=Object, page=Fetch, ra=1, rb=11, alu=Add, ldq
+    r=Q, s=Branch, brch=2, alu=Add, ldq
+    d=Q, idx=Load
+    mem=Read
+    d=Object, r=Bus, rb=2, ldrb
+    ra=2, s=Bus, d=65535, alu=And, rb=2, ldrb
+bb_back_window:
+    ra=2, s=Branch, brch=16, alu=Rotate, ldq
+    r=Q, rb=10, alu=Or, ldq
+    ra=2, rb=10, ldrb
+    ra=11, s=Branch, brch=1, alu=Sub, cin=One, rb=11, ldrb
+
+; Q is the 32-bit window. Rotate by the alignment, take the high half, apply
+; the halftone, read the destination word, and enter the rule.
+bb_draw_merge:
+    r=Q, rb=13, alu=Rotate, ldq
+    r=Q, s=Branch, brch=16, alu=Rotate, rb=2, ldrb
+    ra=2, s=Bus, d=65535, alu=And, rb=2, ldrb
+    ra=14, rb=2, alu=And, ldrb
+    ra=0, rb=9, alu=Add, ldq, read=Vr, vr=3
+    d=Object, page=Fetch
+    d=Q, idx=Load, prepare
+    mem=Read, prepared
+    d=Object, r=Bus, rb=3, ldrb
+    d=Register, ra=7, seq=Bus
+
+bb_draw_continue:
+    d=Register, ra=15, seq=Bus
+bb_draw_next:
+    ra=9, s=Branch, brch=1, alu=Add, rb=9, ldrb
+    ra=9, rb=6, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_draw_word
+    seq=Jump, brch=bb_draw_row_next
+bb_back_next:
+    ra=9, flags
+    seq=ConditionalJump, cc=Zero, brch=bb_draw_row_next
+    ra=9, s=Bus, d=1, alu=Sub, cin=One, rb=9, ldrb, seq=Jump, brch=bb_back_word
+bb_draw_row_next:
+    d=24, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, s=Branch, brch=6, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=Zero, brch=bb_draw_row_up
+    ra=8, s=Branch, brch=1, alu=Add, rb=8, ldrb
+    d=8, esp=Bus
+    estk=Read
+    d=Estk, r=Bus, rb=2, ldrb
+    ra=8, rb=2, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Zero, brch=bb_draw_row
+    seq=Jump, brch=bb_refresh
+bb_draw_row_up:
+    ra=8, flags
+    seq=ConditionalJump, cc=Zero, brch=bb_refresh
+    ra=8, s=Bus, d=1, alu=Sub, cin=One, rb=8, ldrb, seq=Jump, brch=bb_draw_row
 bb_stage_allocate:
     d=24, esp=Bus
     d=2, estk=Bus
@@ -535,11 +762,12 @@ bb_first_mask:
     estk=Read
     d=Estk, r=Bus, s=Branch, brch=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=!Zero, brch=bb_masked
-    ; A one-word rectangle must honor both edge masks.
+    ; A one-word rectangle must honor both edge masks. R6 stays the word
+    ; count, which the draw loop keeps there.
     d=26, esp=Bus
     estk=Read
-    d=Estk, r=Bus, rb=6, ldrb
-    ra=6, rb=5, alu=And, ldq, ldrb
+    d=Estk, r=Bus, rb=2, ldrb
+    ra=2, rb=5, alu=And, ldq, ldrb
 bb_masked:
     ; D XOR ((new XOR D) AND writeMask) preserves untouched edge pixels.
     ra=4, rb=3, alu=Xor, ldq
@@ -552,6 +780,8 @@ bb_write:
     d=Q, mem=Write, prepared, launch
     d=24, esp=Bus
     estk=Read
+    d=Estk, r=Bus, s=Branch, brch=5, alu=Sub, cin=One, flags
+    seq=ConditionalJump, cc=!Sign, brch=bb_draw_continue
     d=Estk, r=Bus, s=Branch, brch=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=bb_stage_next
     ra=10, s=Branch, brch=1, alu=Add, rb=10, ldrb
