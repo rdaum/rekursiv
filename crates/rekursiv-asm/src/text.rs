@@ -277,6 +277,7 @@ fn instruction(
             "halt" => i.halt = flag()?,
             "ldsym" => i.symbol = flag()?,
             "ldroot" => i.write_root = flag()?,
+            "pend" => i.pending = enumeration(line, value)?,
             "launch" => i.object_async = flag()?,
             "ldmark" => i.mark = flag()?,
             "ldrb" => i.write_register = flag()?,

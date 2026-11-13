@@ -397,6 +397,7 @@ impl Emit<'_> {
             Register::Increment => self.b.ins().iadd_imm_s(old_reg, 1),
             Register::Decrement => self.b.ins().iadd_imm_s(old_reg, -1),
             Register::FromIndex => old_index,
+            Register::WordThreshold | Register::IdentityThreshold => old_reg,
         };
         self.index_check(reg);
         let mut output = self.constant(Word::NIL.bits() as i64);

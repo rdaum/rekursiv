@@ -113,7 +113,7 @@ module rekursiv_system #(
     logic [23:0] alloc_size;
     logic [39:0] data, expected_type, rsp_data;
 
-    logic io_valid, io_ready, io_write, io_response, io_response_ready, io_error, irq;
+    logic io_valid, io_ready, io_write, io_response, io_response_ready, io_error, irq, low_space;
     logic [31:0] io_address, io_data, io_result;
 
     logic mem_valid, mem_ready, mem_write, mem_rsp_valid, mem_rsp_ready, mem_rsp_error;
@@ -140,6 +140,7 @@ module rekursiv_system #(
         .gc_status_i(gc_status), .gc_result_i(gc_result),
         .gc_committed_i(gc_committed), .last_status_o(),
         .start_i(start), .entry_i(record[15:0]), .resume_i(1'b0), .irq_i(irq),
+        .low_space_i(low_space), .pending_o(),
         .halted_o, .service_o, .service_code_o(), .fault_o, .retire_o(),
         .cmd_valid_o(cmd_valid), .cmd_ready_i(cmd_ready),
         .pager_o(pager), .index_o(index), .register_o(register), .memory_o(memory),
@@ -163,7 +164,7 @@ module rekursiv_system #(
     );
 
     objekt #(.PAGER_BITS(PAGER_BITS), .MEMORY_WORDS(MEMORY_WORDS), .DEBUG_PORT(0)) core (
-        .clk_i, .rst_i, .run_i(!halted_o),
+        .clk_i, .rst_i, .run_i(!halted_o), .low_space_o(low_space),
         .gc_enable_i(gc_enable), .gc_active_i(gc_active), .gc_explicit_i(gc_explicit),
         .gc_valid_i(gc_valid), .gc_ready_o(gc_ready), .gc_operation_i(gc_operation),
         .gc_data_i(gc_data), .gc_root_i(gc_root),

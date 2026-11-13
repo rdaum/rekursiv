@@ -32,6 +32,8 @@
 ; interrupt delivery without asking the device to preserve a guest reference.
 check_device_events:
     seq=Jump, brch=input_notifications
+input_notifications_none:
+    pend=Clear
 input_notifications_done:
     seq=ConditionalJump, cc=!Interrupt, brch=events_done
     d=0x100, r=Bus, rb=7, ldrb
@@ -113,7 +115,8 @@ primitive_input_semaphore:
     d=0xa000000013, ldsym
     d=Object, seq=ConditionalJump, cc=!Symbol, brch=primitive_failed
 input_semaphore_store:
-    d=27, r=Bus, rb=7, ldrb
+    ; Words queued before this registration can now be signalled.
+    d=27, r=Bus, rb=7, ldrb, pend=Set
     read=Vr, vr=3
     ra=7, d=Object, ldroot
     read=Vr, vr=6

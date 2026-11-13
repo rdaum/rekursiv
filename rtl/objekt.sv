@@ -40,6 +40,10 @@ module objekt #(
     output logic gc_response_o, input logic gc_response_ready_i,
     output logic [3:0] gc_status_o, output logic [39:0] gc_result_o,
     output logic gc_committed_o,
+    // High while free words or free identities are below the threshold
+    // that a threshold command loaded. Registered: it follows a change in
+    // either count or threshold by one cycle.
+    output logic low_space_o,
     input logic cmd_valid_i, output logic cmd_ready_o,
     input logic [3:0] pager_i, input logic [3:0] index_i,
     input logic [2:0] register_i, input logic [1:0] memory_i,
@@ -143,6 +147,10 @@ module objekt #(
     wire [24:0] free_words = dbg_body_cursor_o < allocation_limit
         ? allocation_limit - dbg_body_cursor_o : 25'd0;
     wire [37:0] free_identities = 38'h2000000000 - dbg_next_identity_o;
+    // Low-space thresholds; zero disables one.
+    logic [39:0] word_threshold, identity_threshold;
+    always_ff @(posedge clk_i) low_space_o <= !rst_i &&
+        ({15'b0,free_words} < word_threshold || {2'b0,free_identities} < identity_threshold);
 
     // A command that pages a key waits one cycle for the table. Its fields
     // are held here, since the issuer may change them after acceptance.
@@ -523,7 +531,8 @@ module objekt #(
         next_idx_wide={idx[39],idx}; next_reg_wide={idxreg[39],idxreg};
         result_data=NIL; need_memory=0; address_wide=0;
         needs_old=(c_read>=3 && c_read<=6) || c_read==9 || c_check_type || (c_memory!=0 && !c_prepared);
-        if(c_pager>9 || c_index>9 || c_register>4 || c_memory>2 || c_read>11 ||
+        if(c_pager>9 || c_index>9 || c_register>6 || c_memory>2 || c_read>11 ||
+           (c_register>4 && (c_pager!=0 || c_index!=0 || c_memory!=0 || c_read!=0 || c_load_vr || c_check_type || c_prepare || c_prepared)) ||
            (c_pager!=0 && c_memory!=0 && !c_prepared) || (c_pager!=0 && c_index==8) || (c_memory!=0 && c_read!=0) || (c_prepared && c_memory==0)) error=BAD_COMMAND;
         else if((c_pager>=5 && c_pager<=9) && (c_index!=0 || c_register!=0 || c_memory!=0 || c_read!=0 || c_load_vr || c_check_type || c_prepare || c_prepared)) error=BAD_COMMAND;
         else if((c_pager==8 || c_pager==9) && !is_ref(c_data) && c_data[39:37]!=0) error=BAD_VALUE;
@@ -658,6 +667,7 @@ module objekt #(
     always_ff @(posedge clk_i) begin
         if(rst_i) begin
             phase<=CLEAR; clear_slot<='0; eviction_permitted<=0;
+            word_threshold<=0; identity_threshold<=0;
             maintenance<=0; class_valid<=0; selected<=0; snapshot<=0;
             selected_live<=0; selected_persistent<=0; prepared_entry<=0; prepared_persistent<=0;
             prepared_access.reference<=NIL; prepared_access.index<=0; prepared_access.address<=0; prepared_access.status<=NO_SELECTION;
@@ -758,6 +768,8 @@ module objekt #(
                             prepared_access<=next_prepared;
                             prepared_entry<=next_prepared_entry; prepared_persistent<=next_prepared_persistent;
                             if(c_load_vr) vr[c_vr]<=c_data;
+                            if(c_register==5) word_threshold<=c_data;
+                            if(c_register==6) identity_threshold<=c_data;
                             phase<=RESPONSE;
                         end
                     end else if(accept) begin

@@ -351,6 +351,9 @@ impl Jit {
         let mut tables = self.tables();
         tables.roots = cpu.roots.as_mut().unwrap().as_mut_ptr();
         tables.irq = u8::from(devices.events.as_ref().is_some_and(|e| e.status() != 0));
+        // Native regions cannot allocate, refill, collect or load a threshold,
+        // so the low-space line holds for the whole region.
+        cpu.low_space = objekt.low_space();
         let view = native_objekt::MemoryView::new(objekt);
         // A chain stays entirely inside a quiet device interval. Resident
         // regions cannot launch asynchronous work, refill, allocate or collect.

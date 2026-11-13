@@ -17,7 +17,13 @@ macro_rules! field {
 }
 field!(Bus { Immediate=0, Estk=1, Cstk=2, Object=3, Register=4, Apc=5, Ap=6, Sp=7, Namarg=8, Upcor=9, Q=10, Symbol=11, SymbolHigh=12, Device=13, Root=14 });
 field!(Seq { Continue=0, Hold=1, Jump=2, ConditionalJump=3, Relative=4, ConditionalRelative=5, Bus=6, ConditionalBus=7, Return=8, ConditionalReturn=9, Dispatch=10, ConditionalDispatch=11, ConditionalMark=12, TwoWay=13, SavedReturn=14, Service=15 });
-field!(Condition { Always=0, Zero=1, Sign=2, Carry=3, Overflow=4, CorrectedSign=5, Symbol=6, Last=7, ControlZero=8, ObjectOk=9, Interrupt=10 });
+// LowSpace is OBJEKT's low-space line: free words or free identities are
+// below a threshold that microcode loaded. Pending is the processor's
+// pending flag, which microcode sets and clears.
+field!(Condition { Always=0, Zero=1, Sign=2, Carry=3, Overflow=4, CorrectedSign=5, Symbol=6, Last=7, ControlZero=8, ObjectOk=9, Interrupt=10, LowSpace=11, Pending=12 });
+// The pending flag marks work that microcode has deferred to an instruction
+// boundary, so the boundary can test for it without reading memory.
+field!(Pending { None=0, Set=1, Clear=2 });
 field!(Alu { Pass=0, Add=1, Sub=2, SubReverse=3, And=4, Or=5, Xor=6, Not=7, Rotate=8, MultiplySigned=9, MultiplyUnsigned=10, ProductHigh=11, ProductLow=12, Float=13, FloatStatus=14 });
 // Numeric operations are independent of language primitive numbers.
 field!(FloatOp { Add=0, Subtract=1, Multiply=2, Divide=3, Sqrt=4, Compare=5, FromSigned=6, ToSigned=7, FromUnsigned=8, ToUnsigned=9 });
@@ -84,6 +90,8 @@ pub struct Instruction {
     pub recovery: Recovery,
     /// Allocation size comes from register A; the D bus still supplies the class.
     pub allocation_dynamic: bool,
+    /// Set or clear the pending flag at retirement.
+    pub pending: Pending,
 }
 impl Instruction {
     /// Instructions that must observe a completed asynchronous OBJEKT command.
@@ -234,6 +242,7 @@ impl Instruction {
         put(226, 1, self.write_root as u64);
         put(229, 1, self.object_async as u64);
         put(230, 1, self.precision as u64);
+        put(231, 2, self.pending as u64);
         Ok(words)
     }
 }

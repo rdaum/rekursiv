@@ -38,6 +38,13 @@ pub struct Processor {
     pub halted: bool,
     pub service: bool,
     pub service_code: u8,
+    /// The pending flag: microcode sets and clears it and tests it with the
+    /// Pending condition.
+    pub pending: bool,
+    /// OBJEKT's low-space line as the LowSpace condition sees it. An executor
+    /// copies it from the object model before each instruction; it is an
+    /// input, not state that instructions write.
+    pub low_space: bool,
 }
 impl Default for Processor {
     fn default() -> Self {
@@ -70,6 +77,8 @@ impl Default for Processor {
             halted: false,
             service: false,
             service_code: 0,
+            pending: false,
+            low_space: false,
         }
     }
 }
@@ -180,6 +189,7 @@ pub struct PendingWrites {
     flags: u8,
     fp_flags: u8,
     lastcc: bool,
+    pending: bool,
     opcode: usize,
     namarg: u32,
     halted: bool,
@@ -213,6 +223,7 @@ impl PendingWrites {
             flags: cpu.flags,
             fp_flags: cpu.fp_flags,
             lastcc: cpu.lastcc,
+            pending: cpu.pending,
             opcode: cpu.opcode,
             namarg: cpu.namarg,
             halted: cpu.halted,
@@ -253,6 +264,7 @@ impl PendingWrites {
         cpu.flags = self.flags;
         cpu.fp_flags = self.fp_flags;
         cpu.lastcc = self.lastcc;
+        cpu.pending = self.pending;
         cpu.opcode = self.opcode;
         cpu.namarg = self.namarg;
         cpu.halted = self.halted;
@@ -477,6 +489,8 @@ impl Processor {
             Condition::ControlZero => self.cstkr == 0,
             Condition::ObjectOk => true,
             Condition::Interrupt => irq,
+            Condition::LowSpace => self.low_space,
+            Condition::Pending => self.pending,
         }) ^ i.invert;
         let sequential = self.pc as i64 + 1;
         let mut target = sequential;
@@ -609,6 +623,11 @@ impl Processor {
             n.symbol = d;
         }
         n.lastcc = cc;
+        match i.pending {
+            Pending::Set => n.pending = true,
+            Pending::Clear => n.pending = false,
+            Pending::None => {}
+        }
         if i.write_register {
             n.register = Some((i.rb as usize, y));
         }

@@ -294,6 +294,8 @@ impl Emit<'_> {
                 self.b.ins().icmp_imm_s(IntCC::Equal, v, 0)
             }
             Condition::Interrupt => self.irq,
+            Condition::LowSpace => load!(self, I8, low_space),
+            Condition::Pending => load!(self, I8, pending),
             other => {
                 let mask = match other {
                     Condition::Zero => 1,

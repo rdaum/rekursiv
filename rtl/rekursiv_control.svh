@@ -32,7 +32,9 @@ typedef enum logic [3:0] {
 typedef enum logic [3:0] {
     CC_ALWAYS = 0, CC_ZERO = 1, CC_SIGN = 2, CC_CARRY = 3,
     CC_OVERFLOW = 4, CC_CORRECTED_SIGN = 5, CC_SYMBOL = 6,
-    CC_LAST = 7, CC_CONTROL_ZERO = 8, CC_OBJECT_OK = 9, CC_INTERRUPT = 10
+    CC_LAST = 7, CC_CONTROL_ZERO = 8, CC_OBJECT_OK = 9, CC_INTERRUPT = 10,
+    // OBJEKT's low-space line, and the microcode-owned pending flag.
+    CC_LOW_SPACE = 11, CC_PENDING = 12
 } condition_t;
 
 typedef enum logic [3:0] {
@@ -94,7 +96,8 @@ typedef struct packed {
 // Declarations run from most significant bit to least significant bit.
 // Reserved fields must be zero; rejecting them avoids silent image corruption.
 typedef struct packed {
-    logic [24:0] reserved_high;        // 255:231
+    logic [22:0] reserved_high;        // 255:233
+    logic [1:0] pending;              // 232:231: none/set/clear the pending flag
     logic fp64;                       // 230: even/odd numeric register pairs
     logic object_async;               // 229
     logic object_prepared;            // 228

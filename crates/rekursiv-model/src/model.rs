@@ -38,6 +38,12 @@ pub struct Model {
     pub persistent_roots: Vec<bool>,
     /// Maintenance lock. Normal object commands are rejected while it is set.
     pub maintenance: bool,
+    /// Low-space thresholds, loaded by threshold commands. The low-space
+    /// line is high while free words or free identities are below their
+    /// threshold. Zero disables a threshold.
+    pub word_threshold: u64,
+    /// The identity threshold; see `word_threshold`.
+    pub identity_threshold: u64,
     /// Set by an executor that has a collector. Allocation into a full pager
     /// then reports `OutOfSpace` so the collector can drop unreachable
     /// mappings, instead of saving a victim that may be garbage.
@@ -83,6 +89,8 @@ impl Model {
             next_identity: 1,
             body_cursor: 0,
             allocation_limit: memory_words as u32,
+            word_threshold: 0,
+            identity_threshold: 0,
             collect_before_evict: false,
             eviction_permitted: false,
             persistent_roots: vec![false; pager_entries],
@@ -95,5 +103,17 @@ impl Model {
     /// mappings. Allocation again starts at RAM word zero and identity one.
     pub fn reset(&mut self) {
         *self = Self::new(self.entries.len(), self.memory.len());
+    }
+    /// Words still free in the current allocation region.
+    pub fn free_words(&self) -> u64 {
+        u64::from(self.allocation_limit.saturating_sub(self.body_cursor))
+    }
+    /// Identities not yet issued.
+    pub fn free_identities(&self) -> u64 {
+        (rekursiv_asm::ID_MASK + 1).saturating_sub(self.next_identity)
+    }
+    /// The low-space line LOGIK tests with the LowSpace condition.
+    pub fn low_space(&self) -> bool {
+        self.free_words() < self.word_threshold || self.free_identities() < self.identity_threshold
     }
 }

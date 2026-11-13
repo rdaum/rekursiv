@@ -58,7 +58,7 @@ microinstructions use the separate 256-bit encoding in the processor section.
 | ----------------- | ----: | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `pager_i`         |     4 | None=0, ProbeBus=1, ProbeVr=2, ProbeType=3, ProbeRepresentation=4, Fetch=5, Allocate=6, Exchange=7, NextObject=8, FindObject=9     |
 | `index_i`         |     4 | None=0, Load=1, Clear=2, One=3, Two=4, Increment=5, Decrement=6, Step=7, Next=8, FromReg=9                                         |
-| `register_i`      |     3 | None=0, Load=1, Increment=2, Decrement=3, FromIndex=4                                                                              |
+| `register_i`      |     3 | None=0, Load=1, Increment=2, Decrement=3, FromIndex=4, WordThreshold=5, IdentityThreshold=6                                        |
 | `memory_i`        |     2 | None=0, Read=1, Write=2                                                                                                            |
 | `prepare_i`       |     1 | Prepare an address from the old selection and new index                                                                            |
 | `prepared_i`      |     1 | Use the previous prepared address for this memory operation                                                                        |
@@ -127,6 +127,16 @@ collection enabled, this excludes the inactive semispace and ranges awaiting rec
 `FreeIdentities` is `2^37 - next_identity`; exhaustion returns zero without wrapping. Both include
 reservations retained after failed transfers. Reads report the allocator state at command
 acceptance.
+
+OBJEKT also compares both counts against two thresholds and drives a low-space line while
+`FreeWords` is below the word threshold or `FreeIdentities` is below the identity threshold. The
+comparison is strict, and a zero threshold never matches, so reset leaves the line low.
+`Register::WordThreshold` and `Register::IdentityThreshold` load a threshold from the 40-bit data
+word. They do not change the index register, and each must be a command's only operation. LOGIK
+tests the line with the `LowSpace` condition. A runtime can therefore learn that space is short
+without reading either count: it loads its thresholds once and tests one condition at each
+instruction boundary. The line follows a change in a count or a threshold by one cycle, which is
+before the instruction after the command that caused it.
 
 ## Prepared-address pipeline
 
@@ -599,7 +609,8 @@ The packed word is 256 bits. The exact symbolic values are defined in `rekursiv_
 | 228                       | Memory operation uses the previous prepared address                  |
 | 229                       | Launch prepared memory command without waiting for its reply         |
 | 230                       | Binary64 precision for Float; even register pairs, result in PRODUCT |
-| 94, 98, 113, 255:231      | Reserved; must be zero                                               |
+| 232:231                   | Pending flag: none (0), set (1), clear (2)                           |
+| 94, 98, 113, 255:233      | Reserved; must be zero                                               |
 
 Invalid selectors and reserved bits halt execution before an OBJEKT command can issue. The literal
 field supplies D unless another source is selected. Other sources include cached stack values, the
@@ -655,9 +666,9 @@ memory request. It does not queue multiple RAM requests or overlap pager misses.
 The selected condition stays fixed throughout command issue and response waiting. IRQ is a
 synchronous input and cannot redirect an already prepared object instruction. Conditions include
 registered arithmetic flags, full-width symbol equality, control-stack zero, previous condition,
-object success, and IRQ. Inversion applies to the selected condition. `LASTCC` records that
-selected, inverted condition at retirement. An instruction that writes flags still branches using
-the previous flags.
+object success, IRQ, OBJEKT's low-space line, and the pending flag. Inversion applies to the
+selected condition. `LASTCC` records that selected, inverted condition at retirement. An instruction
+that writes flags still branches using the previous flags.
 
 OBJEKT response data becomes a source for the following instruction. Other simultaneous destinations
 use the old D bus. With recovery enabled, Allocate or Fetch `OUT_OF_SPACE` enters the loaded

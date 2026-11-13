@@ -33,6 +33,10 @@ module logik #(
     input logic [3:0] gc_status_i, input logic [39:0] gc_result_i,
     input logic gc_committed_i, output logic [3:0] last_status_o,
     input logic start_i, input logic [15:0] entry_i, input logic resume_i, input logic irq_i,
+    // OBJEKT's low-space line, tested by the LowSpace condition.
+    input logic low_space_i,
+    // The pending flag: set and cleared by microcode, tested by the Pending condition.
+    output logic pending_o,
     output logic halted_o, output logic service_o, output logic [3:0] service_code_o,
     output logic [3:0] fault_o, output logic retire_o,
     output logic cmd_valid_o, input logic cmd_ready_i,
@@ -217,6 +221,7 @@ module logik #(
         .load_mark_i(instruction.load_mark), .branch_i(instruction.branch),
         .dispatch_i(ucar_o), .control_top_i(cstkr_o), .bus_i(bus_value), .symbol_i(symbol),
         .flags_i(flags_o), .object_ok_i(object_status == 0), .irq_i(irq_i),
+        .low_space_i(low_space_i), .pending_i(pending_o),
         .use_issued_condition_i(state == ISSUE || state == WAIT_RESPONSE || state == NUMERIC_WAIT || state == DEVICE_WAIT || (!gc_active_o && retried)),
         .issued_condition_i((!gc_active_o && retried) ? saved_issued_condition : issued_condition), .condition_o(condition_value),
         .target_fault_o(target_fault), .pc_o(pc_o), .next_pc_o(next_pc), .upcor_o(upcor_o), .mark_o(mark_o),
@@ -255,7 +260,8 @@ module logik #(
         if (!instruction_valid) local_fault = FAULT_CODE;
         else if (instruction.reserved_high != 0 || instruction.reserved_113 ||
             instruction.reserved_98 || instruction.reserved_94 ||
-            instruction.bus_source > BUS_ROOT || instruction.condition > CC_INTERRUPT ||
+            instruction.bus_source > BUS_ROOT || instruction.condition > CC_PENDING ||
+            instruction.pending == 2'd3 ||
             instruction.alu > ALU_FLOAT_STATUS || instruction.r_source > SOURCE_BRANCH ||
             instruction.s_source > SOURCE_BRANCH || instruction.carry > CARRY_ZERO_FLAG ||
             instruction.estk > ESTK_WIDE || instruction.cstk > CSTK_DECREMENT ||
@@ -347,6 +353,7 @@ module logik #(
     always_ff @(posedge clk_i) begin
         if (rst_i) begin
             state <= HALTED;
+            pending_o <= 1'b0;
             gc_active_o<=0; gc_explicit_o<=0; retried<=0; saved_symbol<=0; saved_object<=0; saved_bus<=0; saved_type<=0;
             saved_status<=0; saved_issued_condition<=0; last_status_o<=0;
             retire_o <= 1'b0;
@@ -393,6 +400,8 @@ module logik #(
             end
             if (retire) begin
                 if(!gc_active_o) retried<=0;
+                if (instruction.pending == 2'd1) pending_o <= 1'b1;
+                if (instruction.pending == 2'd2) pending_o <= 1'b0;
                 if (instruction.load_symbol) symbol <= bus_value;
                 // Response data becomes a source for the NEXT instruction.
                 // Other simultaneous destinations still consume the old D bus.

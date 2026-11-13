@@ -11,7 +11,12 @@ use rekursiv_model::processor::Processor;
 use std::mem::offset_of;
 
 pub(super) fn eligible(c: Command) -> bool {
-    matches!(
+    // A threshold load changes the low-space line, which native regions
+    // sample once on entry.
+    !matches!(
+        c.register,
+        rekursiv_asm::Register::WordThreshold | rekursiv_asm::Register::IdentityThreshold
+    ) && matches!(
         c.pager,
         Pager::None
             | Pager::Fetch

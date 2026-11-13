@@ -189,17 +189,21 @@ input_buffer_zero:
 ; Decrement before signalling: a higher-priority waiter may preempt this path.
 ; The saved count and the word ring survive any process switch or collection.
 input_notifications:
+    ; Buffered notifications are delivered at boundaries, even without IRQ.
+    ; The pending flag is set whenever words are queued or a semaphore is
+    ; registered, so a boundary with it clear has nothing to deliver. It is
+    ; cleared below once a check finds nothing.
+    seq=ConditionalJump, cc=!Pending, brch=input_notifications_done
     ; Compare the root bus against old SYMBOL=NIL while loading its new value.
-    ; Buffered notifications are checked at every boundary, even without IRQ.
     d=NIL, ldsym, r=Branch, brch=27, rb=7, ldrb
-    ra=7, d=Root, ldsym, ldvr, vr=6, seq=ConditionalJump, cc=Symbol, brch=input_notifications_done
+    ra=7, d=Root, ldsym, ldvr, vr=6, seq=ConditionalJump, cc=Symbol, brch=input_notifications_none
     d=NIL, ldsym, r=Branch, brch=29, rb=7, ldrb
-    ra=7, d=Root, ldsym, seq=ConditionalJump, cc=Symbol, brch=input_notifications_done
+    ra=7, d=Root, ldsym, seq=ConditionalJump, cc=Symbol, brch=input_notifications_none
     d=Symbol, page=Fetch
     d=5, idx=Load
     mem=Read
     d=Object, r=Bus, rb=0, ldrb, flags
-    seq=ConditionalJump, cc=Zero, brch=input_notifications_done
+    seq=ConditionalJump, cc=Zero, brch=input_notifications_none
     ra=0, s=Branch, brch=1, alu=Sub, cin=One, rb=0, ldrb
     ra=0, estk=Compact, compact=2
     d=Estk, mem=Write
@@ -366,7 +370,8 @@ input_packet_count:
     d=Estk, mem=Write
     ; Only complete guest words become visible. Consume the raw packet after
     ; publication, then acknowledge exactly its one physical notification.
-    d=0x324, r=Bus, rb=7, ldrb
+    ; The new words await their signals: raise the pending flag.
+    d=0x324, r=Bus, rb=7, ldrb, pend=Set
     ra=7, d=1, io=Write
     d=0x104, r=Bus, rb=7, ldrb
     ra=7, d=1, io=Write

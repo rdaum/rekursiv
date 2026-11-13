@@ -8,6 +8,8 @@ use rekursiv_emulator::{
 };
 use rekursiv_sim::{Harness, Timing};
 
+const LOW_SPACE: &str = "d=0xa000000064, page=Allocate, size=3, scan=0\nread=FreeWords\nd=Object, r=Bus, rb=1, ldrb\nd=Register, ra=1, reg=WordThreshold\nseq=ConditionalJump, cc=LowSpace, brch=bad\nd=0xa000000064, page=Allocate, size=1, scan=0\nseq=ConditionalJump, cc=!LowSpace, brch=bad\nd=0, reg=WordThreshold\nseq=ConditionalJump, cc=LowSpace, brch=bad\nread=FreeIdentities\nd=Object, reg=IdentityThreshold\nseq=ConditionalJump, cc=LowSpace, brch=bad\nd=0xa000000064, page=Allocate, size=0, scan=0\nseq=ConditionalJump, cc=!LowSpace, brch=bad\nd=0, reg=IdentityThreshold\npend=Set\nseq=ConditionalJump, cc=!Pending, brch=bad\npend=Clear\nseq=ConditionalJump, cc=Pending, brch=bad\nd=1, r=Bus, rb=2, ldrb\nbad: halt";
+
 fn transport(c: Channel) -> Timing {
     Timing {
         request_delay: c.request_wait,
@@ -125,7 +127,12 @@ fn resident_transfer_directory_and_device_costs_match_rtl() -> Result<()> {
             "d=9, r=Bus, alu=Float, fp=FromUnsigned, rb=7, ldrb\nhalt",
             "d=0xa000000064, page=Allocate, size=2, scan=0\nd=Object, ldvr, vr=0\nd=0x8000000001, page=Exchange, vr=0\nd=0xa000000064, page=Allocate, size=3, scan=0\nd=Object, page=Exchange, vr=0\nd=0x8000000001, page=Fetch\nhalt",
             include_str!("../../../microcode/allocation.uc"),
+            // Low-space thresholds and the pending flag. A threshold equal to
+            // the free count is not low; one more allocation makes it so. R2
+            // ends at 1 only if every condition read as expected.
+LOW_SPACE,
         ] { calibrate(source, config)?; }
+        assert_eq!(native(LOW_SPACE, None, true, 1000)?.cpu.rf[2], 1);
         // The first exchange uses one resident and one evicted object; a
         // repeated exchange then reads both bodies from backing storage.
         let exchange = include_str!("../../../microcode/allocation.uc").replace(

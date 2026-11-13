@@ -200,8 +200,9 @@ impl Harness<'_> {
                 a.cpu_q_o,
                 a.cpu_product_o,
                 a.cpu_flags_o,
-                a.cpu_lastcc_o != 0
-            ) == (p.q, p.product, p.flags, p.lastcc),
+                a.cpu_lastcc_o != 0,
+                a.cpu_pending_o != 0
+            ) == (p.q, p.product, p.flags, p.lastcc, p.pending),
             "arithmetic mismatch at {}",
             p.pc
         );
@@ -305,6 +306,7 @@ impl Harness<'_> {
                 continue;
             }
             if candidate.is_none() {
+                model.low_space = self.oracle.low_space();
                 candidate = Some(model.prepare(image, self.rtl.cpu_irq_i != 0));
             }
             // Periodic command backpressure and independently delayed response consumption.

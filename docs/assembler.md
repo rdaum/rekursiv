@@ -321,6 +321,15 @@ Failure restores the request address and stops execution.
 They do not require an object selection or issue external transfers. Counts include reservations
 retained after a failed allocation.
 
+`reg=WordThreshold` and `reg=IdentityThreshold` load a low-space threshold from the D bus. Each is a
+standalone object command. `cc=LowSpace` is true while free words or free identities are below their
+threshold; a zero threshold disables it.
+
+`pend=Set` and `pend=Clear` change the processor's pending flag when the instruction retires, and
+`cc=Pending` tests it. The flag is one bit of microcode-owned state. It marks work deferred to an
+instruction boundary, so the boundary can test for that work without reading memory. A condition in
+the same instruction sees the flag's old value.
+
 `d=SymbolHigh` reads the symbol register's high byte, zero-extended. `estk=Wide` packs the D bus's
 low byte above the 32-bit arithmetic result and writes the full 40-bit stack word. It applies no
 compact-value encoding or language-specific tag policy. `nop` emits an otherwise empty control word.

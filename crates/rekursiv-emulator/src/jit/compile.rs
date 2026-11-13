@@ -357,6 +357,7 @@ fn eligible(i: Instruction) -> bool {
         && !i.halt
         && i.seq != Seq::Service
         && !i.allocation_dynamic
+        && i.pending == rekursiv_asm::processor::Pending::None
 }
 
 fn region(image: &Image, start: usize, compiled: &[Block]) -> Vec<(usize, Instruction)> {

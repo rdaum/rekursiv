@@ -22,7 +22,7 @@ module logik_sequencer #(
     input logic [23:0] control_top_i,
     input logic [39:0] bus_i, symbol_i,
     input logic [4:0] flags_i,
-    input logic object_ok_i, irq_i,
+    input logic object_ok_i, irq_i, low_space_i, pending_i,
     input logic use_issued_condition_i, issued_condition_i,
     output logic condition_o, target_fault_o,
     output logic [15:0] pc_o, upcor_o, mark_o,
@@ -53,6 +53,8 @@ module logik_sequencer #(
             CC_CONTROL_ZERO: selected_condition = control_top_i == 0;
             CC_OBJECT_OK: selected_condition = object_ok_i;
             CC_INTERRUPT: selected_condition = irq_i;
+            CC_LOW_SPACE: selected_condition = low_space_i;
+            CC_PENDING: selected_condition = pending_i;
             default: selected_condition = 1'b0;
         endcase
         condition_o = use_issued_condition_i ? issued_condition_i :

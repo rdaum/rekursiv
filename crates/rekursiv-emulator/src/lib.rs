@@ -442,6 +442,10 @@ impl Machine {
                 .as_ref()
                 .is_some_and(|e| e.status() != 0)
         });
+        // A retried instruction keeps the conditions of its first issue.
+        if self.retry_irq.is_none() {
+            self.cpu.low_space = self.objekt.low_space();
+        }
         let mut next = E::Writes::default();
         let prepared = E::prepare(self, irq, &mut next);
         let command = match prepared {

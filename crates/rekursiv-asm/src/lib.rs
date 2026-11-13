@@ -122,7 +122,12 @@ codes!(Pager { None = 0, ProbeBus = 1, ProbeVr = 2, ProbeType = 3, ProbeRepresen
     Fetch = 5, Allocate = 6, Exchange = 7, NextObject = 8, FindObject = 9 });
 codes!(Index { None = 0, Load = 1, Clear = 2, One = 3, Two = 4, Increment = 5,
     Decrement = 6, Step = 7, Next = 8, FromReg = 9 });
-codes!(Register { None = 0, Load = 1, Increment = 2, Decrement = 3, FromIndex = 4 });
+// WordThreshold and IdentityThreshold load a low-space threshold from the
+// data word instead of changing the index register. OBJEKT holds its
+// low-space line high while free words or free identities are below their
+// threshold; zero disables a threshold.
+codes!(Register { None = 0, Load = 1, Increment = 2, Decrement = 3, FromIndex = 4,
+    WordThreshold = 5, IdentityThreshold = 6 });
 codes!(Memory { None = 0, Read = 1, Write = 2 });
 codes!(Read { None = 0, Vr = 1, Reference = 2, Size = 3, Type = 4, Base = 5,
     Representation = 6, Index = 7, IndexReg = 8, Flags = 9,
@@ -220,6 +225,21 @@ impl Command {
                 | Pager::FindObject
         ) && (self.index != Index::None
             || self.register != Register::None
+            || self.memory != Memory::None
+            || self.prepare
+            || self.prepared
+            || self.read != Read::None
+            || self.load_vr
+            || self.expected_type.is_some())
+        {
+            return Err(Status::BadCommand);
+        }
+        // A threshold load is a standalone command.
+        if matches!(
+            self.register,
+            Register::WordThreshold | Register::IdentityThreshold
+        ) && (self.pager != Pager::None
+            || self.index != Index::None
             || self.memory != Memory::None
             || self.prepare
             || self.prepared

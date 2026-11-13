@@ -35,6 +35,7 @@ impl ScalarInstruction {
 
     pub(crate) fn decode(i: Instruction) -> Option<Self> {
         if i.recovery != Recovery::None
+            || i.pending != rekursiv_asm::processor::Pending::None
             || i.device != Device::None
             || i.write_root
             || i.bus == Bus::Root
@@ -160,6 +161,8 @@ impl ScalarInstruction {
             Condition::Last => cpu.lastcc,
             Condition::ControlZero => cpu.cstkr == 0,
             Condition::Interrupt => irq,
+            Condition::LowSpace => cpu.low_space,
+            Condition::Pending => cpu.pending,
         }) ^ i.invert;
         let sequential = cpu.pc as i64 + 1;
         let taken = match i.seq {
@@ -358,6 +361,8 @@ mod tests {
             Condition::ControlZero,
             Condition::ObjectOk,
             Condition::Interrupt,
+            Condition::LowSpace,
+            Condition::Pending,
         ];
         let alus = [
             Alu::Pass,

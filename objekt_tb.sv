@@ -112,6 +112,7 @@ module objekt_tb(
     output wire [4:0] cpu_flags_o,
     output wire [4:0] cpu_fp_flags_o,
     output wire  cpu_lastcc_o,
+    output wire  cpu_pending_o,
     output wire [15:0] cpu_ucar_o,
     output wire [29:0] cpu_namarg_o,
     input wire [15:0] cpu_dbg_addr_i,
@@ -121,7 +122,7 @@ module objekt_tb(
     output wire cpu_dbg_code_valid_o, output wire [39:0] cpu_dbg_code_data_o, output wire [39:0] cpu_dbg_code_type_o
 );
 
-wire gc_valid, gc_ready, gc_response, gc_response_ready, gc_committed, gc_explicit;
+wire gc_valid, gc_ready, gc_response, gc_response_ready, gc_committed, gc_explicit, low_space;
 wire [3:0] gc_operation, gc_status;
 wire [39:0] gc_data, gc_root, gc_result;
 logik #(.CODE_WORDS(8192)) processor(
@@ -145,6 +146,8 @@ logik #(.CODE_WORDS(8192)) processor(
     .entry_i(cpu_entry_i),
     .resume_i(cpu_resume_i),
     .irq_i(cpu_irq_i),
+    .low_space_i(low_space),
+    .pending_o(cpu_pending_o),
     .halted_o(cpu_halted_o),
     .service_o(cpu_service_o),
     .service_code_o(cpu_service_code_o),
@@ -196,6 +199,7 @@ logik #(.CODE_WORDS(8192)) processor(
 );
 assign dbg_memory_words_o = 25'(`REKURSIV_SIM_MEMORY_WORDS);
 objekt #(.PAGER_BITS(4), .MEMORY_WORDS(`REKURSIV_SIM_MEMORY_WORDS)) core(
+    .low_space_o(low_space),
     .gc_enable_i(cpu_gc_enable_i),.gc_active_i(cpu_gc_active_o),.gc_explicit_i(gc_explicit),
     .gc_valid_i(gc_valid),.gc_ready_o(gc_ready),.gc_operation_i(gc_operation),.gc_data_i(gc_data),.gc_root_i(gc_root),
     .gc_response_o(gc_response),.gc_response_ready_i(gc_response_ready),.gc_status_o(gc_status),

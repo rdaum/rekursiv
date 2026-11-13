@@ -3,7 +3,7 @@
 
 use crate::{MemoryEffect, Model};
 use rekursiv_asm::{
-    Command, Index, Memory, Pager, Read, Register, Status, Word, ADDRESS_LIMIT, ID_MASK, INDEX_MAX,
+    Command, Index, Memory, Pager, Read, Register, Status, Word, ADDRESS_LIMIT, INDEX_MAX,
     INDEX_MIN,
 };
 
@@ -63,6 +63,7 @@ impl Model {
             Register::Increment => before.index_reg + 1,
             Register::Decrement => before.index_reg - 1,
             Register::FromIndex => before.index,
+            Register::WordThreshold | Register::IdentityThreshold => before.index_reg,
         };
         if !(INDEX_MIN..=INDEX_MAX).contains(&reg) {
             return Err(Status::IndexOverflow);
@@ -110,10 +111,8 @@ impl Model {
             Read::Base => Word::raw(old_entry.unwrap().base as u64)?,
             Read::Representation => old_entry.unwrap().representation,
             Read::Flags => Word::raw(old_entry.unwrap().flags() as u64)?,
-            Read::FreeWords => {
-                Word::raw(self.allocation_limit.saturating_sub(self.body_cursor) as u64)?
-            }
-            Read::FreeIdentities => Word::raw((ID_MASK + 1).saturating_sub(self.next_identity))?,
+            Read::FreeWords => Word::raw(self.free_words())?,
+            Read::FreeIdentities => Word::raw(self.free_identities())?,
         };
         if c.memory != Memory::None {
             let (mut e, index, prepared_address) = if c.prepared {
@@ -169,6 +168,11 @@ impl Model {
         // staged registers now, retaining untouched latches and virtual registers.
         self.state.index = idx;
         self.state.index_reg = reg;
+        match c.register {
+            Register::WordThreshold => self.word_threshold = c.data.bits(),
+            Register::IdentityThreshold => self.identity_threshold = c.data.bits(),
+            _ => {}
+        }
         if let Some(selected) = selection {
             self.state.selected = Some(selected).into();
         }

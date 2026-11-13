@@ -10,7 +10,8 @@
 ; nonnegative SmallIntegers or a byte-format LargePositiveInteger of 1..5 raw
 ; digits, with descriptor and physical length agreeing. Failure goes through R15.
 ;
-; check_low_space is a boundary hook: preserve activation caches R8..R14 and
+; check_low_space is a boundary hook, entered only while OBJEKT's LowSpace
+; line is high: preserve activation caches R8..R14 and
 ; VR0..VR2. Compare identities first (no collection can recover monotonic IDs).
 ; For insufficient free words, collect once via gc=Collect and reload thresholds
 ; before resampling; R6 remembers that attempt across recovery. If still below,
@@ -95,11 +96,20 @@ low_space_words_ready:
     ra=12, s=Branch, brch=4, alu=Rotate, rb=2, ldrb
     ra=2, s=Branch, brch=15, alu=And, estk=Compact, compact=2
     d=Estk, mem=Write
+    ; Arm OBJEKT's comparators with the same thresholds. The boundary check
+    ; runs only while the LowSpace line is high. estk=Wide joins the identity
+    ; threshold's high bits in R11 to its low word.
+    d=Register, ra=12, reg=WordThreshold
+    ra=10, ldq
+    d=Register, ra=11, r=Q, estk=Wide
+    d=Estk, reg=IdentityThreshold
     d=30, r=Bus, rb=7, ldrb
     read=Vr, vr=5
     ra=7, d=Object, ldroot
     seq=Jump, brch=clock_result
 low_space_cancel:
+    d=0, reg=WordThreshold
+    d=0, reg=IdentityThreshold
     d=30, r=Bus, rb=7, ldrb
     ra=7, d=NIL, ldroot
     seq=Jump, brch=clock_result
@@ -157,6 +167,9 @@ unsigned40_byte:
 ; ordinary object, so fetching it may page or collect. Sample each hardware
 ; count only AFTER its threshold reads, against the resulting allocator state.
 check_low_space:
+    ; OBJEKT compares both counts against the registered thresholds
+    ; continuously. With the line low there is nothing to examine.
+    seq=ConditionalJump, cc=!LowSpace, brch=check_device_events
     d=0, r=Bus, rb=6, ldrb ; one collection attempt per boundary check
 low_space_recheck:
     ; Prepare the root address independently of the NIL comparison operand.
@@ -221,5 +234,8 @@ low_space_signal:
     d=Object, ldvr, vr=6
     d=30, r=Bus, rb=7, ldrb
     ra=7, d=NIL, ldroot
+    ; Delivery disarms the comparators along with the registration.
+    d=0, reg=WordThreshold
+    d=0, reg=IdentityThreshold
     d=85, r=Bus, rb=0, ldrb
     d=1, r=Bus, rb=1, ldrb, seq=Jump, brch=scheduler_load
