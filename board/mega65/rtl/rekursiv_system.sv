@@ -3,7 +3,8 @@
 //
 // - Object memory is the board's SDRAM: 2^23 words.
 // - The disk processor serves the backing store from the SD card.
-// - The device channel serves only the debug display (0xf00-0xf1f).
+// - The device channel serves identification (0x000-0x008), the display
+//   bitmap bank (0x510-0x547) and the debug display (0xf00-0xf1f).
 // - The disk processor loads the microcode: it replays a boot stream from a
 //   file on the card through LOGIK's halted programming port, then starts
 //   the processor. The start record says whether collection is enabled and
@@ -37,6 +38,15 @@ module rekursiv_system #(
     output logic [22:0] memory_failed_address_o,
     output logic [31:0] disk_display_o [8],
     output logic [31:0] debug_o [8],
+    // The display, scanned out on the video clock (synchronous to clk_i).
+    input  logic        video_clk_i,
+    input  logic [9:0]  video_x_i,
+    input  logic [9:0]  video_y_i,
+    output logic        video_visible_o,
+    output logic        video_inside_o,
+    output logic [23:0] video_rgb_o,
+    // The table and control store sizes, for the status display.
+    output logic [31:0] build_o,
     output logic        booted_o,
     output logic        halted_o,
     output logic        service_o,
@@ -204,10 +214,28 @@ module rekursiv_system #(
         .display_o(disk_display_o));
 
     // ---------------------------------------------------------------------
-    // Devices: the debug display only.
+    // Devices
     // ---------------------------------------------------------------------
+    assign build_o = {8'(PAGER_BITS), 24'(CODE_WORDS)};
+
     logic io_pending;
     wire  io_debug = io_address[31:5] == 27'h78;   // 0xf00-0xf1f
+    wire  io_identity = io_address < 32'h00c && !io_write;
+    wire [31:0] io_bank = io_address - 32'h510;
+    wire  io_display = io_address >= 32'h510 && io_address < 32'h548;
+    logic [31:0] identity, display_result;
+    logic display_error;
+    always_comb unique case (io_address[3:2])
+        2'd0: identity = 32'h524b494f;       // "RKIO"
+        2'd1: identity = 32'h00010001;
+        default: identity = 32'h00000040;    // display bitmap upload
+    endcase
+    display screen (
+        .clk_i, .rst_i, .valid_i(io_valid && io_ready && io_display), .write_i(io_write),
+        .offset_i(io_bank[5:0]), .data_i(io_data), .result_o(display_result),
+        .error_o(display_error),
+        .video_clk_i, .x_i(video_x_i), .y_i(video_y_i), .visible_o(video_visible_o),
+        .inside_o(video_inside_o), .rgb_o(video_rgb_o));
     assign io_ready    = !io_pending;
     assign io_response = io_pending;
 
@@ -217,8 +245,9 @@ module rekursiv_system #(
             for (int i = 0; i < 8; i++) debug_o[i] <= '0;
         end else if (io_valid && io_ready) begin
             io_pending <= 1'b1;
-            io_error   <= !io_debug;
-            io_result  <= io_write ? 32'd0 : debug_o[io_address[4:2]];
+            io_error   <= io_display ? display_error : !(io_debug || io_identity);
+            io_result  <= io_display ? display_result : io_identity ? identity :
+                          io_write ? 32'd0 : debug_o[io_address[4:2]];
             if (io_write && io_debug) debug_o[io_address[4:2]] <= io_data;
         end else if (io_response && io_response_ready) io_pending <= 1'b0;
     end

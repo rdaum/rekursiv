@@ -21,6 +21,8 @@ module system_tb;
         .clk_i(clk), .rst_i(rst),
         .sd_clk_o(sd_clk), .sd_cs_n_o(sd_cs_n), .sd_mosi_o(sd_mosi), .sd_miso_i(sd_miso),
         .disk_display_o(disk), .debug_o(debug), .booted_o(booted),
+        .video_clk_i(clk), .video_x_i(10'd0), .video_y_i(10'd0),
+        .video_visible_o(), .video_inside_o(), .video_rgb_o(), .build_o(),
         .sdram_cke_o(m_cke), .sdram_cs_n_o(m_cs_n), .sdram_ras_n_o(m_ras_n), .sdram_cas_n_o(m_cas_n),
         .sdram_we_n_o(m_we_n), .sdram_ba_o(m_ba), .sdram_a_o(m_a), .sdram_dqml_o(), .sdram_dqmh_o(),
         .sdram_dq_o(m_dq_out), .sdram_dq_oe_o(m_dq_oe), .sdram_dq_i(m_dq_in),
@@ -36,6 +38,10 @@ module system_tb;
         $display("booted=%0d halted=%0d service=%0d fault=%0d pc=%0d memory tested=%0d failed=%0d sdram violations=%0d",
                  booted, halted, service, fault, pc, memory_tested, memory_failed, ram.errors);
         $display("disk processor trap=%0d pc=%h", machine.disk.cpu.trap, machine.disk.cpu.reg_pc);
+        $display("display visible=%0d %0dx%0d stride %0d words[0,319,320,9599]=%08x %08x %08x %08x",
+            machine.screen.visible_o, machine.screen.visible_width, machine.screen.visible_height,
+            machine.screen.visible_stride, machine.screen.frame[0], machine.screen.frame[319],
+            machine.screen.frame[320], machine.screen.frame[9599]);
         for (int i = 0; i < 8; i++) $display("debug[%0d] = %08x   disk[%0d] = %08x", i, debug[i], i, disk[i]);
         $finish;
     end

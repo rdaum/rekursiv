@@ -174,6 +174,9 @@ module mega65_top (
     logic [15:0] pc;
 
     logic [31:0] disk_rows [8];
+    logic        frame_visible, frame_inside;
+    logic [23:0] frame_rgb;
+    logic [31:0] build;
     logic [15:0] sdram_dq_out;
     logic        sdram_dq_oe, memory_tested, memory_failed;
     logic [22:0] memory_failed_address;
@@ -191,7 +194,9 @@ module mega65_top (
         .sdram_dq_o(sdram_dq_out), .sdram_dq_oe_o(sdram_dq_oe), .sdram_dq_i(sdram_dq_io),
         .memory_tested_o(memory_tested), .memory_failed_o(memory_failed),
         .memory_failed_address_o(memory_failed_address),
-        .debug_o(debug), .booted_o(booted), .halted_o(halted), .service_o(service),
+        .debug_o(debug), .video_clk_i(clk_pix), .video_x_i(x), .video_y_i(y),
+        .video_visible_o(frame_visible), .video_inside_o(frame_inside), .video_rgb_o(frame_rgb),
+        .build_o(build), .booted_o(booted), .halted_o(halted), .service_o(service),
         .fault_o(fault), .pc_o(pc)
     );
 
@@ -218,11 +223,13 @@ module mega65_top (
     end
 
     // Rows 0-7: the debug display. Row 8: PC, fault, memory check, halted, booted.
-    logic [31:0] rows [9];
+    // Row 9: this core's pager table bits (top byte) and control store words.
+    logic [31:0] rows [10];
     always_comb begin
         for (int i = 0; i < 8; i++) rows[i] = debug[i];
         // Memory check: 1 passed, e failed (rows 6 shows the failing address).
         rows[8] = {pc, fault, memory_failed ? 4'he : {3'b0, memory_tested}, 3'b0, halted, 3'b0, booted};
+        rows[9] = build;
         if (memory_failed) rows[6] = {9'd0, memory_failed_address};
     end
 
@@ -233,14 +240,14 @@ module mega65_top (
 
     // Sample both panels' values once per frame, during vertical blanking,
     // so a value that changes mid-frame is not drawn half old, half new.
-    logic [31:0] rows_shown [9], disk_shown [8];
+    logic [31:0] rows_shown [10], disk_shown [8];
     always_ff @(posedge clk_pix) if (x == 0 && y == V_ACTIVE) begin
         rows_shown <= rows;
         disk_shown <= disk_rows;
     end
 
     logic ink, panel, sd_ink, sd_panel;
-    hex_display #(.ROWS(9), .LEFT(0)) text (.clk_i(clk_pix), .x_i(x), .y_i(y), .values_i(rows_shown),
+    hex_display #(.ROWS(10), .LEFT(0)) text (.clk_i(clk_pix), .x_i(x), .y_i(y), .values_i(rows_shown),
                                             .ink_o(ink), .panel_o(panel));
     hex_display #(.ROWS(8), .LEFT(320)) sd_text (.clk_i(clk_pix), .x_i(x), .y_i(y),
                                                  .values_i(disk_shown), .ink_o(sd_ink),
@@ -254,7 +261,9 @@ module mega65_top (
     logic [7:0] r, g, b;
     always_comb begin
         active = (x_d < H_ACTIVE) && (y_d < V_ACTIVE);
+        // A published frame replaces the panels unless the processor faults.
         if (!active)        {r, g, b} = '0;
+        else if (frame_visible && fault == 0) {r, g, b} = frame_inside ? frame_rgb : 24'h303030;
         else if (ink || sd_ink) {r, g, b} = 24'hFFFFFF;
         else if (panel)     {r, g, b} = fault != 0 ? 24'h800000 : 24'h102060;
         else if (sd_panel)  {r, g, b} = 24'h104020;
