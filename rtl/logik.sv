@@ -41,6 +41,10 @@ module logik #(
     output logic pending_o,
     output logic halted_o, output logic service_o, output logic [3:0] service_code_o,
     output logic [3:0] fault_o, output logic retire_o,
+    // Pulses with retire_o for a retired unconditional dispatch outside
+    // collection. A bytecode interpreter dispatching each bytecode through
+    // one such instruction can count bytecodes with it.
+    output logic dispatch_o,
     output logic cmd_valid_o, input logic cmd_ready_i,
     output logic [3:0] pager_o, output logic [3:0] index_o,
     output logic [2:0] register_o, output logic [1:0] memory_o,
@@ -387,6 +391,7 @@ module logik #(
             gc_active_o<=0; gc_explicit_o<=0; retried<=0; saved_symbol<=0; saved_object<=0; saved_bus<=0; saved_type<=0;
             saved_status<=0; saved_issued_condition<=0; last_status_o<=0;
             retire_o <= 1'b0;
+            dispatch_o <= 1'b0;
             fault_o <= FAULT_NONE;
             issued_condition <= 1'b0;
             symbol <= '0;
@@ -397,6 +402,7 @@ module logik #(
         end else begin
             state <= next_state;
             retire_o <= retire;
+            dispatch_o <= retire && !gc_active_o && instruction.sequence_op == SEQ_DISPATCH;
             if (boot_fault) fault_o <= FAULT_ENCODING;
             if (start) begin fault_o <= FAULT_NONE; retried<=0; end
             if (state == EXECUTE) begin

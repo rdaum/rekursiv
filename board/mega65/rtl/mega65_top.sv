@@ -189,7 +189,8 @@ module mega65_top (
     logic [3:0]  fault;
     logic [15:0] pc;
 
-    logic [31:0] disk_rows [8];
+    logic [31:0] disk_rows [8], perf_rows [8];
+    logic [79:0] keys_held;
     logic        frame_visible, frame_inside, frame_cursor;
     logic [23:0] frame_rgb;
     logic [31:0] build, io_refused;
@@ -210,7 +211,7 @@ module mega65_top (
         .sdram_dq_o(sdram_dq_out), .sdram_dq_oe_o(sdram_dq_oe), .sdram_dq_i(sdram_dq_io),
         .memory_tested_o(memory_tested), .memory_failed_o(memory_failed),
         .memory_failed_address_o(memory_failed_address),
-        .debug_o(debug), .video_clk_i(clk_pix), .video_x_i(x), .video_y_i(y),
+        .debug_o(debug), .perf_o(perf_rows), .keys_held_o(keys_held), .video_clk_i(clk_pix), .video_x_i(x), .video_y_i(y),
         .video_visible_o(frame_visible), .video_inside_o(frame_inside), .video_rgb_o(frame_rgb),
         .video_cursor_o(frame_cursor),
         .kb_clock_o(kb_io0_o), .kb_data_o(kb_io1_o), .kb_data_i(kb_io2_i),
@@ -255,6 +256,10 @@ module mega65_top (
         if (memory_failed) rows[6] = {9'd0, memory_failed_address};
     end
 
+    // Holding RESTORE shows the panels over the desktop, with the live
+    // performance counters in place of the disk processor's rows.
+    wire peek = keys_held[75];
+
     // The disk processor's display, in a second panel on the right.
     assign sd_clk_o   = 1'b0;
     assign sd_reset_o = 1'b1;
@@ -263,9 +268,11 @@ module mega65_top (
     // Sample both panels' values once per frame, during vertical blanking,
     // so a value that changes mid-frame is not drawn half old, half new.
     logic [31:0] rows_shown [10], disk_shown [8];
+    logic        peek_shown;
     always_ff @(posedge clk_pix) if (x == 0 && y == V_ACTIVE) begin
         rows_shown <= rows;
-        disk_shown <= disk_rows;
+        disk_shown <= peek ? perf_rows : disk_rows;
+        peek_shown <= peek;
     end
 
     logic ink, panel, sd_ink, sd_panel;
@@ -283,13 +290,14 @@ module mega65_top (
     logic [7:0] r, g, b;
     always_comb begin
         active = (x_d < H_ACTIVE) && (y_d < V_ACTIVE);
-        // A published frame replaces the panels unless the processor faults.
+        // A published frame replaces the panels unless the processor faults
+        // or RESTORE is held.
         if (!active)        {r, g, b} = '0;
-        else if (frame_visible && fault == 0)
+        else if (frame_visible && fault == 0 && !peek_shown)
             {r, g, b} = !frame_inside ? 24'h303030 : frame_cursor ? ~frame_rgb : frame_rgb;
         else if (ink || sd_ink) {r, g, b} = 24'hFFFFFF;
         else if (panel)     {r, g, b} = fault != 0 ? 24'h800000 : 24'h102060;
-        else if (sd_panel)  {r, g, b} = 24'h104020;
+        else if (sd_panel)  {r, g, b} = peek_shown ? 24'h402060 : 24'h104020;
         else                {r, g, b} = 24'h000000;
     end
 

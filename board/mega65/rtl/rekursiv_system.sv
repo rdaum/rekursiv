@@ -41,6 +41,8 @@ module rekursiv_system #(
     output logic [22:0] memory_failed_address_o,
     output logic [31:0] disk_display_o [8],
     output logic [31:0] debug_o [8],
+    output logic [31:0] perf_o [8],        // see perf_counters
+    output logic [79:0] keys_held_o,       // keyboard state by key bit
     // The display, scanned out on the video clock (synchronous to clk_i).
     input  logic        video_clk_i,
     input  logic [9:0]  video_x_i,
@@ -105,7 +107,7 @@ module rekursiv_system #(
     logic [3:0] gc_operation, gc_status;
     logic [39:0] gc_data, gc_root, gc_result;
 
-    logic cmd_valid, cmd_ready, rsp_ready;
+    logic cmd_valid, cmd_ready, rsp_ready, retired, dispatched;
     logic [3:0] pager, index, read, rsp_status;
     logic [2:0] register, vr;
     logic [1:0] memory;
@@ -141,7 +143,8 @@ module rekursiv_system #(
         .gc_committed_i(gc_committed), .last_status_o(),
         .start_i(start), .entry_i(record[15:0]), .resume_i(1'b0), .irq_i(irq),
         .low_space_i(low_space), .pending_o(),
-        .halted_o, .service_o, .service_code_o(), .fault_o, .retire_o(),
+        .halted_o, .service_o, .service_code_o(), .fault_o, .retire_o(retired),
+        .dispatch_o(dispatched),
         .cmd_valid_o(cmd_valid), .cmd_ready_i(cmd_ready),
         .pager_o(pager), .index_o(index), .register_o(register), .memory_o(memory),
         .prepare_o(prepare), .prepared_o(prepared),
@@ -271,7 +274,7 @@ module rekursiv_system #(
     logic key_valid, key_down, button_a, button_b;
     logic [7:0] key_code;
     logic [1:0] x_step, x_negative, y_step, y_negative;
-    keyboard keys (.clk_i, .rst_i, .kb_clock_o, .kb_data_o, .kb_data_i,
+    keyboard keys (.clk_i, .rst_i, .kb_clock_o, .kb_data_o, .kb_data_i, .held_o(keys_held_o),
                    .key_valid_o(key_valid), .key_code_o(key_code), .key_down_o(key_down));
     mouse mouse_a (.clk_i, .rst_i, .up_n_i(joy_a_n_i[0]), .down_n_i(joy_a_n_i[1]),
                    .left_n_i(joy_a_n_i[2]), .right_n_i(joy_a_n_i[3]), .fire_n_i(joy_a_n_i[4]),
@@ -321,4 +324,9 @@ module rekursiv_system #(
             if (io_write && io_debug) debug_o[io_address[4:2]] <= io_data;
         end else if (io_response && io_response_ready) io_pending <= 1'b0;
     end
+
+    perf_counters counters (
+        .clk_i, .rst_i, .retire_i(retired), .dispatch_i(dispatched),
+        .command_i(cmd_valid && cmd_ready), .collecting_i(gc_active),
+        .store_i(store_valid && store_ready), .rows_o(perf_o));
 endmodule

@@ -25,6 +25,8 @@ module keyboard #(
     output logic        kb_clock_o,
     output logic        kb_data_o,
     input  logic        kb_data_i,
+    // Every key's debounced state, by key bit, including keys with no code.
+    output logic [79:0] held_o,
     output logic        key_valid_o,
     output logic [7:0]  key_code_o,
     output logic        key_down_o
@@ -67,6 +69,7 @@ module keyboard #(
     wire         sampled = clock && phase < 8'd80 && phase > 8'd1 && frame == 0 &&
                            divider == 8'(DIVIDE);
     wire         down = !data_s;
+    assign held_o = reported;
 
     always_ff @(posedge clk_i) begin
         data_q <= kb_data_i;

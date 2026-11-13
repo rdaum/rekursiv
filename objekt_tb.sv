@@ -152,7 +152,7 @@ logik #(.CODE_WORDS(8192)) processor(
     .service_o(cpu_service_o),
     .service_code_o(cpu_service_code_o),
     .fault_o(cpu_fault_o),
-    .retire_o(cpu_retire_o),
+    .retire_o(cpu_retire_o), .dispatch_o(),
     .cmd_valid_o(cpu_cmd_valid_o),
     .cmd_ready_i((cmd_ready_o && cpu_enable_i && cpu_command_enable_i)),
     .pager_o(cpu_pager_o),
