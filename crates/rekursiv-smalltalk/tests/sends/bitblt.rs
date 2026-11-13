@@ -507,38 +507,43 @@ fn bitblt_invalid_operands_preserve_destination_and_fallback_receiver() -> Resul
 }
 
 #[test]
-fn bitblt_rejects_late_nonword_data_before_any_write() -> Result<()> {
+fn bitblt_draws_only_the_low_sixteen_bits_of_each_word() -> Result<()> {
+    // Pixel words are not validated one by one. A word with bits above the
+    // sixteen pixels set, in the source, destination or halftone, draws as
+    // its low sixteen bits.
+    let case = Case::default();
+    let image = make(&case);
+    let wanted = expected(&image, &case);
     for (object, component) in [(SOURCE_BITS, 15), (DEST_BITS, 18), (HALF_BITS, 6)] {
-        for corrupt in [Word::raw(0x10000)?, r(SOURCE)] {
-            let image = make(&Case::default());
-            let mut before: Vec<Word> = bits(&image, DEST_BITS)
-                .into_iter()
-                .map(|w| Word::raw(w as u64).unwrap())
-                .collect();
-            if object == DEST_BITS {
-                before[component - 1] = corrupt;
-            }
-            // Converted word bodies may be modified by guest code. Put invalid data
-            // at a late word read by the rectangle, to verify
-            // that validation finishes before drawing the first destination word.
-            let prepare = |converted: &mut target::Image| {
-                *converted
-                    .records
-                    .iter_mut()
-                    .find(|r| r.source_oop == object)
-                    .unwrap()
-                    .body
-                    .get_mut(component)
-                    .unwrap() = corrupt;
-            };
-            let m = native_prepared(&image, bitmap_device(), prepare)?;
-            assert_eq!((m.cpu.rf[15], m.objekt.state.vr[5]), (1, i(-1)));
-            assert_eq!(body(&m, DEST_BITS)[1..], before);
-            let e = execute_with_device(image, ROOT, true, 512, prepare, bitmap_device())?;
-            assert_eq!((e.status, e.result), (1, i(-1)));
-            assert_eq!(e.records[&r(DEST_BITS).identity()?].body[1..], before);
-            assert_eq!(e.bitmap_publications, [0, 0]);
-        }
+        let original = bits(&image, object)[component - 1];
+        let prepare = |converted: &mut target::Image| {
+            *converted
+                .records
+                .iter_mut()
+                .find(|r| r.source_oop == object)
+                .unwrap()
+                .body
+                .get_mut(component)
+                .unwrap() = Word::raw(0x10000 | u64::from(original)).unwrap();
+        };
+        let m = native_prepared(&image, bitmap_device(), prepare)?;
+        assert_eq!((m.cpu.rf[15], m.objekt.state.vr[5]), (1, r(RECEIVER)));
+        assert_eq!(
+            body(&m, DEST_BITS)[1..]
+                .iter()
+                .map(|w| w.bits() as u16)
+                .collect::<Vec<_>>(),
+            wanted
+        );
+        let e = execute_with_device(image.clone(), ROOT, true, 512, prepare, bitmap_device())?;
+        assert_eq!((e.status, e.result), (1, r(RECEIVER)));
+        assert_eq!(
+            e.records[&r(DEST_BITS).identity()?].body[1..]
+                .iter()
+                .map(|w| w.bits() as u16)
+                .collect::<Vec<_>>(),
+            wanted
+        );
     }
     Ok(())
 }

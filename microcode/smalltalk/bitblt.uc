@@ -2,8 +2,8 @@
 ;   primitive_bitblt/bb_fields  save caller, decode fourteen receiver fields;
 ;   bb_form                    validate Form metadata and bitmap extent;
 ;   bb_clip                    intersect x then y intervals; empty => success;
-;   bb_pass_start              pass 0 checks every accessed raw pixel word;
 ;   bb_preflight_done          choose direct pass 1 or alias snapshot pass 2;
+;   bb_pass_start              traverse the rectangle for the chosen pass;
 ;   bb_staged/bb_merge_word    merge saved sources after alias snapshot;
 ;   bb_refresh                 patch matching registrations or replace frame;
 ;   bb_success/bb_failed       restore IP/SP and release private frame roots.
@@ -31,7 +31,7 @@
 ; ESTK is a private rooted frame during this primitive (SP=31). Slot 0 is
 ; validation scratch. 1..3 Forms; 4 rule; 5..14 the ten rectangle fields;
 ; 15/16 destination/source strides; 17..20 Form dimensions; 21 staged source;
-; 22 words/row; 23 first destination word; 24 pass (0 validate, 1 direct, 2 snapshot); 25/26 edge masks;
+; 22 words/row; 23 first destination word; 24 pass (1 direct, 2 snapshot); 25/26 edge masks;
 ; 27/28 saved IP/SP; 29 failure continuation; 30 Form validation continuation;
 ; 31 staged word count. VR0..2 retain caller state, VR6 receiver, VR7 method.
 ; VR3/4/5 hold destination/source/halftone bitmaps. No reference lives solely
@@ -39,7 +39,11 @@
 ; After clipping, slot0 caches source alignment, slot4 the rule address, and
 ; slot9 the signed first source column. Refresh may reuse these dead caches.
 ;
-; Header and accessed-word validation precede destination writes. Disjoint
+; Form and header validation precede destination writes. Pixel words are not
+; checked one by one: every writer of a word object stores 16-bit values. A
+; word with other bits set draws as its low 16 bits instead of failing: source
+; words are masked before they share a window, and the rules are bitwise, so
+; destination and halftone bits above the pixels never reach a pixel. Disjoint
 ; bitmaps copy directly without allocating. A source or halftone alias uses
 ; a temporary opaque object, so overlap never reads an overwritten source.
 ; Empty rectangles need neither allocation nor publication. Input fields and
@@ -239,10 +243,8 @@ bb_mask_ready:
     ra=2, shift=ArithmeticRight, estk=Alu
     d=0, esp=Bus
     ra=3, estk=Alu
-    ; Pass 0 checks only words read by this rectangle, before any writes.
     ; Pass 1 draws directly. Pass 2 snapshots sources only when bits alias.
-    d=24, esp=Bus
-    d=0, estk=Bus
+    seq=Jump, brch=bb_preflight_done
 bb_pass_start:
     d=0, r=Bus, rb=8, ldrb
     d=2, r=Bus, rb=10, ldrb
@@ -285,10 +287,7 @@ bb_stage_row:
     d=Object, page=Fetch
     d=Register, ra=2, idx=Load
     mem=Read
-    d=Object, ldsym, r=Bus, rb=14, ldrb
-    d=Register, ra=14, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
-    ra=14, s=Bus, d=0xffff0000, alu=And, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
+    d=Object, r=Bus, rb=14, ldrb
 bb_stage_word:
     d=65535, r=Bus, rb=12, ldrb
     d=NIL, ldsym
@@ -325,20 +324,14 @@ bb_stage_mask:
     d=Estk, r=Bus, rb=2, ldrb
     ra=2, s=Branch, brch=2, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=bb_stage_store
-    ; Resolve the destination word for either preflight or the direct path.
+    ; Resolve the destination word for the direct path.
     ra=0, rb=9, alu=Add, ldq
     r=Q, rb=11, ldrb
     read=Vr, vr=3
     d=Object, page=Fetch
     d=Register, ra=11, idx=Load, prepare
     mem=Read, prepared
-    d=Object, ldsym, r=Bus, rb=3, ldrb
-    ra=2, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_direct_merge
-    d=Register, ra=3, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
-    ra=3, s=Bus, d=0xffff0000, alu=And, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
-    seq=Jump, brch=bb_stage_next
+    d=Object, r=Bus, rb=3, ldrb
 ; Read the cached rule target and branch into the fixed-width rule table. Keep
 ; prepared destination address across all local Boolean and edge-mask work.
 bb_direct_merge:
@@ -371,8 +364,6 @@ bb_stage_next:
     seq=ConditionalJump, cc=!Zero, brch=bb_stage_row
     d=24, esp=Bus
     estk=Read
-    d=Estk, r=Bus, flags
-    seq=ConditionalJump, cc=Zero, brch=bb_preflight_done
     d=Estk, r=Bus, s=Branch, brch=1, alu=Sub, cin=One, flags
     seq=ConditionalJump, cc=Zero, brch=bb_refresh
     seq=Jump, brch=bb_staged
@@ -633,7 +624,7 @@ bb_form:
     seq=ConditionalJump, cc=!Carry, brch=bb_invalid
     seq=Jump, brch=bb_form_done
 ; Full validation is reserved for a refresh whose registered geometry differs
-; from the destination Form. Ordinary copies validate only accessed words.
+; from the destination Form. Ordinary copies do not scan pixel words.
 bb_full_pixels:
     d=30, esp=Bus
     ra=7, estk=Alu
@@ -764,10 +755,9 @@ bb_source_word:
     r=Q, s=Branch, brch=2, alu=Add, ldq
     d=Q, idx=Load
     mem=Read
-    d=Object, ldsym, r=Bus, rb=2, ldrb
-    d=Register, ra=2, seq=ConditionalJump, cc=!Symbol, brch=bb_invalid
-    ra=2, s=Bus, d=0xffff0000, alu=And, flags
-    seq=ConditionalJump, cc=!Zero, brch=bb_invalid
+    ; Two source words share a rotated window: keep only this word's pixels.
+    d=Object, r=Bus, rb=2, ldrb
+    ra=2, s=Bus, d=65535, alu=And, rb=2, ldrb
 bb_source_zero:
     d=Register, ra=7, seq=Bus
 ; Explicit presentation: inspect rooted cursor/display Forms after the draw.
