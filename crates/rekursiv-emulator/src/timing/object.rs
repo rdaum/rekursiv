@@ -103,7 +103,9 @@ impl Estimate {
             }
         }
         self.work.approximate_objects += u64::from(approximate);
-        self.cycles.object_issue += 1;
+        // LOGIK offers a blocking command from EXECUTE, and an idle OBJEKT
+        // accepts it there. A launched command still takes an ISSUE cycle.
+        self.cycles.object_issue += u64::from(asynchronous);
         if asynchronous {
             debug_assert!(self.pending.is_none());
             self.pending = Some(Pending {

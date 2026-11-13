@@ -6,9 +6,11 @@
 // update local state. OBJEKT keeps its separately documented transfer semantics.
 //
 // A blocking object instruction moves through EXECUTE -> ISSUE -> WAIT_RESPONSE.
-// EXECUTE validates every local effect and captures the chosen condition.
-// ISSUE holds the command stable until acceptance. WAIT_RESPONSE cannot reissue
-// it. Only a successful response retires local effects and advances the PC.
+// EXECUTE validates every local effect and captures the chosen condition. An
+// ordinary command, once validated, is also offered to OBJEKT in EXECUTE; if
+// OBJEKT accepts it there, ISSUE is skipped. Otherwise ISSUE holds the command
+// stable until acceptance. WAIT_RESPONSE cannot reissue it. Only a successful
+// response retires local effects and advances the PC.
 // Capturing the condition before ISSUE prevents IRQ changes during backpressure
 // from changing the selected target. A synchronous, stable IRQ input is assumed.
 // LAUNCH returns from ISSUE to EXECUTE at acceptance, with a pending reply.
@@ -145,7 +147,13 @@ module logik #(
     assign halted_o = state == HALTED;
     assign service_o = state == SERVICE_BREAK;
     assign service_code_o = service_code;
-    assign cmd_valid_o = state == ISSUE && !gc_active_o && !rst_i;
+    // Offered from EXECUTE: a validated, blocking command outside collection.
+    // Launched commands and collector controls keep the ISSUE cycle.
+    wire direct_issue = state == EXECUTE && !(async_pending && async_barrier) &&
+        local_fault == FAULT_NONE && !gc_request && instruction.sequence_op != SEQ_HOLD &&
+        instruction.device == 0 && instruction.alu != ALU_FLOAT && instruction.object_enable &&
+        instruction.recovery == 0 && !instruction.object_async;
+    assign cmd_valid_o = (state == ISSUE || direct_issue) && !gc_active_o && !rst_i;
     assign rsp_ready_o = (state == WAIT_RESPONSE || (async_pending && !async_done)) && !gc_active_o && !rst_i;
     assign async_barrier=instruction.object_enable || instruction.bus_source==BUS_OBJECT ||
         instruction.condition==CC_OBJECT_OK || instruction.device!=0 || instruction.recovery!=0 ||
@@ -311,6 +319,7 @@ module logik #(
                 else if (instruction.sequence_op != SEQ_HOLD) begin
                     if (instruction.device != 0) next_state = DEVICE_WAIT;
                     else if (instruction.alu==ALU_FLOAT) next_state=NUMERIC_WAIT;
+                    else if (direct_issue && !gc_active_o && cmd_ready_i) next_state = WAIT_RESPONSE;
                     else if (instruction.object_enable || (instruction.recovery!=0 && (instruction.recovery<10 || instruction.recovery>=12))) next_state = ISSUE;
                     else retire = 1'b1;
                 end
@@ -371,7 +380,7 @@ module logik #(
             if (start) begin fault_o <= FAULT_NONE; retried<=0; end
             if (state == EXECUTE) begin
                 if (local_fault != FAULT_NONE && !async_pending) fault_o <= local_fault;
-                else if (next_state == ISSUE || next_state == NUMERIC_WAIT || next_state == DEVICE_WAIT) issued_condition <= (!gc_active_o && retried) ? saved_issued_condition : condition_value;
+                else if (next_state == ISSUE || next_state == WAIT_RESPONSE || next_state == NUMERIC_WAIT || next_state == DEVICE_WAIT) issued_condition <= (!gc_active_o && retried) ? saved_issued_condition : condition_value;
             end
             if(state==ISSUE && cmd_ready_i && instruction.object_async && !gc_active_o) begin
                 async_pending<=1; async_done<=0;
