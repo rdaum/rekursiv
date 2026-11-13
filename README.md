@@ -163,7 +163,9 @@ cargo run --release --locked -p rekursiv-emulator -- \
   --squeak artifacts/squeak-1.1/Squeak1.1.image
 ```
 
-Middle-click the background for the system menu. The [Squeak guide](docs/squeak-1.1.md) covers
+Middle-click the background for the system menu; Alt+click works as the middle (yellow) button
+and Super+click as the right (blue) one. `REKURSIV_INPUT_TRACE=1` prints every mouse button event
+the window receives. The [Squeak guide](docs/squeak-1.1.md) covers
 supported primitives and remaining work. File writes remain in memory; snapshots cannot yet be
 saved.
 

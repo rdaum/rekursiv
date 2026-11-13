@@ -306,10 +306,32 @@ fn mouse_code(button: MouseButton) -> Option<u16> {
 struct InputState {
     keyboard: Keyboard,
     buttons: BTreeSet<u16>,
+    /// The guest button the left button pressed, so its release matches.
+    left: Option<u16>,
 }
 impl InputState {
+    /// Alt or Super with the left button stand in for the yellow (middle) and
+    /// blue (right) buttons, as Option- and Command-click do in Squeak and
+    /// ALT and the MEGA key do on the board.
     fn button(&mut self, button: MouseButton, down: bool) -> Option<(u16, bool)> {
-        let code = mouse_code(button)?;
+        let held = &self.keyboard.held;
+        let code = match button {
+            MouseButton::Left if down => {
+                let code = if held.contains(&KeyCode::AltLeft) || held.contains(&KeyCode::AltRight)
+                {
+                    129
+                } else if held.contains(&KeyCode::SuperLeft) || held.contains(&KeyCode::SuperRight)
+                {
+                    128
+                } else {
+                    130
+                };
+                self.left = Some(code);
+                code
+            }
+            MouseButton::Left => self.left.take().unwrap_or(130),
+            _ => mouse_code(button)?,
+        };
         let changed = if down {
             self.buttons.insert(code)
         } else {
@@ -318,6 +340,7 @@ impl InputState {
         changed.then_some((code, down))
     }
     fn release(&mut self) -> Vec<(u16, bool)> {
+        self.left = None;
         let mut transitions = Vec::new();
         for key in self.keyboard.held.clone() {
             transitions.extend(self.keyboard.transition(key, false));
@@ -597,7 +620,16 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            WindowEvent::MouseInput { state, button, .. } if self.focused => {
+            WindowEvent::MouseInput { state, button, .. } => {
+                if std::env::var_os("REKURSIV_INPUT_TRACE").is_some() {
+                    eprintln!(
+                        "mouse {button:?} {state:?} focused={} held={:?}",
+                        self.focused, self.input_state.buttons
+                    );
+                }
+                if !self.focused {
+                    return Ok(());
+                }
                 if let Some(transition) = self
                     .input_state
                     .button(button, state == ElementState::Pressed)
@@ -713,6 +745,20 @@ mod tests {
         assert_eq!(key_code(KeyCode::ControlRight), Some(138));
         assert_eq!(key_code(KeyCode::Escape), Some(27));
         assert_eq!(key_code(KeyCode::F12), None);
+    }
+    #[test]
+    fn alt_and_super_with_the_left_button_are_the_yellow_and_blue_buttons() {
+        let mut input = InputState::default();
+        input.keyboard.transition(KeyCode::AltLeft, true);
+        assert_eq!(input.button(MouseButton::Left, true), Some((129, true)));
+        // Releasing Alt first still releases the button that was pressed.
+        input.keyboard.transition(KeyCode::AltLeft, false);
+        assert_eq!(input.button(MouseButton::Left, false), Some((129, false)));
+        input.keyboard.transition(KeyCode::SuperLeft, true);
+        assert_eq!(input.button(MouseButton::Left, true), Some((128, true)));
+        assert_eq!(input.button(MouseButton::Left, false), Some((128, false)));
+        input.keyboard.transition(KeyCode::SuperLeft, false);
+        assert_eq!(input.button(MouseButton::Left, true), Some((130, true)));
     }
     #[test]
     fn button_transitions_and_focus_loss_release_physical_state_once() {
