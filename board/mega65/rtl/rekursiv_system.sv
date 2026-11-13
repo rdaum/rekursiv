@@ -9,7 +9,7 @@
 //   the processor. The start record says whether collection is enabled and
 //   where the collector begins.
 module rekursiv_system #(
-    parameter integer PAGER_BITS = 14,
+    parameter integer PAGER_BITS = 15,
     parameter integer MEMORY_WORDS = 8388608,
     parameter integer CODE_WORDS = 8192,
     parameter FIRMWARE = "loader.mem"

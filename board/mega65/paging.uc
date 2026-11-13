@@ -3,10 +3,10 @@
 ; store. Fetching early objects by reference then refills them from the card.
 ;
 ; Object n (the nth allocation, identity n, opaque) holds COUNT + 1 - n in
-; field 2. Debug display, with the board's 16,384-entry table (COUNT 16660):
+; field 2. Debug display, with the board's 32,768-entry table (COUNT 33044):
 ;   0  0x50414745 ("PAGE") once the allocations finish
-;   1  field 2 of object 1, refilled from the card     expect 0x4114 (COUNT)
-;   2  field 2 of object 200, refilled                 expect 0x404d (COUNT - 199)
+;   1  field 2 of object 1, refilled from the card     expect 0x8114 (COUNT)
+;   2  field 2 of object 200, refilled                 expect 0x804d (COUNT - 199)
 ;   3  field 2 of the last object, still resident      expect 0x0001
 ;   4  0x444f4e45 ("DONE")
 ;   7  a running counter
