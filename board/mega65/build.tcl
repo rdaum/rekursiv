@@ -24,6 +24,9 @@ route_design
 report_utilization    -file $out/utilization.rpt
 report_utilization -hierarchical -hierarchical_depth 3 -file $out/utilization_modules.rpt
 report_timing_summary -file $out/timing.rpt
+# The worst setup paths, one per endpoint, to see what limits the clock.
+report_timing -setup -max_paths 50 -nworst 1 -unique_pins -file $out/timing_paths.rpt
+write_checkpoint -force $out/routed.dcp
 report_drc            -file $out/drc.rpt
 
 if {[get_property SLACK [get_timing_paths -setup]] < 0 ||
