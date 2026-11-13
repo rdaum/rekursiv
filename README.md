@@ -86,7 +86,7 @@ examples execute their program control flow and garbage collection on the RTL pr
 The Smalltalk microcode executes bytecodes, runtime primitives, and process scheduling. NUMERIK
 supports integer, binary32 and binary64 arithmetic. BitBlt runs in microcode and refreshes the
 display as the original Smalltalk image draws its desktop. Snapshot saving and the board's keyboard
-and mouse remain unfinished. On the MEGA65 the machine runs at 12.6 MHz with its object memory in
+and mouse remain unfinished. On the MEGA65 the machine runs at 25.2 MHz with its object memory in
 SDRAM, a 32,768-entry pager in block RAM, and its object store in a file on the SD card;
 `board/mega65/smalltalk.sh` builds the card's files from the Xerox image.
 

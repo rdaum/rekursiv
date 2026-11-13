@@ -1,5 +1,5 @@
 // MEGA65 R6 top level for the first rekursiv bring-up. The machine runs at
-// 12.6 MHz; its debug display and status are drawn at 640x480 60 Hz on the
+// 25.2 MHz; its debug display and status are drawn at 640x480 60 Hz on the
 // HDMI connector (plain DVI) and the VGA connector. Both clocks come from one
 // MMCM, so their crossing is timed as a synchronous path.
 //
@@ -132,7 +132,7 @@ module mega65_top (
     // Clocks: VCO = 100 / 5 * 31.5 = 630 MHz.
     //   CLKOUT0 126 MHz  TMDS serialiser (5x pixel)
     //   CLKOUT1 25.2 MHz pixel clock
-    //   CLKOUT2 12.6 MHz machine clock
+    //   CLKOUT2 25.2 MHz machine clock
     // ---------------------------------------------------------------------
     logic clk_pix, clk_x5, clk_cpu, clk_pix_raw, clk_x5_raw, clk_cpu_raw, clk_fb, locked;
 
@@ -142,7 +142,7 @@ module mega65_top (
         .CLKFBOUT_MULT_F (31.5),
         .CLKOUT0_DIVIDE_F(5.0),
         .CLKOUT1_DIVIDE  (25),
-        .CLKOUT2_DIVIDE  (50)
+        .CLKOUT2_DIVIDE  (25)
     ) mmcm (
         .CLKIN1(clk_i), .CLKFBIN(clk_fb), .CLKFBOUT(clk_fb), .CLKFBOUTB(),
         .CLKOUT0(clk_x5_raw), .CLKOUT0B(), .CLKOUT1(clk_pix_raw), .CLKOUT1B(),

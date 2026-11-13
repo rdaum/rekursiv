@@ -254,6 +254,17 @@ pub struct Store<D> {
     unapplied: bool,
 }
 
+/// Consecutive words of one object within the sector last read from the
+/// disk: `count` words from object word `offset`, the first at 32-bit word
+/// `index` of the sector.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Window {
+    pub reference: u64,
+    pub offset: u32,
+    pub index: u32,
+    pub count: u32,
+}
+
 fn sectors_for(size: u32) -> u32 {
     (HEADER_BYTES + 8 * size).div_ceil(SECTOR as u32)
 }
@@ -289,6 +300,30 @@ impl<D: Disk> Store<D> {
             store.replay().map_err(|_| Error::Journal)?;
         }
         Ok(store)
+    }
+
+    /// The words of the record last looked up that lie in the sector last
+    /// read, if that sector belongs to it. Words are eight bytes and the
+    /// header is a multiple of eight, so no word straddles two sectors.
+    pub fn window(&self) -> Option<Window> {
+        let record = self.found?;
+        let sector = self.cache_sector?.checked_sub(record.start)?;
+        if sector >= sectors_for(record.size) {
+            return None;
+        }
+        let words = SECTOR as u32 / 8;
+        let (offset, index) = if sector == 0 {
+            (0, HEADER_BYTES / 4)
+        } else {
+            (sector * words - HEADER_BYTES / 8, 0)
+        };
+        let count = (words - index / 2).min(record.size.checked_sub(offset)?);
+        (count != 0).then_some(Window {
+            reference: record.reference,
+            offset,
+            index,
+            count,
+        })
     }
 
     pub fn superblock(&self) -> Superblock {

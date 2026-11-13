@@ -449,3 +449,78 @@ fn records_spanning_sectors_round_trip() {
 fn crc32_matches_the_standard_check_value() {
     assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
 }
+
+#[test]
+fn window_names_the_words_in_the_sector_last_read() {
+    let mut store = Store::open(formatted(64, 16)).unwrap();
+    let reference = 2 << 38 | 7;
+    let class = 2 << 38 | 100;
+    let save = |store: &mut Store<_>, request: Request| {
+        assert_eq!(store.request(request).status, status::OK);
+    };
+    save(
+        &mut store,
+        Request {
+            op: op::BEGIN_SAVE,
+            reference,
+            class,
+            size: 70,
+            ..Request::default()
+        },
+    );
+    for offset in 0..70 {
+        save(
+            &mut store,
+            Request {
+                op: op::WRITE_WORD,
+                reference,
+                offset,
+                data: u64::from(offset) + 1000,
+                ..Request::default()
+            },
+        );
+    }
+    save(
+        &mut store,
+        Request {
+            op: op::COMMIT_SAVE,
+            reference,
+            ..Request::default()
+        },
+    );
+    // The header's sector holds words 0..59, after the 40-byte header.
+    save(
+        &mut store,
+        Request {
+            op: op::METADATA,
+            reference,
+            ..Request::default()
+        },
+    );
+    assert_eq!(
+        store.window(),
+        Some(Window {
+            reference,
+            offset: 0,
+            index: 10,
+            count: 59
+        })
+    );
+    // Word 59 begins the second sector, which holds the remaining 11.
+    let reply = store.request(Request {
+        op: op::READ_WORD,
+        reference,
+        offset: 59,
+        ..Request::default()
+    });
+    assert_eq!((reply.status, reply.data), (status::OK, 1059));
+    assert_eq!(
+        store.window(),
+        Some(Window {
+            reference,
+            offset: 59,
+            index: 0,
+            count: 11
+        })
+    );
+}

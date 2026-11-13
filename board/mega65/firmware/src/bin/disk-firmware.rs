@@ -93,6 +93,10 @@ extern "C" fn main() -> ! {
             continue;
         };
         let reply = store.request(request);
+        // The hardware answers the rest of this sector's words itself.
+        if let Some(window) = store.window() {
+            mailbox::open_window(&window);
+        }
         mailbox::respond(&reply);
         served = served.wrapping_add(1);
         display(6, served);

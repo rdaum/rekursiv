@@ -66,6 +66,7 @@ impl crate::disk::Disk for Card {
         sector: u32,
         data: &mut crate::disk::Sector,
     ) -> Result<(), crate::disk::DiskError> {
+        mailbox::close_window();
         if sd::read(sector) & sd::ERROR != 0 {
             return Err(crate::disk::DiskError);
         }
@@ -77,6 +78,7 @@ impl crate::disk::Disk for Card {
         sector: u32,
         data: &crate::disk::Sector,
     ) -> Result<(), crate::disk::DiskError> {
+        mailbox::close_window();
         sd::buffer().copy_from_slice(data);
         if sd::write_sector(sector) & sd::ERROR != 0 {
             return Err(crate::disk::DiskError);
@@ -92,6 +94,22 @@ pub mod mailbox {
 
     fn word(at: usize) -> u64 {
         u64::from(reg_read(BASE + at)) | u64::from(reg_read(BASE + at + 4)) << 32
+    }
+
+    /// Let the hardware answer ReadWord requests for `window` from the
+    /// sector buffer, which must hold that sector until the window closes.
+    pub fn open_window(window: &crate::store::Window) {
+        reg_write(BASE + 0x70, window.reference as u32);
+        reg_write(BASE + 0x74, (window.reference >> 32) as u32);
+        reg_write(BASE + 0x78, window.offset);
+        reg_write(BASE + 0x7c, window.index << 8 | window.count);
+    }
+
+    /// Stop hardware answers and wait for one in progress, before the
+    /// sector buffer changes.
+    pub fn close_window() {
+        reg_write(BASE + 0x80, 0);
+        while reg_read(BASE) & 2 != 0 {}
     }
 
     /// The waiting request, if any.

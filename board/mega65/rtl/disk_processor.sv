@@ -13,7 +13,8 @@
 //                  +0x08 command (w): 1 read into the buffer, 2 write from it
 //                  +0x200-0x3ff sector buffer, little-endian words
 //   0x2000_0000  store mailbox
-//                  +0x00 (r) bit 0: a request is waiting
+//                  +0x00 (r) bit 0: a request is waiting; bit 1: a window
+//                        read is using the sector buffer
 //                  +0x04 op       +0x08/0c ref lo/hi   +0x10/14 class lo/hi
 //                  +0x18 size     +0x1c cond           +0x20 offset
 //                  +0x24/28 data lo/hi
@@ -21,6 +22,16 @@
 //                  +0x54 size       +0x58 cond         +0x5c/60 data lo/hi
 //                  +0x64 (w) send the response; the request slot frees once
 //                        OBJEKT accepts it
+//                  +0x70/74 (w) window reference lo/hi
+//                  +0x78 (w) offset of the window's first object word
+//                  +0x7c (w) 14:8 buffer word index of that word, 6:0 word
+//                        count; opens the window
+//                  +0x80 (w) close the window
+//                The window says that the sector buffer holds consecutive
+//                words of one object. While it is open, a ReadWord request
+//                inside it is answered from the buffer without the
+//                processor. The firmware closes it, and waits for bit 1 of
+//                +0x00 to clear, before it changes the buffer.
 //   0x3000_0000  display rows 0-7 (w)
 //   0x4000_0000  machine boot port
 //                  +0x00 status (r): 0 LOGIK halted, 1 memory check done,
@@ -124,7 +135,8 @@ module disk_processor #(
     logic [8:0]  sd_read_index, sd_write_index;
     logic [7:0]  sd_read_data, sd_write_data;
 
-    sd_spi #(.SLOW_DIVIDE(16), .FAST_DIVIDE(1)) sd (
+    // 25.2 MHz: 394 kHz for setup, 12.6 MHz for transfers.
+    sd_spi #(.SLOW_DIVIDE(32), .FAST_DIVIDE(1)) sd (
         .clk_i, .rst_i,
         .sd_clk_o, .sd_cs_n_o, .sd_mosi_o, .sd_miso_i,
         .valid_i(sd_valid), .ready_o(sd_ready), .write_i(sd_write), .sector_i(sd_sector),
@@ -136,17 +148,21 @@ module disk_processor #(
     // 512-byte buffer as a true dual-port RAM of 128 words. Port A serves the
     // SD engine a byte at a time; port B serves the processor's word accesses.
     // Each port is written from its own process so it maps to block RAM.
+    logic        fast_busy;
+    logic [6:0]  fast_index;
     logic [31:0] buffer [128];
     logic [31:0] buffer_rdata, sd_word;
     logic [1:0]  sd_lane;
     wire  [8:0]  sd_index = sd_read_byte ? sd_read_index : sd_write_index;
     wire  [3:0]  sd_we = sd_read_byte ? 4'b0001 << sd_read_index[1:0] : 4'b0000;
+    // A window read borrows this port; the SD engine is idle while it runs.
+    wire  [6:0]  sd_address = fast_busy ? fast_index : sd_index[8:2];
     wire  [3:0]  cpu_we = (mem_valid && !mem_ready && region == 4'h1 && mem_addr[9]) ? mem_wstrb : 4'b0000;
 
     always_ff @(posedge clk_i) begin
         for (int i = 0; i < 4; i++)
-            if (sd_we[i]) buffer[sd_index[8:2]][8*i +: 8] <= sd_read_data;
-        sd_word <= buffer[sd_index[8:2]];
+            if (sd_we[i]) buffer[sd_address][8*i +: 8] <= sd_read_data;
+        sd_word <= buffer[sd_address];
         sd_lane <= sd_index[1:0];
     end
     always_ff @(posedge clk_i) begin
@@ -189,14 +205,45 @@ module disk_processor #(
     logic [23:0] request_size, request_offset;
     logic        request_cond;
 
-    assign store_ready_o = !request_waiting && !store_rsp_valid_o;
+    assign store_ready_o = !request_waiting && !store_rsp_valid_o && !fast_busy;
+
+    // The window, and the engine that answers a ReadWord inside it: two
+    // buffer reads through the idle SD port, low half first.
+    logic        window_open;
+    logic [39:0] window_ref;
+    logic [23:0] window_offset;
+    logic [6:0]  window_index, window_count;
+    logic [1:0]  fast_step;
+    wire  [23:0] window_distance = store_offset_i - window_offset;
+    wire         window_hit = window_open && !sd_busy && store_op_i == 4'd1 &&
+        store_ref_i == window_ref && store_offset_i >= window_offset &&
+        window_distance < 24'(window_count);
 
     always_ff @(posedge clk_i) begin
         if (rst_i) begin
             request_waiting <= 1'b0;
             store_rsp_valid_o <= 1'b0;
+            window_open <= 1'b0;
+            fast_busy <= 1'b0;
         end else begin
-            if (store_valid_i && store_ready_o) begin
+            if (fast_busy) begin
+                fast_step <= fast_step + 1'b1;
+                unique case (fast_step)
+                    2'd0: fast_index <= fast_index + 1'b1;
+                    2'd1: store_rsp_data_o[31:0] <= sd_word;
+                    default: begin
+                        store_rsp_data_o[39:32] <= sd_word[7:0];
+                        store_rsp_status_o <= 4'd0;
+                        store_rsp_valid_o <= 1'b1;
+                        fast_busy <= 1'b0;
+                    end
+                endcase
+            end
+            if (store_valid_i && store_ready_o && window_hit) begin
+                fast_busy <= 1'b1;
+                fast_step <= '0;
+                fast_index <= window_index + {window_distance[5:0], 1'b0};
+            end else if (store_valid_i && store_ready_o) begin
                 request_waiting <= 1'b1;
                 request_op <= store_op_i;
                 request_ref <= store_ref_i;
@@ -210,6 +257,8 @@ module disk_processor #(
                 store_rsp_valid_o <= 1'b0;
                 request_waiting <= 1'b0;
             end
+            // Any card command changes the buffer.
+            if (sd_valid) window_open <= 1'b0;
             if (mem_valid && !mem_ready && write && region == 4'h2) begin
                 unique case (mem_addr[7:0])
                     8'h40: store_rsp_status_o <= mem_wdata[3:0];
@@ -222,6 +271,15 @@ module disk_processor #(
                     8'h5c: store_rsp_data_o[31:0] <= mem_wdata;
                     8'h60: store_rsp_data_o[39:32] <= mem_wdata[7:0];
                     8'h64: if (request_waiting) store_rsp_valid_o <= 1'b1;
+                    8'h70: window_ref[31:0] <= mem_wdata;
+                    8'h74: window_ref[39:32] <= mem_wdata[7:0];
+                    8'h78: window_offset <= mem_wdata[23:0];
+                    8'h7c: begin
+                        window_index <= mem_wdata[14:8];
+                        window_count <= mem_wdata[6:0];
+                        window_open <= 1'b1;
+                    end
+                    8'h80: window_open <= 1'b0;
                     default: begin end
                 endcase
             end
@@ -231,7 +289,7 @@ module disk_processor #(
     logic [31:0] mailbox_rdata;
     always_comb begin
         unique case (mem_addr[7:0])
-            8'h00: mailbox_rdata = {31'd0, request_waiting && !store_rsp_valid_o};
+            8'h00: mailbox_rdata = {30'd0, fast_busy, request_waiting && !store_rsp_valid_o};
             8'h04: mailbox_rdata = {28'd0, request_op};
             8'h08: mailbox_rdata = request_ref[31:0];
             8'h0c: mailbox_rdata = {24'd0, request_ref[39:32]};

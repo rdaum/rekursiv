@@ -7,7 +7,7 @@
 // report the first mismatch. OBJEKT's channel is served only after a pass.
 module object_memory #(
     parameter integer MEMORY_WORDS = 8388608,
-    parameter integer CLK_HZ = 12_600_000
+    parameter integer CLK_HZ = 25_200_000
 )(
     input  logic        clk_i,
     input  logic        rst_i,

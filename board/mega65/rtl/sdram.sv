@@ -3,9 +3,9 @@
 // four consecutive columns, read or written as one burst of four, so a word
 // never crosses a row. Machine words use the low 40 bits.
 //
-// Everything runs on the machine clock, which must be slow enough that every
-// SDRAM interval except the power-up wait fits in one cycle (below about
-// 16 MHz for the -6 part: tRC is 60 ns). The board sends the chip the
+// Everything runs on the machine clock. The controller leaves one cycle for
+// tRCD, tRP and write recovery and two for tRC and tMRD, so the clock must
+// stay below about 33 MHz for the -6 part (tRC is 60 ns). The board sends the chip the
 // inverted clock, so the chip samples commands mid-cycle and its read data
 // (CAS latency 2) is stable at the controller's edges.
 //
@@ -13,7 +13,7 @@
 // pulses when it has completed, with rdata_o for a read. Refresh runs
 // between requests.
 module sdram #(
-    parameter integer CLK_HZ = 12_600_000
+    parameter integer CLK_HZ = 25_200_000
 )(
     input  logic        clk_i,
     input  logic        rst_i,
