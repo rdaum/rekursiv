@@ -148,6 +148,12 @@ pub struct Command {
     /// with no effects, and LOGIK replays it as an ordinary Fetch. Set by the
     /// executor, never by a control word.
     pub speculative: bool,
+    /// `prepare` and `prepared` act on the stream, a second prepared access,
+    /// instead of the prepared register. A stream access only reads.
+    pub stream: bool,
+    /// After a prepared stream access, step the stream to the next field of
+    /// the same object, deferring a bounds error to its next access.
+    pub advance: bool,
     pub read: Read,
     pub load_vr: bool,
     pub vr: u8,
@@ -270,6 +276,22 @@ impl Command {
             || (self.pager != Pager::None && self.memory != Memory::None && !self.prepared)
             || (self.prepared && self.memory == Memory::None)
             || (self.speculative && self.pager != Pager::Fetch)
+            // The stream bit selects one of three forms. With Fetch it
+            // re-aims an invalidated stream at the fetched object; with
+            // prepare it aims the stream; with prepared it is a bare read
+            // through the stream, which LOGIK can reissue after a miss.
+            || (self.stream && !(self.prepare || self.prepared || self.pager == Pager::Fetch))
+            || (self.stream && self.pager == Pager::Fetch && (self.prepare || self.prepared))
+            || (self.stream && self.prepare && (self.prepared || self.pager != Pager::None || self.memory != Memory::None))
+            || (self.stream
+                && self.prepared
+                && (self.memory != Memory::Read
+                    || self.pager != Pager::None
+                    || self.index != Index::None
+                    || self.register != Register::None
+                    || self.load_vr
+                    || self.expected_type.is_some()))
+            || (self.advance && !(self.stream && self.prepared))
             || (self.pager != Pager::None && self.index == Index::Next)
             || (self.memory != Memory::None && self.read != Read::None)
         {
@@ -298,6 +320,8 @@ impl Command {
             alloc_size: self.alloc_size,
             alloc_scan: self.alloc_scan as u8,
             speculative: self.speculative as u8,
+            stream: self.stream as u8,
+            advance: self.advance as u8,
         })
     }
 }
@@ -344,6 +368,8 @@ pub struct Ports {
     pub alloc_size: u32,
     pub alloc_scan: u8,
     pub speculative: u8,
+    pub stream: u8,
+    pub advance: u8,
 }
 impl Ports {
     pub fn decode(self) -> Result<Command, Status> {
@@ -351,6 +377,8 @@ impl Ports {
             || self.check_type > 1
             || self.alloc_scan > 1
             || self.speculative > 1
+            || self.stream > 1
+            || self.advance > 1
             || self.prepare > 1
             || self.prepared > 1
         {
@@ -364,6 +392,8 @@ impl Ports {
             prepare: self.prepare != 0,
             prepared: self.prepared != 0,
             speculative: self.speculative != 0,
+            stream: self.stream != 0,
+            advance: self.advance != 0,
             read: self.read.try_into()?,
             load_vr: self.load_vr != 0,
             alloc_size: self.alloc_size,
@@ -505,6 +535,8 @@ mod tests {
                 alloc_size: 0,
                 alloc_scan: 0,
                 speculative: 0,
+                stream: 0,
+                advance: 0,
             }
         );
         assert_eq!(p.decode().unwrap(), cmd);

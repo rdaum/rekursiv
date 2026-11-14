@@ -361,6 +361,14 @@ fn instruction(
                 object.prepared = flag()?;
                 has_object = true;
             }
+            "stream" => {
+                object.stream = flag()?;
+                has_object = true;
+            }
+            "advance" => {
+                object.advance = flag()?;
+                has_object = true;
+            }
             "read" => {
                 object.read = enumeration(line, value)?;
                 has_object = true;
@@ -408,6 +416,20 @@ fn instruction(
             Word::reference(1, true).unwrap()
         };
         i.object = Some(object);
+    }
+    if let Some(c) = i.object.filter(|c| c.stream) {
+        // LOGIK issues the stream's own Fetch while replaying a miss, and can
+        // reissue only a launched stream read.
+        if c.pager == crate::Pager::Fetch {
+            return Err(error(
+                line,
+                tokens.first(),
+                "only LOGIK fetches with the stream bit",
+            ));
+        }
+        if c.prepared && !i.launches() {
+            return Err(error(line, tokens.first(), "a stream read must launch"));
+        }
     }
     i.encode()
         .map_err(|e| error(line, tokens.first(), format!("invalid control word: {e:?}")))?;

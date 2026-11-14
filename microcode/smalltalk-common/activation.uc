@@ -44,6 +44,9 @@ copy_argument:
     ra=8, s=Branch, brch=3, alu=Add, rb=8, ldrb
     ra=4, rb=9, ldrb
     ra=4, rb=12, ldrb
+    ; Aim the bytecode stream at IP: the method is selected.
+    ra=8, rb=10, alu=Sub, cin=One, ldq
+    d=Q, idx=Load, prepare, stream
     d=0, r=Bus, rb=15, ldrb, seq=Jump, brch=boundary
 
 ; Quick methods and successful allocation replace receiver+arguments by a result
@@ -181,6 +184,9 @@ reload_frame:
     ra=0, s=Bus, d=63, alu=And, rb=10, ldrb
     ra=0, s=Branch, brch=25, alu=Rotate, rb=12, ldrb
     ra=12, s=Bus, d=31, alu=And, rb=12, ldrb
+    ; Aim the bytecode stream at IP: the method is selected.
+    ra=8, rb=10, alu=Sub, cin=One, ldq
+    d=Q, idx=Load, prepare, stream
     ; A block's evaluation stack starts at zero; its temporaries are its home's.
     read=Vr, vr=0
     d=Object, page=Fetch

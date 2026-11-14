@@ -32,8 +32,10 @@ impl Model {
         let destination = if from_upper { 0 } else { half };
         let mut work = roots.to_vec();
         work.extend(self.state.vr);
-        if self.state.prepared.status == Status::Ok {
-            work.push(self.state.prepared.reference);
+        for p in [self.state.prepared, self.state.stream] {
+            if p.status == Status::Ok {
+                work.push(p.reference);
+            }
         }
         work.extend(self.classes.iter().flatten().copied());
         if let Some(e) = self.state.selected.get() {
@@ -126,8 +128,10 @@ impl Model {
         let source_start = if from_upper { half } else { 0 };
         let mut work = roots.to_vec();
         work.extend(self.state.vr);
-        if self.state.prepared.status == Status::Ok {
-            work.push(self.state.prepared.reference);
+        for p in [self.state.prepared, self.state.stream] {
+            if p.status == Status::Ok {
+                work.push(p.reference);
+            }
         }
         work.extend(self.classes.iter().flatten().copied());
         if let Some(e) = self.state.selected.get() {

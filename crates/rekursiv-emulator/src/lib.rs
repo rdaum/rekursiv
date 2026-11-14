@@ -562,6 +562,50 @@ impl Machine {
             } else {
                 self.objekt.execute_response(command, false)
             };
+            // A read through an invalidated stream replies Miss. LOGIK fetches
+            // the stream's object, which re-aims the stream, and reissues the
+            // read; a collection the Fetch needs retries the whole word.
+            let response = if response.status == Status::Miss && command.stream {
+                let fetch = Command {
+                    pager: Pager::Fetch,
+                    stream: true,
+                    data: self.objekt.state.stream.reference,
+                    ..Command::default()
+                };
+                let path = self
+                    .cycle_estimate
+                    .as_ref()
+                    .map(|_| timing::ObjectPath::capture(&self.objekt, fetch));
+                let outcome = self.objekt.execute(fetch, false);
+                if let Some(path) = path {
+                    let timing = self.cycle_estimate.as_mut().unwrap();
+                    timing.speculative_miss();
+                    timing.object(path, true, &outcome, false);
+                }
+                if outcome.response.status == Status::OutOfSpace
+                    && self.image.collector_entry.is_some()
+                    && self.retry_irq.is_none()
+                {
+                    self.enter_recovery(Some(fetch), irq)?;
+                    self.devices.tick_idle()?;
+                    return Ok(Step::RecoveryEntered);
+                }
+                if outcome.response.status != Status::Ok {
+                    return Err(self.fail(4, Some(outcome.response.status)).into());
+                }
+                let path = self
+                    .cycle_estimate
+                    .as_ref()
+                    .map(|_| timing::ObjectPath::capture(&self.objekt, command));
+                let outcome = self.objekt.execute(command, false);
+                if let Some(path) = path {
+                    let timing = self.cycle_estimate.as_mut().unwrap();
+                    timing.object(path, false, &outcome, false);
+                }
+                outcome.response
+            } else {
+                response
+            };
             if response.status == Status::OutOfSpace
                 && self.image.collector_entry.is_some()
                 && self.retry_irq.is_none()

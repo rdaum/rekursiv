@@ -256,6 +256,9 @@ impl Model {
             self.state.selected = Some(incoming).into();
             Ok(incoming.reference)
         })();
+        if c.stream && result.is_ok() {
+            self.revalidate_stream();
+        }
         out.response = match result {
             Ok(r) => Response::ok(r),
             Err(e) => Response::error(e),

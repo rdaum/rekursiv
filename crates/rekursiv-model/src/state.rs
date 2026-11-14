@@ -46,6 +46,9 @@ pub struct State {
     pub selected: crate::Slot<Entry>,
     /// Prepared access consumed by a later command with the prepared control set.
     pub prepared: PreparedAccess,
+    /// A second prepared access, the stream, which an advancing read steps
+    /// through consecutive fields of one object.
+    pub stream: PreparedAccess,
 }
 impl Default for State {
     fn default() -> Self {
@@ -55,6 +58,7 @@ impl Default for State {
             index_reg: 0,
             selected: crate::Slot::default(),
             prepared: PreparedAccess::default(),
+            stream: PreparedAccess::default(),
         }
     }
 }

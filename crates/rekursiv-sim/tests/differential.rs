@@ -615,3 +615,125 @@ proptest! {
         assert_eq!(good(&mut h,Command::read_field()),Word::unsigned(!body[0]));
     }
 }
+
+#[test]
+fn stream_reads_advance_miss_and_reaim() -> Result<()> {
+    let rt = runtime()?;
+    let mut h = Harness::new(
+        &rt,
+        Timing {
+            request_delay: 2,
+            memory_latency: 3,
+            response_stall: 1,
+        },
+        None,
+    )?;
+    // Identities 1 and 17 share a slot of the sixteen-entry pager.
+    for id in [1u64, 17] {
+        let record = rekursiv_model::store::Record {
+            reference: r(id),
+            class: r(8),
+            cond: false,
+            body: (0..5).map(|n| Word::unsigned(id as u32 * 10 + n)).collect(),
+        };
+        h.store.records.insert(id, record.clone());
+        h.oracle.store.records.insert(id, record);
+    }
+    let aim = |index| Command {
+        index,
+        prepare: true,
+        stream: true,
+        ..Default::default()
+    };
+    let read = Command {
+        memory: Memory::Read,
+        prepared: true,
+        stream: true,
+        advance: true,
+        ..Default::default()
+    };
+    let fetch = |id, stream| Command {
+        stream,
+        ..Command::fetch(r(id))
+    };
+    good(&mut h, Command::fetch(r(1)));
+    // Field 1 lives in the pager entry: aiming there defers a bounds error.
+    good(&mut h, aim(Index::One));
+    assert_eq!(h.execute(read)?.status, Status::BoundsError);
+    // Reads advance through fields 2..5; one past the end defers its error.
+    good(&mut h, aim(Index::Two));
+    for n in 1..5 {
+        assert_eq!(good(&mut h, read), Word::unsigned(10 + n as u32));
+    }
+    assert_eq!(h.execute(read)?.status, Status::BoundsError);
+    // The ordinary prepared access is separate from the stream.
+    good(&mut h, aim(Index::Two));
+    good(
+        &mut h,
+        Command {
+            prepare: true,
+            ..Command::index(4)?
+        },
+    );
+    assert_eq!(
+        good(
+            &mut h,
+            Command {
+                memory: Memory::Read,
+                prepared: true,
+                ..Default::default()
+            }
+        ),
+        Word::unsigned(13)
+    );
+    assert_eq!(good(&mut h, read), Word::unsigned(11));
+    // Replacing the slot invalidates the stream: a read misses and names its
+    // object, and a plain Fetch leaves it invalid.
+    good(&mut h, fetch(17, false));
+    let miss = h.execute(read)?;
+    assert_eq!((miss.status, miss.data), (Status::Miss, r(1)));
+    good(&mut h, fetch(1, false));
+    assert_eq!(h.execute(read)?.status, Status::Miss);
+    // A stream Fetch re-aims it, whether its object is resident or refilled.
+    good(&mut h, fetch(1, true));
+    assert_eq!(good(&mut h, read), Word::unsigned(12));
+    good(&mut h, fetch(17, false));
+    good(&mut h, fetch(1, true));
+    assert_eq!(good(&mut h, read), Word::unsigned(13));
+    // A stream Fetch of another object does not.
+    good(&mut h, fetch(17, true));
+    assert_eq!(h.execute(read)?.status, Status::Miss);
+    // Malformed stream forms.
+    for p in [
+        Ports {
+            stream: 1,
+            ..Ports::default()
+        },
+        Ports {
+            advance: 1,
+            ..Ports::default()
+        },
+        Ports {
+            stream: 1,
+            prepared: 1,
+            memory: 2,
+            ..Ports::default()
+        },
+        Ports {
+            stream: 1,
+            prepared: 1,
+            memory: 1,
+            index: 1,
+            ..Ports::default()
+        },
+        Ports {
+            stream: 1,
+            prepare: 1,
+            memory: 1,
+            ..Ports::default()
+        },
+    ] {
+        assert_eq!(h.execute_raw(p, false)?.status, Status::BadCommand, "{p:?}");
+    }
+    Ok(())
+}

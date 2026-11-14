@@ -76,10 +76,35 @@ impl Model {
     /// Publishing/replacing a pager mapping invalidates its derived address.
     /// Re-preparation is required even if a later refill restores that identity.
     pub(super) fn invalidate_prepared_slot(&mut self, slot: usize) {
-        if self.state.prepared.status == Status::Ok
-            && self.slot(self.state.prepared.reference) == slot
-        {
-            self.state.prepared.status = Status::NotResident;
+        for p in [&mut self.state.prepared, &mut self.state.stream] {
+            if p.status == Status::Ok
+                && (p.reference.bits() as usize & (self.entries.len() - 1)) == slot
+            {
+                p.status = Status::NotResident;
+            }
+        }
+    }
+    /// A Fetch with the stream bit re-aims an invalidated stream that aims
+    /// at the fetched object.
+    pub(super) fn revalidate_stream(&mut self) {
+        let s = self.state.stream;
+        let e = self.state.selected.get();
+        if s.status == Status::NotResident && e.is_some_and(|e| e.reference == s.reference) {
+            self.state.stream = self.prepare_stream(s.index);
+        }
+    }
+    /// The stream reads RAM only, so it never covers field 1, which the
+    /// pager entry holds: aiming it there defers a bounds error.
+    pub(super) fn prepare_stream(&self, index: i64) -> PreparedAccess {
+        let access = self.prepare_access(index);
+        if access.status == Status::Ok && index == 1 {
+            PreparedAccess {
+                status: Status::BoundsError,
+                address: 0,
+                ..access
+            }
+        } else {
+            access
         }
     }
     /// Update a valid prepared address after successful RAM relocation.
@@ -89,11 +114,25 @@ impl Model {
     /// the latch records the lookup error instead of an address.
     /// Existing deferred errors remain unchanged.
     pub fn relocate_prepared(&mut self) {
-        let p = self.state.prepared;
-        if p.status == Status::Ok {
-            match self.resolve(p.reference) {
-                Ok(e) => self.state.prepared.address = e.base + p.index as u32 - 1,
-                Err(status) => self.state.prepared.status = status,
+        for stream in [false, true] {
+            let p = if stream {
+                self.state.stream
+            } else {
+                self.state.prepared
+            };
+            if p.status == Status::Ok {
+                let relocated = match self.resolve(p.reference) {
+                    Ok(e) => crate::PreparedAccess {
+                        address: e.base + p.index as u32 - 1,
+                        ..p
+                    },
+                    Err(status) => crate::PreparedAccess { status, ..p },
+                };
+                if stream {
+                    self.state.stream = relocated;
+                } else {
+                    self.state.prepared = relocated;
+                }
             }
         }
     }

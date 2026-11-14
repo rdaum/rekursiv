@@ -255,6 +255,8 @@ impl Instruction {
             put(205, 1, p.alloc_scan as u64);
             put(227, 1, p.prepare as u64);
             put(228, 1, p.prepared as u64);
+            put(233, 1, p.stream as u64);
+            put(234, 1, p.advance as u64);
         }
         put(206, 6, self.compact_code as u64);
         put(212, 4, self.recovery as u64);

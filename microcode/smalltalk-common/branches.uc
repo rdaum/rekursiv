@@ -52,5 +52,8 @@ take_conditional:
     d=NIL, mem=Write
     ra=9, s=Branch, brch=1, alu=Sub, cin=One, rb=9, ldrb
 apply_jump:
-    ra=1, rb=8, alu=Add, ldq, ldrb
-    seq=Jump, brch=boundary
+    ; Jump, and re-aim the bytecode stream at the new IP.
+    ra=1, rb=8, alu=Add, ldrb, read=Vr, vr=1
+    ra=8, rb=10, alu=Sub, cin=One, ldq
+    d=Object, page=Fetch
+    d=Q, idx=Load, prepare, stream, seq=Jump, brch=boundary

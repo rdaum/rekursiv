@@ -85,8 +85,10 @@ impl Model {
         } else {
             let mut work = roots.values();
             work.extend(self.state.vr);
-            if self.state.prepared.status == Status::Ok {
-                work.push(self.state.prepared.reference);
+            for p in [self.state.prepared, self.state.stream] {
+                if p.status == Status::Ok {
+                    work.push(p.reference);
+                }
             }
             work.extend(self.classes.iter().flatten().copied());
             if let Some(e) = self.state.selected.get() {
@@ -148,8 +150,10 @@ impl Model {
         // The halted service recovery utility republishes mappings with
         // Install. Unlike machine GC, that interface invalidates derived
         // addresses and requires a new PREPARE after maintenance.
-        if self.state.prepared.status == Status::Ok {
-            self.state.prepared.status = Status::NotResident;
+        for p in [&mut self.state.prepared, &mut self.state.stream] {
+            if p.status == Status::Ok {
+                p.status = Status::NotResident;
+            }
         }
         self.body_cursor = base;
         self.store.records.retain(|id, _| live.contains(id));

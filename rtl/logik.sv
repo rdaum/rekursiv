@@ -55,7 +55,7 @@ module logik #(
     output logic speculative_o,
     output logic [3:0] pager_o, output logic [3:0] index_o,
     output logic [2:0] register_o, output logic [1:0] memory_o,
-    output logic prepare_o, prepared_o,
+    output logic prepare_o, prepared_o, stream_o, advance_o,
     output logic [3:0] read_o, output logic load_vr_o, output logic [2:0] vr_o,
     output logic [23:0] alloc_size_o, output logic alloc_scan_o,
     output logic [39:0] data_o, output logic check_type_o, output logic [39:0] expected_type_o,
@@ -84,9 +84,14 @@ module logik #(
         HALTED, EXECUTE, WAIT_RESPONSE, SERVICE_BREAK, ISSUE, NUMERIC_WAIT, DEVICE_WAIT, REPLAY
     } execution_state_t;
     localparam logic [3:0] STATUS_OUT_OF_SPACE = 4'd11, STATUS_MISS = 4'd13;
-    // The pending launched command is a Fetch, whose reference replay reissues.
-    logic launched_fetch, replay_pending, replay_issued;
+    // The pending launched command is a Fetch, whose reference a replay
+    // fetches again, or a stream read, whose Miss names the stream's object:
+    // a replay fetches that with the stream bit, which re-aims the stream,
+    // and then reissues the read (replay_read).
+    logic launched_fetch, launched_stream, launched_advance;
+    logic replay_pending, replay_issued, replay_stream, replay_advance, replay_read;
     logic [39:0] replay_data;
+    wire launched_replayable = launched_fetch || launched_stream;
     execution_state_t state, next_state;
     wire replaying = state == REPLAY;
     microinstruction_t instruction;
@@ -317,7 +322,8 @@ module logik #(
             instruction.compact_code > 3) local_fault = FAULT_ENCODING;
         else if(instruction.object_async && (!instruction.object_enable || !instruction.object_prepared ||
             instruction.object_memory==0 || instruction.halt || instruction.sequence_op==SEQ_SERVICE || instruction.recovery!=0)) local_fault=FAULT_ENCODING;
-        else if(!instruction.object_enable && (instruction.object_prepare || instruction.object_prepared)) local_fault=FAULT_ENCODING;
+        else if(!instruction.object_enable && (instruction.object_prepare || instruction.object_prepared ||
+            instruction.object_stream || instruction.object_advance)) local_fault=FAULT_ENCODING;
         else if ((instruction.write_root || instruction.bus_source == BUS_ROOT) &&
             (gc_active_o || register_a >= 32)) local_fault = FAULT_ENCODING;
         else if (instruction.device > 2 ||
@@ -352,7 +358,7 @@ module logik #(
             EXECUTE: begin
                 if (pause_i) begin end
                 else if (blocked) begin
-                    if(async_join && async_completion_status==STATUS_MISS && launched_fetch) next_state=REPLAY;
+                    if(async_join && async_completion_status==STATUS_MISS && launched_replayable) next_state=REPLAY;
                     else if(async_join && async_completion_status!=0) next_state=HALTED;
                 end
                 // A replay interrupted by collection is redone before its barrier.
@@ -396,9 +402,13 @@ module logik #(
             SERVICE_BREAK: if (resume_i) next_state = EXECUTE;
             // The replayed Fetch is an ordinary blocking one; the barrier it
             // interrupted runs afterwards, in EXECUTE.
+            // A stream replay's Fetch is followed by the reissued read; a read
+            // that misses again fetches again.
             REPLAY: if (replay_issued && rsp_valid_i) begin
                 if (gc_enter) next_state = EXECUTE;
-                else next_state = rsp_status_i == 0 ? EXECUTE : HALTED;
+                else if (rsp_status_i == 0) next_state = (replay_stream && !replay_read) ? REPLAY : EXECUTE;
+                else if (replay_read && rsp_status_i == STATUS_MISS) next_state = REPLAY;
+                else next_state = HALTED;
             end
             default: next_state = HALTED;
         endcase
@@ -427,7 +437,9 @@ module logik #(
             object_result <= '0;
             object_status <= '0;
             async_pending<=0; async_done<=0; async_status<=0; async_data<=0;
-            launched_fetch<=0; replay_pending<=0; replay_issued<=0; replay_data<=0;
+            launched_fetch<=0; launched_stream<=0; launched_advance<=0;
+            replay_pending<=0; replay_issued<=0; replay_data<=0;
+            replay_stream<=0; replay_advance<=0; replay_read<=0;
             service_code <= '0;
         end else begin
             state <= next_state;
@@ -444,7 +456,11 @@ module logik #(
             end
             if(async_join) begin
                 async_pending<=0; async_done<=0; last_status_o<=async_completion_status;
-                if(async_completion_status==STATUS_MISS && launched_fetch) replay_pending<=1;
+                if(async_completion_status==STATUS_MISS && launched_replayable) begin
+                    replay_pending<=1; replay_read<=0;
+                    replay_stream<=launched_stream; replay_advance<=launched_advance;
+                    if(launched_stream) replay_data<=async_completion_data;
+                end
                 else if(async_completion_status!=0) fault_o<=FAULT_OBJECT;
                 else begin object_result<=async_completion_data; object_status<=async_completion_status; end
             end
@@ -453,14 +469,18 @@ module logik #(
                ((state==ISSUE) || (direct_issue && next_state==EXECUTE && retire))) begin
                 async_pending<=1; async_done<=0;
                 launched_fetch<=instruction.object_pager==5; replay_data<=bus_value;
+                launched_stream<=instruction.object_stream && instruction.object_prepared;
+                launched_advance<=instruction.object_advance;
             end
             if(replaying && !replay_issued && cmd_ready_i && !gc_active_o) replay_issued<=1;
             if(replaying && replay_issued && rsp_valid_i) begin
                 replay_issued<=0; last_status_o<=rsp_status_i;
-                if(rsp_status_i==0) begin
+                if(rsp_status_i==0 && replay_stream && !replay_read) replay_read<=1;
+                else if(rsp_status_i==0) begin
                     replay_pending<=0; retried<=0;
                     object_result<=rsp_data_i; object_status<=rsp_status_i;
-                end else if(!gc_enter) fault_o<=FAULT_OBJECT;
+                end else if(replay_read && rsp_status_i==STATUS_MISS) replay_read<=0;
+                else if(!gc_enter) fault_o<=FAULT_OBJECT;
             end
             if (state == DEVICE_WAIT && io_done && io_error) fault_o <= FAULT_DEVICE;
             if (state == WAIT_RESPONSE && response_valid) begin
@@ -495,13 +515,16 @@ module logik #(
     end
 
     // OBJEKT retains its existing independently encoded command interface.
-    // A replay drives a standalone Fetch of the saved reference.
-    assign pager_o = replaying ? 4'd5 : instruction.object_pager;
+    // A replay drives a standalone Fetch of the saved reference, then for a
+    // stream the bare stream read again.
+    assign pager_o = replaying ? (replay_read ? 4'd0 : 4'd5) : instruction.object_pager;
     assign index_o = replaying ? '0 : instruction.object_index;
     assign register_o = replaying ? '0 : instruction.object_register;
-    assign memory_o = replaying ? '0 : instruction.object_memory;
+    assign memory_o = replaying ? {1'b0, replay_read} : instruction.object_memory;
     assign prepare_o = replaying ? 1'b0 : instruction.object_prepare;
-    assign prepared_o = replaying ? 1'b0 : instruction.object_prepared;
+    assign prepared_o = replaying ? replay_read : instruction.object_prepared;
+    assign stream_o = replaying ? replay_stream : instruction.object_stream;
+    assign advance_o = replaying ? replay_read && replay_advance : instruction.object_advance;
     assign read_o = replaying ? '0 : instruction.object_read;
     assign load_vr_o = replaying ? 1'b0 : instruction.load_value_register;
     assign vr_o = instruction.value_register;

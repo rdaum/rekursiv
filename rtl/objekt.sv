@@ -52,6 +52,10 @@ module objekt #(
     input logic [23:0] alloc_size_i, input logic alloc_scan_i,
     // A launched Fetch: a nonresident target replies MISS with no effects.
     input logic speculative_i,
+    // The stream: a second prepared access, read only, that an advancing read
+    // steps through consecutive fields. With Fetch, re-aim an invalidated
+    // stream at the fetched object.
+    input logic stream_i, input logic advance_i,
     input logic [39:0] data_i, input logic check_type_i, input logic [39:0] expected_type_i,
     input logic svc_valid_i, output logic svc_ready_o, input logic [3:0] svc_op_i,
     input logic [39:0] svc_ref_i, input logic [39:0] svc_class_i,
@@ -79,6 +83,8 @@ module objekt #(
     output logic [39:0] dbg_idx_o, output logic [39:0] dbg_reg_o,
     output logic [39:0] dbg_prepared_ref_o, dbg_prepared_index_o,
     output logic [23:0] dbg_prepared_address_o, output logic [3:0] dbg_prepared_status_o,
+    output logic [39:0] dbg_stream_ref_o, dbg_stream_index_o,
+    output logic [23:0] dbg_stream_address_o, output logic [3:0] dbg_stream_status_o,
     output logic dbg_selected_o, output logic [39:0] dbg_ref_o,
     output logic [39:0] dbg_class_o, output logic [23:0] dbg_size_o,
     output logic [23:0] dbg_base_o, output logic [39:0] dbg_repr_o, output logic [2:0] dbg_flags_o,
@@ -90,9 +96,26 @@ module objekt #(
     localparam integer ENTRIES = 1 << PAGER_BITS;
     localparam [39:0] NIL = 40'hc000000000;
     localparam [3:0] OK=0, BAD_COMMAND=1, BAD_VALUE=2, INVALID_REFERENCE=3,
-        NOT_RESIDENT=4, NO_SELECTION=5, BOUNDS=6, INDEX_OVERFLOW=7, TYPE_ERROR=8, MEMORY_ERROR=9;
+        NOT_RESIDENT=4, NO_SELECTION=5, BOUNDS=6, INDEX_OVERFLOW=7, TYPE_ERROR=8, MEMORY_ERROR=9,
+        MISS=13;
     `include "objekt_address.svh"
     prepared_access_t prepared_access, next_prepared, pending_prepared;
+    // The stream keeps its object's size for the advance bound: a resident
+    // object's size is fixed until its slot is replaced, which invalidates.
+    prepared_access_t stream_access, next_stream, pending_stream;
+    logic [23:0] stream_size, next_stream_size;
+    // The stream reads RAM only, never field 1, which the pager entry holds.
+    function automatic [27:0] stream_address(
+        input logic signed [39:0] index,
+        input logic [23:0] base, size,
+        input logic [3:0] status
+    );
+        logic [27:0] a;
+        begin
+            a=prepare_address(index,base,size,status);
+            stream_address=(a[3:0]==OK && index==40'sd1) ? {24'b0,BOUNDS} : a;
+        end
+    endfunction
     typedef enum logic [3:0] {CLEAR, IDLE, LOOKUP, REQUEST, WAIT_MEMORY, RESPONSE, TRANSFER,
         EXCHANGE, EXCHANGE_FINISH, SERVICE_LOOKUP, SERVICE_SCAN, DIRECTORY_SCAN, DIRECTORY_START,
         DIRECTORY, ALLOCATE_SCAN} resident_state_t;
@@ -159,7 +182,8 @@ module objekt #(
     logic [3:0] held_pager, held_index, held_read;
     logic [2:0] held_register, held_vr;
     logic [1:0] held_memory;
-    logic held_prepare, held_prepared, held_load_vr, held_alloc_scan, held_check_type, held_speculative;
+    logic held_prepare, held_prepared, held_load_vr, held_alloc_scan, held_check_type, held_speculative,
+        held_stream, held_advance;
     logic [23:0] held_alloc_size;
     logic [39:0] held_data, held_expected_type;
     wire looking=phase==LOOKUP;
@@ -174,6 +198,8 @@ module objekt #(
     wire c_load_vr=looking ? held_load_vr : load_vr_i;
     wire c_alloc_scan=looking ? held_alloc_scan : alloc_scan_i;
     wire c_speculative=looking ? held_speculative : speculative_i;
+    wire c_stream=looking ? held_stream : stream_i;
+    wire c_advance=looking ? held_advance : advance_i;
     wire c_check_type=looking ? held_check_type : check_type_i;
     wire [23:0] c_alloc_size=looking ? held_alloc_size : alloc_size_i;
     wire [39:0] c_data=looking ? held_data : data_i;
@@ -429,7 +455,8 @@ module objekt #(
         .remember_i(remember),.remember_slot_i(pending_slot),
         .remember_base_i(pending_memory_entry[127:104]),
         .body_cursor_i(dbg_body_cursor_o),.free_words_i(free_words),.explicit_i(gc_explicit_i),
-        .entry_prepared_i(prepared_access.status==OK && aux_stored[39:0]==prepared_access.reference),
+        .entry_prepared_i((prepared_access.status==OK && aux_stored[39:0]==prepared_access.reference) ||
+            (stream_access.status==OK && aux_stored[39:0]==stream_access.reference)),
         .relocate_o(gc_relocate),.commit_o(gc_commit),.relocate_slot_o(gc_relocate_slot),
         .retained_o(gc_retained),.base_o(gc_base),.cursor_o(gc_cursor),
         .space_o(gc_space),
@@ -456,6 +483,10 @@ module objekt #(
     assign dbg_prepared_index_o=prepared_access.index;
     assign dbg_prepared_address_o=prepared_access.address;
     assign dbg_prepared_status_o=prepared_access.status;
+    assign dbg_stream_ref_o=stream_access.reference;
+    assign dbg_stream_index_o=stream_access.index;
+    assign dbg_stream_address_o=stream_access.address;
+    assign dbg_stream_status_o=stream_access.status;
     assign dbg_selected_o=selected;
     assign dbg_ref_o=snapshot[39:0]; assign dbg_size_o=snapshot[63:40];
     assign dbg_class_o=snapshot[103:64]; assign dbg_base_o=snapshot[127:104];
@@ -539,6 +570,7 @@ module objekt #(
         memory_index=c_prepared ? prepared_access.index : idx;
         next_memory_entry=memory_entry;
         next_prepared=prepared_access;
+        next_stream=stream_access; next_stream_size=stream_size;
         next_prepared_entry=prepared_entry; next_prepared_persistent=prepared_persistent;
         error=OK; page_error=OK; page_entry=0;
         next_snapshot=snapshot; next_selected=selected;
@@ -548,7 +580,13 @@ module objekt #(
         needs_old=(c_read>=3 && c_read<=6) || c_read==9 || c_check_type || (c_memory!=0 && !c_prepared);
         if(c_pager>9 || c_index>9 || c_register>6 || c_memory>2 || c_read>11 ||
            (c_register>4 && (c_pager!=0 || c_index!=0 || c_memory!=0 || c_read!=0 || c_load_vr || c_check_type || c_prepare || c_prepared)) ||
-           (c_pager!=0 && c_memory!=0 && !c_prepared) || (c_pager!=0 && c_index==8) || (c_memory!=0 && c_read!=0) || (c_prepared && c_memory==0)) error=BAD_COMMAND;
+           (c_pager!=0 && c_memory!=0 && !c_prepared) || (c_pager!=0 && c_index==8) || (c_memory!=0 && c_read!=0) || (c_prepared && c_memory==0) ||
+           (c_speculative && c_pager!=5) ||
+           // The stream's three forms: its Fetch, aiming it, and a bare read.
+           (c_stream && !(c_prepare || c_prepared || c_pager==5)) ||
+           (c_stream && c_prepare && (c_prepared || c_pager!=0 || c_memory!=0)) ||
+           (c_stream && c_prepared && (c_memory!=1 || c_pager!=0 || c_index!=0 || c_register!=0 || c_load_vr || c_check_type)) ||
+           (c_advance && !(c_stream && c_prepared))) error=BAD_COMMAND;
         else if((c_pager>=5 && c_pager<=9) && (c_index!=0 || c_register!=0 || c_memory!=0 || c_read!=0 || c_load_vr || c_check_type || c_prepare || c_prepared)) error=BAD_COMMAND;
         else if((c_pager==8 || c_pager==9) && !is_ref(c_data) && c_data[39:37]!=0) error=BAD_VALUE;
         else if(c_check_type && !is_ref(c_expected_type)) error=BAD_VALUE;
@@ -595,6 +633,12 @@ module objekt #(
                 next_snapshot=page_entry; next_selected=1; result_data=page_key;
                 next_live=1; next_selected_persistent=page_key[39:38]==2'b10 && a_q[171];
             end
+            // A stream Fetch re-aims an invalidated stream at its object.
+            if(error==OK && c_pager==5 && c_stream && stream_access.status==NOT_RESIDENT &&
+                stream_access.reference==page_entry[39:0]) begin
+                {next_stream.address,next_stream.status}=stream_address(stream_access.index,page_entry[127:104],page_entry[63:40],OK);
+                next_stream_size=page_entry[63:40];
+            end
         end
         if(error==OK && needs_old) begin
             if(old_error!=OK) error=old_error;
@@ -619,13 +663,32 @@ module objekt #(
                 default: begin end
             endcase
         end
-        if(c_prepare) begin
+        if(c_prepare && c_stream) begin
+            next_stream.reference=selected ? snapshot[39:0] : NIL;
+            next_stream.index=next_idx_wide[39:0];
+            {next_stream.address,next_stream.status}=stream_address(next_idx_wide[39:0],old_entry[127:104],old_entry[63:40],old_error);
+            next_stream_size=old_entry[63:40];
+        end else if(c_prepare) begin
             next_prepared.reference=selected ? snapshot[39:0] : NIL;
             next_prepared.index=next_idx_wide[39:0];
             {next_prepared.address,next_prepared.status}=prepare_address(next_idx_wide[39:0],old_entry[127:104],old_entry[63:40],old_error);
             next_prepared_entry=old_entry; next_prepared_persistent=selected_persistent;
         end
-        if(error==OK && c_memory!=0) begin
+        if(error==OK && c_memory!=0 && c_stream) begin
+            // An invalidated stream misses; LOGIK fetches its object and
+            // reissues the read. A valid stream is within bounds.
+            address_wide={41'b0,stream_access.address};
+            if(stream_access.status==NOT_RESIDENT) error=MISS;
+            else if(stream_access.status!=OK) error=stream_access.status;
+            else begin
+                need_memory=1;
+                if(c_advance) begin
+                    next_stream.index=stream_access.index+40'sd1;
+                    next_stream.address=stream_access.address+24'd1;
+                    next_stream.status=$unsigned(stream_access.index)>={16'b0,stream_size} ? BOUNDS : OK;
+                end
+            end
+        end else if(error==OK && c_memory!=0) begin
             address_wide=c_prepared ? {41'b0,prepared_access.address} : {41'b0,memory_entry[127:104]}+{25'b0,memory_index}-65'd1;
             if(c_prepared && prepared_access.status!=OK) error=prepared_access.status;
             else if(memory_error!=OK) error=memory_error;
@@ -686,6 +749,8 @@ module objekt #(
             maintenance<=0; class_valid<=0; selected<=0; snapshot<=0;
             selected_live<=0; selected_persistent<=0; prepared_entry<=0; prepared_persistent<=0;
             prepared_access.reference<=NIL; prepared_access.index<=0; prepared_access.address<=0; prepared_access.status<=NO_SELECTION;
+            stream_access.reference<=NIL; stream_access.index<=0; stream_access.address<=0; stream_access.status<=NO_SELECTION;
+            stream_size<=0; pending_stream<='0;
             pending_prepared<='0; pending_memory_entry<=0; pending_prepared_entry<=0;
             pending_live<=0; pending_selected_persistent<=0; pending_persistent<=0; pending_prepared_persistent<=0;
             idx<=0; idxreg<=0; response_status<=OK; response_data<=NIL;
@@ -699,7 +764,7 @@ module objekt #(
             edge_pending<=0; edge_key_q<=0; exchange_drop_second<=0;
             held_pager<=0; held_index<=0; held_read<=0; held_register<=0; held_vr<=0; held_memory<=0;
             held_prepare<=0; held_prepared<=0; held_load_vr<=0; held_alloc_scan<=0; held_check_type<=0;
-            held_speculative<=0;
+            held_speculative<=0; held_stream<=0; held_advance<=0;
             held_alloc_size<=0; held_data<=0; held_expected_type<=0;
             for(j=0;j<8;j=j+1) vr[j]<=NIL;
             for(j=0;j<4;j=j+1) classes[j]<=0;
@@ -736,6 +801,10 @@ module objekt #(
                     if(gc_retained) prepared_access.address<=gc_base+prepared_access.index[23:0]-24'd1;
                     else prepared_access.status<=NOT_RESIDENT;
                 end
+                if(stream_access.status==OK && stream_access.reference[PAGER_BITS-1:0]==gc_relocate_slot) begin
+                    if(gc_retained) stream_access.address<=gc_base+stream_access.index[23:0]-24'd1;
+                    else stream_access.status<=NOT_RESIDENT;
+                end
                 if(selected && is_ref(snapshot[39:0]) && snapshot[PAGER_BITS-1:0]==gc_relocate_slot &&
                     aux_valid && aux_stored[39:0]==snapshot[39:0] && !gc_retained) selected<=0;
             end
@@ -750,7 +819,8 @@ module objekt #(
                         if(rsp_ready_i) phase<=IDLE;
                     end else if(execute) begin
                         response_status<=(fetch_miss && c_speculative) ? 4'd13 : error;
-                        response_data<=(error==OK) ? result_data : NIL;
+                        // A stream miss names the stream's object.
+                        response_data<=(error==OK) ? result_data : (error==MISS ? stream_access.reference : NIL);
                         if(start_directory) begin
                             phase<=DIRECTORY_SCAN; directory_vr<=c_vr; walk_slot<='0;
                             directory_next<=c_pager==8; directory_identity<=c_data[36:0];
@@ -772,6 +842,7 @@ module objekt #(
                             pending_snapshot<=next_snapshot;pending_selected<=next_selected;
                             pending_live<=next_live; pending_selected_persistent<=next_selected_persistent;
                             pending_prepared<=next_prepared; pending_memory_entry<=next_memory_entry;
+                            pending_stream<=next_stream;
                             pending_prepared_entry<=next_prepared_entry;
                             pending_prepared_persistent<=next_prepared_persistent;
                             pending_persistent<=memory_persistent;
@@ -786,6 +857,7 @@ module objekt #(
                             selected_live<=next_live; selected_persistent<=next_selected_persistent;
                             prepared_access<=next_prepared;
                             prepared_entry<=next_prepared_entry; prepared_persistent<=next_prepared_persistent;
+                            stream_access<=next_stream; stream_size<=next_stream_size;
                             if(c_load_vr) vr[c_vr]<=c_data;
                             if(c_register==5) word_threshold<=c_data;
                             if(c_register==6) identity_threshold<=c_data;
@@ -796,8 +868,9 @@ module objekt #(
                         held_register<=register_i; held_vr<=vr_i; held_memory<=memory_i;
                         held_prepare<=prepare_i; held_prepared<=prepared_i; held_load_vr<=load_vr_i;
                         held_alloc_scan<=alloc_scan_i; held_check_type<=check_type_i;
-                        held_speculative<=speculative_i;
-                        held_alloc_size<=alloc_size_i; held_data<=data_i; held_expected_type<=expected_type_i;
+                        held_speculative<=speculative_i; held_stream<=stream_i; held_advance<=advance_i;
+                        held_alloc_size<=alloc_size_i;
+                        held_data<=data_i; held_expected_type<=expected_type_i;
                         phase<=LOOKUP;
                     end else if(phase==IDLE && svc_valid_i && svc_ready_o) begin
                         response_status<=OK;response_data<=NIL;phase<=RESPONSE;
@@ -805,7 +878,10 @@ module objekt #(
                             0: begin
                                 if(!is_ref(svc_ref_i) || !is_ref(svc_class_i)) response_status<=INVALID_REFERENCE;
                                 else if(svc_size_i==0 && svc_repr_i!=NIL) response_status<=BAD_VALUE;
-                                else if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==svc_ref_i[PAGER_BITS-1:0]) prepared_access.status<=NOT_RESIDENT;
+                                else begin
+                                    if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==svc_ref_i[PAGER_BITS-1:0]) prepared_access.status<=NOT_RESIDENT;
+                                    if(stream_access.status==OK && stream_access.reference[PAGER_BITS-1:0]==svc_ref_i[PAGER_BITS-1:0]) stream_access.status<=NOT_RESIDENT;
+                                end
                             end
                             1: begin
                                 if(!is_ref(svc_ref_i)) response_status<=INVALID_REFERENCE;
@@ -860,7 +936,10 @@ module objekt #(
                 // Invalidation requires a full reference match.
                 SERVICE_LOOKUP: begin
                     if(!invalidate) response_status<=NOT_RESIDENT;
-                    else if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==held_data[PAGER_BITS-1:0]) prepared_access.status<=NOT_RESIDENT;
+                    else begin
+                        if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==held_data[PAGER_BITS-1:0]) prepared_access.status<=NOT_RESIDENT;
+                        if(stream_access.status==OK && stream_access.reference[PAGER_BITS-1:0]==held_data[PAGER_BITS-1:0]) stream_access.status<=NOT_RESIDENT;
+                    end
                     phase<=RESPONSE;
                 end
                 // A raw write proceeds to memory only after every slot is
@@ -902,6 +981,7 @@ module objekt #(
                         idx<=pending_idx;idxreg<=pending_reg;snapshot<=pending_snapshot;selected<=pending_selected;
                         selected_live<=pending_live; selected_persistent<=pending_selected_persistent;
                         prepared_access<=pending_prepared;
+                        stream_access<=pending_stream;
                         // A write to the prepared object updates its copy too.
                         if(pending_write && pending_prepared.status==OK &&
                             pending_prepared.reference==pending_memory_entry[39:0]) begin
@@ -931,6 +1011,13 @@ module objekt #(
                     response_data<=(transfer_status==OK) ? transfer_entry[39:0] : NIL;
                     if(transfer_status==OK) begin
                         if(prepared_access.status==OK && prepared_access.reference[PAGER_BITS-1:0]==transfer_entry[PAGER_BITS-1:0]) prepared_access.status<=NOT_RESIDENT;
+                        if(stream_access.status==OK && stream_access.reference[PAGER_BITS-1:0]==transfer_entry[PAGER_BITS-1:0]) stream_access.status<=NOT_RESIDENT;
+                        // A stream Fetch's refill re-aims the stream.
+                        if(held_pager==5 && held_stream && stream_access.reference==transfer_entry[39:0] &&
+                            (stream_access.status==OK || stream_access.status==NOT_RESIDENT)) begin
+                            {stream_access.address,stream_access.status}<=stream_address(stream_access.index,transfer_entry[127:104],transfer_entry[63:40],OK);
+                            stream_size<=transfer_entry[63:40];
+                        end
                         snapshot<=transfer_entry;selected<=1;
                         selected_live<=1; selected_persistent<=!transfer_entry[168];
                     end
@@ -944,6 +1031,7 @@ module objekt #(
                     exchange_drop_second<=exchange_published && exchange_second_resident;
                     if(exchange_published) begin
                         if(prepared_access.status==OK && (prepared_access.reference==exchange_first || prepared_access.reference==exchange_second)) prepared_access.status<=NOT_RESIDENT;
+                        if(stream_access.status==OK && (stream_access.reference==exchange_first || stream_access.reference==exchange_second)) stream_access.status<=NOT_RESIDENT;
                         if(selected && (snapshot[39:0]==exchange_first || snapshot[39:0]==exchange_second))
                             selected<=0;
                     end

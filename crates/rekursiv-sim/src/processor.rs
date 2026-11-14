@@ -164,6 +164,8 @@ impl Harness<'_> {
             alloc_size: self.rtl.cpu_alloc_size_o,
             alloc_scan: self.rtl.cpu_alloc_scan_o,
             speculative: self.rtl.cpu_speculative_o,
+            stream: self.rtl.cpu_stream_o,
+            advance: self.rtl.cpu_advance_o,
             data: self.rtl.cpu_data_o,
             check_type: self.rtl.cpu_check_type_o,
             expected_type: self.rtl.cpu_expected_type_o,
@@ -278,10 +280,10 @@ impl Harness<'_> {
         let mut accepted_ports = None;
         // A launched command whose reply arrives as its barrier issues the next.
         let mut retiring = None;
-        // The reference of a launched (speculative) Fetch awaiting its reply,
-        // and of a Fetch that missed and must be replayed before its barrier.
-        let mut launched_fetch: Option<u64> = None;
-        let mut replay: Option<u64> = None;
+        // A launched command that can miss, awaiting its reply, and the replay
+        // of one that missed, which runs before its barrier.
+        let mut launched_fetch: Option<Replayable> = None;
+        let mut replay: Option<Replay> = None;
         let mut replaying = false;
         let mut device_response = None;
         let mut wait = 0u32;
@@ -357,20 +359,33 @@ impl Harness<'_> {
             }
             let ports = self.processor_ports();
             let mut new_launch = None;
-            let mut new_launched_fetch = None;
+            let mut new_launched_fetch: Option<Replayable> = None;
             if self.rtl.cpu_cmd_valid_o != 0
                 && self.rtl.cpu_command_enable_i != 0
                 && self.rtl.cmd_ready_o != 0
             {
-                // A replay is a standalone Fetch of the missed reference; any
-                // other command belongs to the current instruction, and a
-                // launched Fetch is speculative.
-                let expected_command = if let Some(data) = replay {
+                // A replay is a standalone Fetch of the missed reference, then
+                // for a stream the bare stream read again; any other command
+                // belongs to the current instruction, and a launched Fetch is
+                // speculative.
+                let expected_command = if let Some(r) = replay {
                     replaying = true;
-                    Some(rekursiv_asm::Command {
-                        pager: rekursiv_asm::Pager::Fetch,
-                        data: Word::from_bits(data)?,
-                        ..Default::default()
+                    let data = Word::from_bits(r.data)?;
+                    Some(match r.stream {
+                        Some(advance) if r.read => rekursiv_asm::Command {
+                            memory: rekursiv_asm::Memory::Read,
+                            prepared: true,
+                            stream: true,
+                            advance,
+                            data,
+                            ..Default::default()
+                        },
+                        stream => rekursiv_asm::Command {
+                            pager: rekursiv_asm::Pager::Fetch,
+                            stream: stream.is_some(),
+                            data,
+                            ..Default::default()
+                        },
                     })
                 } else {
                     let launches = image.code[model.pc as usize].is_some_and(|i| i.launches());
@@ -407,7 +422,17 @@ impl Harness<'_> {
                 if !replaying {
                     let launches = image.code[model.pc as usize].unwrap().launches();
                     new_launch = Some(launches);
-                    new_launched_fetch = (launches && ports.speculative != 0).then_some(ports.data);
+                    new_launched_fetch = if !launches {
+                        None
+                    } else if ports.speculative != 0 {
+                        Some(Replayable::Fetch(ports.data))
+                    } else if ports.stream != 0 && ports.prepared != 0 {
+                        Some(Replayable::Stream {
+                            advance: ports.advance != 0,
+                        })
+                    } else {
+                        None
+                    };
                 }
             }
             // Sample the reply inside tick, after external RAM has been driven.
@@ -472,15 +497,21 @@ impl Harness<'_> {
                     );
                     self.verify(expected, rsp, transaction_start.0, transaction_start.2)?;
                     self.commands.push((accepted_ports.take().unwrap(), rsp));
-                    // The replayed Fetch publishes Object before its barrier,
-                    // which is then prepared again with it.
+                    // The replay's last command publishes Object before its
+                    // barrier, which is then prepared again with it. A stream
+                    // read that misses again starts over with the Fetch.
                     if replaying {
                         replaying = false;
                         response = None;
-                        if rsp.status == Status::Ok {
+                        let r = replay.as_mut().unwrap();
+                        if rsp.status == Status::Ok && r.stream.is_some() && !r.read {
+                            r.read = true;
+                        } else if rsp.status == Status::Ok {
                             replay = None;
                             model.object = rsp.data.bits();
                             candidate = None;
+                        } else if rsp.status == Status::Miss && r.read {
+                            r.read = false;
                         }
                     }
                 }
@@ -493,9 +524,20 @@ impl Harness<'_> {
                 && response.is_some_and(|r| r.status == Status::Miss)
                 && launched_fetch.is_some()
             {
-                // The speculative Fetch missed: LOGIK replays it next.
-                response = None;
-                replay = launched_fetch.take();
+                // The launched command missed: LOGIK replays it next.
+                let missed = response.take().unwrap();
+                replay = launched_fetch.take().map(|l| match l {
+                    Replayable::Fetch(data) => Replay {
+                        data,
+                        stream: None,
+                        read: false,
+                    },
+                    Replayable::Stream { advance } => Replay {
+                        data: missed.data.bits(),
+                        stream: Some(advance),
+                        read: false,
+                    },
+                });
                 launched = false;
             } else if joining {
                 let rsp = response.take().unwrap();
@@ -675,4 +717,21 @@ pub fn collection_example(h: &mut Harness<'_>) -> Result<String> {
         "autonomous collection result"
     );
     Ok("7 allocations, 5 machine collections and retries; no host recovery commands".into())
+}
+
+/// A launched command that can reply Miss: a speculative Fetch of a reference,
+/// or a read through the stream.
+#[derive(Clone, Copy, Debug)]
+enum Replayable {
+    Fetch(u64),
+    Stream { advance: bool },
+}
+
+/// LOGIK's replay of a missed command: a Fetch of `data`, with the stream bit
+/// for a stream read, which is then reissued (`read`).
+#[derive(Clone, Copy, Debug)]
+struct Replay {
+    data: u64,
+    stream: Option<bool>,
+    read: bool,
 }

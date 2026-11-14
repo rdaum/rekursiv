@@ -411,6 +411,8 @@ impl<'a> Harness<'a> {
         self.rtl.memory_i = p.memory;
         self.rtl.prepare_i = p.prepare;
         self.rtl.prepared_i = p.prepared;
+        self.rtl.stream_i = p.stream;
+        self.rtl.advance_i = p.advance;
         self.rtl.read_i = p.read;
         self.rtl.load_vr_i = p.load_vr;
         self.rtl.vr_i = p.vr;
@@ -646,6 +648,12 @@ impl<'a> Harness<'a> {
                 index: Word::from_bits(self.rtl.dbg_prepared_index_o)?.as_index(),
                 address: self.rtl.dbg_prepared_address_o,
                 status: self.rtl.dbg_prepared_status_o.try_into()?,
+            },
+            stream: rekursiv_model::PreparedAccess {
+                reference: Word::from_bits(self.rtl.dbg_stream_ref_o)?,
+                index: Word::from_bits(self.rtl.dbg_stream_index_o)?.as_index(),
+                address: self.rtl.dbg_stream_address_o,
+                status: self.rtl.dbg_stream_status_o.try_into()?,
             },
         })
     }

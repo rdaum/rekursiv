@@ -83,8 +83,9 @@ impl RecoveryState {
     fn retained(model: &Model, slot: usize, e: &Entry) -> bool {
         (e.modified && !e.new)
             || (e.new && model.persistent_roots[slot])
-            || (model.state.prepared.status == Status::Ok
-                && model.state.prepared.reference == e.reference)
+            || [model.state.prepared, model.state.stream]
+                .iter()
+                .any(|p| p.status == Status::Ok && p.reference == e.reference)
     }
     fn flags(&self, model: &Model, slot: usize) -> Result<Word, Status> {
         let Some(e) = model.entries[slot].get() else {

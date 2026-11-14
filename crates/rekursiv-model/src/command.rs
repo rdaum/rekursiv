@@ -122,6 +122,15 @@ impl Model {
                 memory: effect.into_iter().collect(),
                 store: Vec::new(),
             },
+            // A stream miss names the stream's object, for LOGIK to fetch.
+            Err(Status::Miss) => Outcome {
+                response: Response {
+                    status: Status::Miss,
+                    data: self.state.stream.reference,
+                },
+                memory: Vec::new(),
+                store: Vec::new(),
+            },
             Err(e) => Outcome {
                 response: Response::error(e),
                 memory: effect.into_iter().collect(),

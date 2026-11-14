@@ -147,10 +147,10 @@ impl Model {
             {
                 self.state.selected = None.into();
             }
-            if keys.contains(&self.state.prepared.reference)
-                && self.state.prepared.status == Status::Ok
-            {
-                self.state.prepared.status = Status::NotResident;
+            for p in [&mut self.state.prepared, &mut self.state.stream] {
+                if keys.contains(&p.reference) && p.status == Status::Ok {
+                    p.status = Status::NotResident;
+                }
             }
             Ok(keys[0])
         })();

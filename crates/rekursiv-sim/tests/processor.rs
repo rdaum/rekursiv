@@ -1493,3 +1493,89 @@ fn binary64_encoding_requires_register_pairs() {
         rekursiv_asm::text::assemble("alu=Float, precision=Binary64, ra=14, rb=2", 0, &[]).unwrap();
     assert_eq!((a.code[&0].encode().unwrap()[7] >> 6) & 1, 1);
 }
+
+#[test]
+fn launched_stream_read_misses_and_is_replayed_after_its_object_is_evicted() -> Result<()> {
+    let rt = runtime()?;
+    let mut h = Harness::new(
+        &rt,
+        Timing {
+            request_delay: 3,
+            memory_latency: 7,
+            response_stall: 5,
+        },
+        None,
+    )?;
+    // Identities 1 and 17 share a slot of the sixteen-entry pager.
+    let r = |id| Word::reference(id, true).unwrap();
+    for id in [1u64, 17] {
+        let record = rekursiv_model::store::Record {
+            reference: r(id),
+            class: r(100),
+            cond: false,
+            body: (0..5).map(|n| Word::unsigned(id as u32 * 10 + n)).collect(),
+        };
+        h.store.records.insert(id, record.clone());
+        h.oracle.store.records.insert(id, record);
+    }
+    let read = || Instruction {
+        object: Some(Command {
+            memory: rekursiv_asm::Memory::Read,
+            prepared: true,
+            stream: true,
+            advance: true,
+            ..Command::default()
+        }),
+        ..Instruction::default()
+    };
+    let push = || Instruction {
+        bus: Bus::Object,
+        estk: Estk::Bus,
+        ..Instruction::default()
+    };
+    let code = vec![
+        object(Command::fetch(r(1))),
+        object(Command {
+            index: Index::Two,
+            prepare: true,
+            stream: true,
+            ..Command::default()
+        }),
+        read(),
+        push(),
+        // Evict the stream's object; the next read misses, and LOGIK fetches
+        // the object with the stream bit and reissues the advancing read.
+        object(Command::fetch(r(17))),
+        read(),
+        push(),
+        read(),
+        push(),
+        Instruction::halt(),
+    ];
+    let image = Image::program(&code);
+    h.load_processor(&image)?;
+    h.start_processor(0)?;
+    let mut model = Processor::default();
+    h.run_processor(&image, &mut model, 30000)?;
+    assert_eq!(model.estkr, Word::unsigned(13).bits());
+    // Reads, the miss naming its object, the stream Fetch, the reissued read.
+    let stream: Vec<_> = h
+        .commands
+        .iter()
+        .filter(|(p, _)| p.stream != 0)
+        .map(|(p, rsp)| (p.pager, rsp.status, rsp.data))
+        .collect();
+    use rekursiv_asm::Status::{Miss, Ok as Done};
+    assert_eq!(
+        stream,
+        [
+            (0, Done, Word::NIL),
+            (0, Done, Word::unsigned(11)),
+            (0, Miss, r(1)),
+            (5, Done, r(1)),
+            (0, Done, Word::unsigned(12)),
+            (0, Done, Word::unsigned(13)),
+        ]
+    );
+    Ok(())
+}

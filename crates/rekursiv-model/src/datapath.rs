@@ -56,7 +56,13 @@ impl Model {
         if !(INDEX_MIN..=INDEX_MAX).contains(&idx) {
             return Err(Status::IndexOverflow);
         }
-        let prepared = c.prepare.then(|| self.prepare_access(idx));
+        let prepared = c.prepare.then(|| {
+            if c.stream {
+                self.prepare_stream(idx)
+            } else {
+                self.prepare_access(idx)
+            }
+        });
         let reg = match c.register {
             Register::None => before.index_reg,
             Register::Load => c.data.as_index(),
@@ -114,9 +120,18 @@ impl Model {
             Read::FreeWords => Word::raw(self.free_words())?,
             Read::FreeIdentities => Word::raw(self.free_identities())?,
         };
+        let mut advanced = None;
         if c.memory != Memory::None {
             let (mut e, index, prepared_address) = if c.prepared {
-                let p = before.prepared;
+                let p = if c.stream {
+                    before.stream
+                } else {
+                    before.prepared
+                };
+                // An invalidated stream's object is absent: LOGIK replays.
+                if c.stream && p.status == Status::NotResident {
+                    return Err(Status::Miss);
+                }
                 if p.status != Status::Ok {
                     return Err(p.status);
                 }
@@ -126,6 +141,17 @@ impl Model {
             };
             if index <= 0 || index > e.size as i64 {
                 return Err(Status::BoundsError);
+            }
+            // The stream steps to the next field; past the end, the error is
+            // deferred to its next access.
+            if c.advance {
+                let next = index + 1;
+                advanced = Some(stream_access(
+                    e.reference,
+                    next,
+                    prepared_address.unwrap_or(0) + 1,
+                    next > e.size as i64,
+                ));
             }
             let address = prepared_address
                 .map(u64::from)
@@ -182,11 +208,37 @@ impl Model {
             self.state.selected = Some(selected).into();
         }
         if let Some(prepared) = prepared {
-            self.state.prepared = prepared;
+            if c.stream {
+                self.state.stream = prepared;
+            } else {
+                self.state.prepared = prepared;
+            }
+        }
+        if let Some(stream) = advanced {
+            self.state.stream = stream;
         }
         if c.load_vr {
             self.state.vr[c.vr as usize] = c.data;
         }
         Ok(output)
+    }
+}
+
+/// A prepared access at `index`, or one carrying a deferred bounds error.
+fn stream_access(
+    reference: Word,
+    index: i64,
+    address: u32,
+    past_end: bool,
+) -> crate::PreparedAccess {
+    crate::PreparedAccess {
+        reference,
+        index,
+        address,
+        status: if past_end {
+            Status::BoundsError
+        } else {
+            Status::Ok
+        },
     }
 }

@@ -62,6 +62,8 @@ microinstructions use the separate 256-bit encoding in the processor section.
 | `memory_i`        |     2 | None=0, Read=1, Write=2                                                                                                            |
 | `prepare_i`       |     1 | Prepare an address from the old selection and new index                                                                            |
 | `prepared_i`      |     1 | Use the previous prepared address for this memory operation                                                                        |
+| `stream_i`        |     1 | `prepare`/`prepared` act on the stream; with Fetch, re-aim an invalidated stream at the fetched object                             |
+| `advance_i`       |     1 | After a stream read, step the stream to the next field                                                                             |
 | `read_i`          |     4 | None=0, Vr=1, Reference=2, Size=3, Type=4, Base=5, Representation=6, Index=7, IndexReg=8, Flags=9, FreeWords=10, FreeIdentities=11 |
 | `load_vr_i`       |     1 | Load `data_i` into the selected VR when set                                                                                        |
 | `vr_i`            |     3 | VR selector, 0–7                                                                                                                   |
@@ -167,6 +169,26 @@ prepared addresses with `NotResident`. Refill alone does not restore an invalid 
 must prepare it again. Machine GC retains a valid prepared reference as an architectural root and
 relocates its address at Commit. Failed GC preserves the original address. The stopped-host
 maintenance utility uses service installation, which invalidates prepared addresses.
+
+### The stream
+
+The stream is a second prepared access, for walking consecutive fields of one object while the
+ordinary prepared access serves other work. With `stream`, `prepare` aims the stream instead of the
+prepared register, and a `prepared` read goes through the stream. `advance` steps the stream to the
+next field after its read; stepping past the end defers a bounds error to the next stream read.
+
+A stream read is a bare command: `memory=Read`, `prepared`, `stream`, and optionally `advance`, with
+no pager, index, register, VR, or type control. Stream reads only read RAM, so the stream never
+covers field 1, which the pager entry holds: aiming it there defers a bounds error. The stream keeps
+the size of its object for the advance bound.
+
+The stream is invalidated, relocated, and retained as a collection root exactly like the prepared
+access. A read through an invalidated stream fails with `Miss`, without effects, and its reply data
+names the stream's object. A Fetch with `stream` set re-aims an invalidated stream that names the
+fetched object, whether the Fetch found it resident or refilled it. LOGIK uses this to replay a
+stream read that missed: it fetches the named object with the stream bit and then reissues the read,
+before the barrier that joined it executes. The assembler requires stream reads to launch, and
+reserves Fetch with `stream` to LOGIK.
 
 Reset initializes the prepared status to `NoSelection`. `idx=Clear, prepare` releases a valid
 prepared root. The new index is invalid for every object. These controls use project encodings for
@@ -285,7 +307,7 @@ walk. The [recovery contract](recovery.md) defines the required copy and publica
 |    10 | ServiceError      | Backing-store transfer failed                                                    |
 |    11 | OutOfSpace        | The fresh body reservation exceeds physical capacity                             |
 |    12 | IdentityExhausted | The next identity exceeds the 37-bit identity range                              |
-|    13 | Miss              | A speculative (launched) Fetch found its target nonresident; LOGIK replays it    |
+|    13 | Miss              | A speculative Fetch or a stream read found its object nonresident; LOGIK replays |
 
 Command validation runs in this order:
 
@@ -611,7 +633,9 @@ The packed word is 256 bits. The exact symbolic values are defined in `rekursiv_
 | 229                       | Launch prepared memory command without waiting for its reply         |
 | 230                       | Binary64 precision for Float; even register pairs, result in PRODUCT |
 | 232:231                   | Pending flag: none (0), set (1), clear (2)                           |
-| 94, 98, 113, 255:233      | Reserved; must be zero                                               |
+| 233                       | Prepare and prepared act on the stream                               |
+| 234                       | Advance the stream after its read                                    |
+| 94, 98, 113, 255:235      | Reserved; must be zero                                               |
 
 Invalid selectors and reserved bits halt execution before an OBJEKT command can issue. The literal
 field supplies D unless another source is selected. Other sources include cached stack values, the
@@ -670,8 +694,9 @@ difference from a blocking command is where the fault is reported.
 A launched Fetch is speculative: LOGIK marks it on the command interface, and OBJEKT answers `Miss`
 for a nonresident target without refilling, evicting, or changing any state. At the join, LOGIK then
 replays the Fetch as an ordinary blocking command, which can refill, evict, or enter collection and
-retry like any Fetch, and publishes its result before the barrier executes. A replay interrupted by
-collection is redone after it. A resident target, the common case, costs no wait beyond the reply's
+retry like any Fetch, and publishes its result before the barrier executes. A launched stream read
+that misses is replayed the same way, as its stream Fetch and then the read again (see The stream).
+A replay interrupted by collection is redone after it. A resident target, the common case, costs no wait beyond the reply's
 own cycles.
 
 The explicit `launch` bit requires `prepared` and a memory operation. It cannot share Halt, Service,

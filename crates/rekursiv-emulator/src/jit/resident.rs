@@ -12,19 +12,23 @@ use std::mem::offset_of;
 
 pub(super) fn eligible(c: Command) -> bool {
     // A threshold load changes the low-space line, which native regions
-    // sample once on entry.
-    !matches!(
-        c.register,
-        rekursiv_asm::Register::WordThreshold | rekursiv_asm::Register::IdentityThreshold
-    ) && matches!(
-        c.pager,
-        Pager::None
-            | Pager::Fetch
-            | Pager::ProbeBus
-            | Pager::ProbeVr
-            | Pager::ProbeType
-            | Pager::ProbeRepresentation
-    )
+    // sample once on entry. A stream read can miss, which only the step
+    // path replays.
+    !c.stream
+        && !c.advance
+        && !matches!(
+            c.register,
+            rekursiv_asm::Register::WordThreshold | rekursiv_asm::Register::IdentityThreshold
+        )
+        && matches!(
+            c.pager,
+            Pager::None
+                | Pager::Fetch
+                | Pager::ProbeBus
+                | Pager::ProbeVr
+                | Pager::ProbeType
+                | Pager::ProbeRepresentation
+        )
 }
 
 // Distinct from architectural faults and the device-error sentinel (255).

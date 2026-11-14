@@ -103,6 +103,9 @@ context_home_ready:
     ; Rotate right by seven, then mask away wrapped header bits.
     ra=0, s=Branch, brch=25, alu=Rotate, rb=12, ldrb
     ra=12, s=Bus, d=31, alu=And, rb=12, ldrb
+    ; Aim the bytecode stream at IP: the method is selected.
+    ra=8, rb=10, alu=Sub, cin=One, ldq
+    d=Q, idx=Load, prepare, stream
     ; A block has its own evaluation stack, starting at zero. Its temporaries
     ; still belong to the home method and are accessed through context_home.
     read=Vr, vr=0
@@ -120,33 +123,20 @@ context_stack_floor:
     seq=Jump, brch=boundary
 
 ; The main loop's fetch: the next bytecode into R0 and the APC, IP advanced,
-; then decode. Bytecodes are one per component, at IP minus the literal
-; count. An IP past the method's end fails OBJEKT's bounds check; one below
-; the first bytecode reads the header or a literal, which is no valid NAM
-; address. Extended bytecodes fetch operands through fetch_byte, which checks
-; both bounds.
+; then decode. The bytecode stream, a prepared access on the method, always
+; points at IP: every word that changes IP otherwise re-aims it (activation,
+; reload_frame, load_context and apply_jump), and every bytecode read
+; advances it. Bytecodes are one per component, at IP minus the literal
+; count; an IP past the method's end fails the stream's deferred bounds check.
 cycle:
-    ra=8, rb=10, alu=Sub, cin=One, ldq, read=Vr, vr=1
-    d=Object, page=Fetch
-    d=Q, idx=Load
-    mem=Read, ra=8, s=Branch, brch=1, alu=Add, rb=8, ldrb
+    mem=Read, prepared, stream, advance, ra=8, s=Branch, brch=1, alu=Add, rb=8, ldrb
     d=Object, r=Bus, rb=0, ldrb, apc=Bus, seq=Jump, brch=decoded
 
 ; Return a byte in R0 through R7. Physical component is IP - literal count.
 fetch_byte:
-    ra=10, shift=Left, rb=0, ldrb
-    ra=0, s=Branch, brch=3, alu=Add, rb=0, ldrb
-    ; Each bounds check branches one word later, on the flags it set, while
-    ; the method is fetched. A stalled/refilled fetch retains the old CPU
-    ; operands until completion.
-    ra=8, rb=0, alu=Sub, cin=One, flags, read=Vr, vr=1
-    ra=11, rb=8, alu=Sub, cin=One, flags, d=Object, page=Fetch, seq=ConditionalJump, cc=Sign, brch=bad_state
-    ra=8, rb=10, alu=Sub, cin=One, ldq, seq=ConditionalJump, cc=Sign, brch=bad_state
-    d=Q, idx=Load
-    mem=Read
+    ; Extended bytecodes' operands come from the stream too, keeping it at IP.
+    mem=Read, prepared, stream, advance
     d=Object, r=Bus, rb=0, ldrb
-    ; RA supplies the continuation bus while S reads R8. The unused branch
-    ; literal supplies zero: 0 + R8 + carry increments IP during the return.
     d=Register, ra=7, r=Branch, brch=0, s=Register, rb=8, alu=Add, cin=One, ldrb, seq=Bus
 
 fetch_byte_end:
