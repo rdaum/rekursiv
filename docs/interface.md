@@ -285,6 +285,7 @@ walk. The [recovery contract](recovery.md) defines the required copy and publica
 |    10 | ServiceError      | Backing-store transfer failed                                                    |
 |    11 | OutOfSpace        | The fresh body reservation exceeds physical capacity                             |
 |    12 | IdentityExhausted | The next identity exceeds the 37-bit identity range                              |
+|    13 | Miss              | A speculative (launched) Fetch found its target nonresident; LOGIK replays it    |
 
 Command validation runs in this order:
 
@@ -646,11 +647,11 @@ or command issue.
 
 A launched command retires its instruction's local effects when OBJEKT accepts it. Independent local
 instructions can then execute while OBJEKT completes it. Every command that pages nothing (pager
-field zero) and loads no low-space threshold launches, unless its instruction is itself a barrier
-for another reason (`cc=ObjectOk`, a device or recovery control, Halt, Service or HOLD). The
-`launch` bit also launches a prepared memory access explicitly. Paging commands block: they can
-start a collection and be retried. Only one object command can be outstanding. Its response remains
-private until the next barrier:
+field zero) or fetches, and loads no low-space threshold, launches, unless its instruction writes an
+explicit root or is itself a barrier for another reason (`cc=ObjectOk`, a device or recovery
+control, Halt, Service or HOLD). The `launch` bit also launches a prepared memory access explicitly.
+Other paging commands block: they can start a collection and be retried. Only one object command can
+be outstanding. Its response remains private until the next barrier:
 
 - Any OBJEKT command, `d=Object`, or `cc=ObjectOk`.
 - A device instruction or a recovery instruction.
@@ -665,6 +666,13 @@ successful completion updates the Object result. An error halts at the barrier w
 OBJEKT status. The launch and intervening local instructions remain retired. OBJEKT itself still
 commits its memory command only on success. Because object errors halt the machine, the only
 difference from a blocking command is where the fault is reported.
+
+A launched Fetch is speculative: LOGIK marks it on the command interface, and OBJEKT answers `Miss`
+for a nonresident target without refilling, evicting, or changing any state. At the join, LOGIK then
+replays the Fetch as an ordinary blocking command, which can refill, evict, or enter collection and
+retry like any Fetch, and publishes its result before the barrier executes. A replay interrupted by
+collection is redone after it. A resident target, the common case, costs no wait beyond the reply's
+own cycles.
 
 The explicit `launch` bit requires `prepared` and a memory operation. It cannot share Halt, Service,
 or recovery controls. An ordinary local branch does not force a barrier, unless it reads an object

@@ -50,6 +50,8 @@ module objekt #(
     input logic prepare_i, prepared_i,
     input logic [3:0] read_i, input logic load_vr_i, input logic [2:0] vr_i,
     input logic [23:0] alloc_size_i, input logic alloc_scan_i,
+    // A launched Fetch: a nonresident target replies MISS with no effects.
+    input logic speculative_i,
     input logic [39:0] data_i, input logic check_type_i, input logic [39:0] expected_type_i,
     input logic svc_valid_i, output logic svc_ready_o, input logic [3:0] svc_op_i,
     input logic [39:0] svc_ref_i, input logic [39:0] svc_class_i,
@@ -157,7 +159,7 @@ module objekt #(
     logic [3:0] held_pager, held_index, held_read;
     logic [2:0] held_register, held_vr;
     logic [1:0] held_memory;
-    logic held_prepare, held_prepared, held_load_vr, held_alloc_scan, held_check_type;
+    logic held_prepare, held_prepared, held_load_vr, held_alloc_scan, held_check_type, held_speculative;
     logic [23:0] held_alloc_size;
     logic [39:0] held_data, held_expected_type;
     wire looking=phase==LOOKUP;
@@ -171,6 +173,7 @@ module objekt #(
     wire c_prepared=looking ? held_prepared : prepared_i;
     wire c_load_vr=looking ? held_load_vr : load_vr_i;
     wire c_alloc_scan=looking ? held_alloc_scan : alloc_scan_i;
+    wire c_speculative=looking ? held_speculative : speculative_i;
     wire c_check_type=looking ? held_check_type : check_type_i;
     wire [23:0] c_alloc_size=looking ? held_alloc_size : alloc_size_i;
     wire [39:0] c_data=looking ? held_data : data_i;
@@ -259,7 +262,9 @@ module objekt #(
                 pager_i==6 ? dbg_next_identity_o[PAGER_BITS-1:0] : vr[vr_i][PAGER_BITS-1:0];
         endcase
     end
-    wire start_fetch=looking && c_pager==5 && error==NOT_RESIDENT;
+    // A speculative Fetch that misses refills nothing; LOGIK replays it.
+    wire fetch_miss=looking && c_pager==5 && error==NOT_RESIDENT;
+    wire start_fetch=fetch_miss && !c_speculative;
     wire accept_allocate=looking && c_pager==6 && error==OK;
     // An exhausted identity goes straight to the engine, which reports it.
     wire allocate_now=accept_allocate && (!aux_valid || dbg_next_identity_o[37]);
@@ -694,6 +699,7 @@ module objekt #(
             edge_pending<=0; edge_key_q<=0; exchange_drop_second<=0;
             held_pager<=0; held_index<=0; held_read<=0; held_register<=0; held_vr<=0; held_memory<=0;
             held_prepare<=0; held_prepared<=0; held_load_vr<=0; held_alloc_scan<=0; held_check_type<=0;
+            held_speculative<=0;
             held_alloc_size<=0; held_data<=0; held_expected_type<=0;
             for(j=0;j<8;j=j+1) vr[j]<=NIL;
             for(j=0;j<4;j=j+1) classes[j]<=0;
@@ -743,7 +749,8 @@ module objekt #(
                     if(phase==RESPONSE && !accept) begin
                         if(rsp_ready_i) phase<=IDLE;
                     end else if(execute) begin
-                        response_status<=error; response_data<=(error==OK) ? result_data : NIL;
+                        response_status<=(fetch_miss && c_speculative) ? 4'd13 : error;
+                        response_data<=(error==OK) ? result_data : NIL;
                         if(start_directory) begin
                             phase<=DIRECTORY_SCAN; directory_vr<=c_vr; walk_slot<='0;
                             directory_next<=c_pager==8; directory_identity<=c_data[36:0];
@@ -789,6 +796,7 @@ module objekt #(
                         held_register<=register_i; held_vr<=vr_i; held_memory<=memory_i;
                         held_prepare<=prepare_i; held_prepared<=prepared_i; held_load_vr<=load_vr_i;
                         held_alloc_scan<=alloc_scan_i; held_check_type<=check_type_i;
+                        held_speculative<=speculative_i;
                         held_alloc_size<=alloc_size_i; held_data<=data_i; held_expected_type<=expected_type_i;
                         phase<=LOOKUP;
                     end else if(phase==IDLE && svc_valid_i && svc_ready_o) begin

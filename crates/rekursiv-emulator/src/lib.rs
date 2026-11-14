@@ -542,11 +542,20 @@ impl Machine {
                         .observe(command, before, &outcome, &self.objekt);
                 }
                 if let Some(path) = path {
-                    self.cycle_estimate.as_mut().unwrap().object(
+                    // A launched Fetch that misses replies Miss, and LOGIK
+                    // replays it as a blocking Fetch at the join.
+                    let miss = instruction.launches()
+                        && command.pager == rekursiv_asm::Pager::Fetch
+                        && !matches!(path, timing::ObjectPath::Resident);
+                    let timing = self.cycle_estimate.as_mut().unwrap();
+                    if miss {
+                        timing.speculative_miss();
+                    }
+                    timing.object(
                         path,
                         command.pager != rekursiv_asm::Pager::None,
                         &outcome,
-                        instruction.launches(),
+                        instruction.launches() && !miss,
                     );
                 }
                 outcome.response

@@ -163,6 +163,7 @@ impl Harness<'_> {
             vr: self.rtl.cpu_vr_o,
             alloc_size: self.rtl.cpu_alloc_size_o,
             alloc_scan: self.rtl.cpu_alloc_scan_o,
+            speculative: self.rtl.cpu_speculative_o,
             data: self.rtl.cpu_data_o,
             check_type: self.rtl.cpu_check_type_o,
             expected_type: self.rtl.cpu_expected_type_o,
@@ -277,6 +278,11 @@ impl Harness<'_> {
         let mut accepted_ports = None;
         // A launched command whose reply arrives as its barrier issues the next.
         let mut retiring = None;
+        // The reference of a launched (speculative) Fetch awaiting its reply,
+        // and of a Fetch that missed and must be replayed before its barrier.
+        let mut launched_fetch: Option<u64> = None;
+        let mut replay: Option<u64> = None;
+        let mut replaying = false;
         let mut device_response = None;
         let mut wait = 0u32;
         let mut from_upper = self.oracle.allocation_limit as usize == self.backing.len();
@@ -351,19 +357,38 @@ impl Harness<'_> {
             }
             let ports = self.processor_ports();
             let mut new_launch = None;
+            let mut new_launched_fetch = None;
             if self.rtl.cpu_cmd_valid_o != 0
                 && self.rtl.cpu_command_enable_i != 0
                 && self.rtl.cmd_ready_o != 0
             {
-                let expected_command = candidate
-                    .as_ref()
-                    .unwrap()
-                    .as_ref()
-                    .map_err(|e| eyre::eyre!("RTL issued command despite predicted fault {e}"))?
-                    .1;
+                // A replay is a standalone Fetch of the missed reference; any
+                // other command belongs to the current instruction, and a
+                // launched Fetch is speculative.
+                let expected_command = if let Some(data) = replay {
+                    replaying = true;
+                    Some(rekursiv_asm::Command {
+                        pager: rekursiv_asm::Pager::Fetch,
+                        data: Word::from_bits(data)?,
+                        ..Default::default()
+                    })
+                } else {
+                    let launches = image.code[model.pc as usize].is_some_and(|i| i.launches());
+                    candidate
+                        .as_ref()
+                        .unwrap()
+                        .as_ref()
+                        .map_err(|e| eyre::eyre!("RTL issued command despite predicted fault {e}"))?
+                        .1
+                        .map(|mut c| {
+                            c.speculative = launches && c.pager == rekursiv_asm::Pager::Fetch;
+                            c
+                        })
+                };
+                let expected_ports = expected_command.map(|c| c.encode()).transpose()?;
                 ensure!(
-                    Some(ports) == expected_command.map(|c| c.encode()).transpose()?,
-                    "processor command differs from model"
+                    Some(ports) == expected_ports,
+                    "processor command differs from model: RTL {ports:?}, model {expected_ports:?}"
                 );
                 if let Some(previous) = expected_object.take() {
                     ensure!(
@@ -379,7 +404,11 @@ impl Harness<'_> {
                 );
                 expected_object = Some(self.oracle.execute_raw(ports, false));
                 accepted_ports = Some(ports);
-                new_launch = Some(image.code[model.pc as usize].unwrap().launches());
+                if !replaying {
+                    let launches = image.code[model.pc as usize].unwrap().launches();
+                    new_launch = Some(launches);
+                    new_launched_fetch = (launches && ports.speculative != 0).then_some(ports.data);
+                }
             }
             // Sample the reply inside tick, after external RAM has been driven.
             // A forwarded completion need not have been visible before tick.
@@ -443,13 +472,32 @@ impl Harness<'_> {
                     );
                     self.verify(expected, rsp, transaction_start.0, transaction_start.2)?;
                     self.commands.push((accepted_ports.take().unwrap(), rsp));
+                    // The replayed Fetch publishes Object before its barrier,
+                    // which is then prepared again with it.
+                    if replaying {
+                        replaying = false;
+                        response = None;
+                        if rsp.status == Status::Ok {
+                            replay = None;
+                            model.object = rsp.data.bits();
+                            candidate = None;
+                        }
+                    }
                 }
             }
             ensure!(
                 retiring.is_none(),
                 "launched reply did not arrive as the next command issued"
             );
-            if joining {
+            if joining
+                && response.is_some_and(|r| r.status == Status::Miss)
+                && launched_fetch.is_some()
+            {
+                // The speculative Fetch missed: LOGIK replays it next.
+                response = None;
+                replay = launched_fetch.take();
+                launched = false;
+            } else if joining {
                 let rsp = response.take().unwrap();
                 ensure!(
                     rsp.status == Status::Ok,
@@ -458,14 +506,18 @@ impl Harness<'_> {
                 );
                 model.object = rsp.data.bits();
                 launched = false;
+                launched_fetch = None;
                 // A collector control joins on its own edge, then executes
                 // with the joined Object: prepare it again.
                 if self.rtl.cpu_retire_o == 0 && new_launch.is_none() {
                     candidate = None;
                 }
             }
+            // A command launched in the cycle an older reply was joined is
+            // recorded after that join.
             if let Some(l) = new_launch {
                 launched = l;
+                launched_fetch = new_launched_fetch;
             }
             if self.rtl.cpu_gc_active_o != 0 {
                 let mut expected = self.oracle.clone();

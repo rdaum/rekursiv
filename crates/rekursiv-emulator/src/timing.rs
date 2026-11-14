@@ -240,6 +240,11 @@ impl Estimate {
         self.cycles.maintenance_wait += slots;
         self.work.collector_cycles += slots;
     }
+    /// A launched Fetch that missed: its Miss reply, then the replay's issue,
+    /// before the replay itself is charged as a blocking Fetch.
+    pub(crate) fn speculative_miss(&mut self) {
+        self.cycles.object_wait += 3;
+    }
     /// Join the launched command at a barrier, which `issues` a command of its own.
     pub(crate) fn join(&mut self, issues: bool) {
         if let Some(p) = self.pending.take() {

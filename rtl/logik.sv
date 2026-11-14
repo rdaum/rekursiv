@@ -50,6 +50,9 @@ module logik #(
     // collection does not start. A launched command's reply is still taken.
     input logic pause_i,
     output logic cmd_valid_o, input logic cmd_ready_i,
+    // A launched Fetch: OBJEKT answers Miss for a nonresident target, and
+    // LOGIK replays it as an ordinary Fetch at the join.
+    output logic speculative_o,
     output logic [3:0] pager_o, output logic [3:0] index_o,
     output logic [2:0] register_o, output logic [1:0] memory_o,
     output logic prepare_o, prepared_o,
@@ -77,10 +80,15 @@ module logik #(
 );
     `include "rekursiv_control.svh"
 
-    typedef enum logic [2:0] {
-        HALTED, EXECUTE, WAIT_RESPONSE, SERVICE_BREAK, ISSUE, NUMERIC_WAIT, DEVICE_WAIT
+    typedef enum logic [3:0] {
+        HALTED, EXECUTE, WAIT_RESPONSE, SERVICE_BREAK, ISSUE, NUMERIC_WAIT, DEVICE_WAIT, REPLAY
     } execution_state_t;
+    localparam logic [3:0] STATUS_OUT_OF_SPACE = 4'd11, STATUS_MISS = 4'd13;
+    // The pending launched command is a Fetch, whose reference replay reissues.
+    logic launched_fetch, replay_pending, replay_issued;
+    logic [39:0] replay_data;
     execution_state_t state, next_state;
+    wire replaying = state == REPLAY;
     microinstruction_t instruction;
     processor_fault_t local_fault;
     logic instruction_valid, boot_fault, target_fault, stack_fault, fetch_fault, compact_fault;
@@ -119,11 +127,13 @@ module logik #(
     assign response_valid=gc_active_o ? gc_response_i : rsp_valid_i;
     assign response_status=gc_active_o ? gc_status_i : rsp_status_i;
     assign response_data=gc_active_o ? gc_result_i : rsp_data_i;
-    assign gc_request=state==EXECUTE && !pause_i && !blocked && !gc_active_o && !retried &&
+    assign gc_request=state==EXECUTE && !pause_i && !blocked && !replay_pending && !gc_active_o && !retried &&
         instruction.recovery==11 && local_fault==FAULT_NONE;
     assign gc_enter=gc_request || (state==WAIT_RESPONSE && !gc_active_o && rsp_valid_i &&
         rsp_status_i==11 && gc_enable_i && !retried &&
-        (instruction.object_pager==6 || instruction.object_pager==5));
+        (instruction.object_pager==6 || instruction.object_pager==5)) ||
+        (replaying && replay_issued && rsp_valid_i && rsp_status_i==STATUS_OUT_OF_SPACE &&
+         gc_enable_i && !retried);
     assign gc_failed=gc_active_o && ((state==EXECUTE && !pause_i && local_fault!=FAULT_NONE) ||
         (state==WAIT_RESPONSE && gc_response_i && gc_status_i!=0));
     assign gc_exit=gc_failed || (gc_active_o && state==EXECUTE && !pause_i &&
@@ -156,14 +166,16 @@ module logik #(
     assign service_o = state == SERVICE_BREAK;
     assign service_code_o = service_code;
     // A launched command retires when OBJEKT accepts it; the next barrier
-    // joins its reply. Every command that pages nothing and changes no
-    // low-space threshold launches, as do explicitly launched accesses.
+    // joins its reply. Every command that pages nothing or fetches, and
+    // changes no low-space threshold, launches, as do explicitly launched
+    // accesses. A launched Fetch is speculative: see speculative_o.
     assign launch = instruction.object_enable && (instruction.object_async ||
-        (instruction.object_pager == 0 && instruction.object_register != 3'd5 &&
+        ((instruction.object_pager == 0 || instruction.object_pager == 5) &&
+         instruction.object_register != 3'd5 &&
          instruction.object_register != 3'd6 && instruction.condition != CC_OBJECT_OK &&
          instruction.device == 0 && instruction.recovery == 0 && instruction.alu != ALU_FLOAT &&
          instruction.sequence_op != SEQ_SERVICE && instruction.sequence_op != SEQ_HOLD &&
-         !instruction.halt));
+         !instruction.halt && !instruction.write_root));
     // Join-through: a barrier executes in the cycle its reply arrives, with
     // the reply forwarded as Object. Collector controls take a separate join
     // edge, because collector entry saves Object on that edge.
@@ -174,12 +186,15 @@ module logik #(
     assign blocked = async_pending && async_barrier && !joined;
     // Offered from EXECUTE: a validated command outside collection. Collector
     // controls keep the ISSUE cycle.
-    wire direct_issue = state == EXECUTE && !pause_i && !blocked &&
+    wire direct_issue = state == EXECUTE && !pause_i && !blocked && !replay_pending &&
         local_fault == FAULT_NONE && !gc_request && instruction.sequence_op != SEQ_HOLD &&
         instruction.device == 0 && instruction.alu != ALU_FLOAT && instruction.object_enable &&
         instruction.recovery == 0;
-    assign cmd_valid_o = (state == ISSUE || direct_issue) && !gc_active_o && !rst_i;
-    assign rsp_ready_o = (state == WAIT_RESPONSE || (async_pending && !async_done)) && !gc_active_o && !rst_i;
+    assign cmd_valid_o = (state == ISSUE || direct_issue || (replaying && !replay_issued)) &&
+        !gc_active_o && !rst_i;
+    assign rsp_ready_o = (state == WAIT_RESPONSE || (async_pending && !async_done) ||
+        (replaying && replay_issued)) && !gc_active_o && !rst_i;
+    assign speculative_o = !replaying && launch && instruction.object_pager == 5;
     assign static_barrier=instruction.object_enable || instruction.bus_source==BUS_OBJECT ||
         instruction.condition==CC_OBJECT_OK || instruction.device!=0 || instruction.recovery!=0 ||
         instruction.halt || instruction.sequence_op==SEQ_SERVICE;
@@ -337,8 +352,11 @@ module logik #(
             EXECUTE: begin
                 if (pause_i) begin end
                 else if (blocked) begin
-                    if(async_join && async_completion_status!=0) next_state=HALTED;
+                    if(async_join && async_completion_status==STATUS_MISS && launched_fetch) next_state=REPLAY;
+                    else if(async_join && async_completion_status!=0) next_state=HALTED;
                 end
+                // A replay interrupted by collection is redone before its barrier.
+                else if (replay_pending && !gc_active_o) next_state = REPLAY;
                 else if (local_fault != FAULT_NONE) next_state = HALTED;
                 else if (gc_request) next_state = EXECUTE;
                 // HOLD freezes the whole instruction, unconditionally. Relative
@@ -376,6 +394,12 @@ module logik #(
                 end
             end
             SERVICE_BREAK: if (resume_i) next_state = EXECUTE;
+            // The replayed Fetch is an ordinary blocking one; the barrier it
+            // interrupted runs afterwards, in EXECUTE.
+            REPLAY: if (replay_issued && rsp_valid_i) begin
+                if (gc_enter) next_state = EXECUTE;
+                else next_state = rsp_status_i == 0 ? EXECUTE : HALTED;
+            end
             default: next_state = HALTED;
         endcase
         if(gc_exit) begin
@@ -403,6 +427,7 @@ module logik #(
             object_result <= '0;
             object_status <= '0;
             async_pending<=0; async_done<=0; async_status<=0; async_data<=0;
+            launched_fetch<=0; replay_pending<=0; replay_issued<=0; replay_data<=0;
             service_code <= '0;
         end else begin
             state <= next_state;
@@ -419,13 +444,23 @@ module logik #(
             end
             if(async_join) begin
                 async_pending<=0; async_done<=0; last_status_o<=async_completion_status;
-                if(async_completion_status!=0) fault_o<=FAULT_OBJECT;
+                if(async_completion_status==STATUS_MISS && launched_fetch) replay_pending<=1;
+                else if(async_completion_status!=0) fault_o<=FAULT_OBJECT;
                 else begin object_result<=async_completion_data; object_status<=async_completion_status; end
             end
             // A barrier joined through may launch its own command on the same edge.
             if(launch && !gc_active_o && cmd_ready_i &&
                ((state==ISSUE) || (direct_issue && next_state==EXECUTE && retire))) begin
                 async_pending<=1; async_done<=0;
+                launched_fetch<=instruction.object_pager==5; replay_data<=bus_value;
+            end
+            if(replaying && !replay_issued && cmd_ready_i && !gc_active_o) replay_issued<=1;
+            if(replaying && replay_issued && rsp_valid_i) begin
+                replay_issued<=0; last_status_o<=rsp_status_i;
+                if(rsp_status_i==0) begin
+                    replay_pending<=0; retried<=0;
+                    object_result<=rsp_data_i; object_status<=rsp_status_i;
+                end else if(!gc_enter) fault_o<=FAULT_OBJECT;
             end
             if (state == DEVICE_WAIT && io_done && io_error) fault_o <= FAULT_DEVICE;
             if (state == WAIT_RESPONSE && response_valid) begin
@@ -435,7 +470,8 @@ module logik #(
             if(gc_enter) begin
                 gc_active_o<=1; gc_explicit_o<=gc_request; retried<=1;
                 saved_symbol<=symbol; saved_object<=object_result; saved_status<=object_status;
-                saved_bus<=bus_value; saved_type<=instruction.check_type ? instruction.expected_type : 40'b0;
+                saved_bus<=replaying ? replay_data : bus_value;
+                saved_type<=(instruction.check_type && !replaying) ? instruction.expected_type : 40'b0;
                 saved_issued_condition<=gc_request ? condition_value : issued_condition;
             end
             if(gc_exit) begin
@@ -459,20 +495,21 @@ module logik #(
     end
 
     // OBJEKT retains its existing independently encoded command interface.
-    assign pager_o = instruction.object_pager;
-    assign index_o = instruction.object_index;
-    assign register_o = instruction.object_register;
-    assign memory_o = instruction.object_memory;
-    assign prepare_o = instruction.object_prepare;
-    assign prepared_o = instruction.object_prepared;
-    assign read_o = instruction.object_read;
-    assign load_vr_o = instruction.load_value_register;
+    // A replay drives a standalone Fetch of the saved reference.
+    assign pager_o = replaying ? 4'd5 : instruction.object_pager;
+    assign index_o = replaying ? '0 : instruction.object_index;
+    assign register_o = replaying ? '0 : instruction.object_register;
+    assign memory_o = replaying ? '0 : instruction.object_memory;
+    assign prepare_o = replaying ? 1'b0 : instruction.object_prepare;
+    assign prepared_o = replaying ? 1'b0 : instruction.object_prepared;
+    assign read_o = replaying ? '0 : instruction.object_read;
+    assign load_vr_o = replaying ? 1'b0 : instruction.load_value_register;
     assign vr_o = instruction.value_register;
-    assign check_type_o = instruction.check_type;
+    assign check_type_o = replaying ? 1'b0 : instruction.check_type;
     assign expected_type_o = instruction.expected_type;
     assign alloc_size_o = instruction.allocation_dynamic ? register_a[23:0] : instruction.allocation_size;
     assign alloc_scan_o = instruction.allocation_scan;
-    assign data_o = bus_value;
+    assign data_o = replaying ? replay_data : bus_value;
     assign symbol_o = symbol;
     assign object_o = object_result;
 endmodule

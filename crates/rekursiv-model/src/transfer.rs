@@ -88,6 +88,8 @@ impl Model {
                         self.state.selected = Some(e).into();
                         return Ok(e.reference);
                     }
+                    // A launched Fetch never refills: LOGIK replays it.
+                    Err(Status::NotResident) if c.speculative => return Err(Status::Miss),
                     Err(Status::NotResident) => {}
                     Err(e) => return Err(e),
                 }

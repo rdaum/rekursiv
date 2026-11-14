@@ -116,7 +116,7 @@ module rekursiv_system #(
     logic [3:0] gc_operation, gc_status;
     logic [39:0] gc_data, gc_root, gc_result;
 
-    logic cmd_valid, cmd_ready, rsp_ready, retired, dispatched;
+    logic cmd_valid, cmd_ready, rsp_ready, retired, dispatched, speculative;
     logic [23:0] sp, esp, csp, cstkr, scan_control;
     logic [39:0] estkr, symbol, object, scan_evaluation, scan_vr, objekt_index, objekt_selected;
     logic [31:0] scan_register;
@@ -162,7 +162,7 @@ module rekursiv_system #(
         .pager_o(pager), .index_o(index), .register_o(register), .memory_o(memory),
         .prepare_o(prepare), .prepared_o(prepared),
         .read_o(read), .load_vr_o(load_vr), .vr_o(vr),
-        .alloc_size_o(alloc_size), .alloc_scan_o(alloc_scan),
+        .alloc_size_o(alloc_size), .alloc_scan_o(alloc_scan), .speculative_o(speculative),
         .data_o(data), .check_type_o(check_type), .expected_type_o(expected_type),
         .rsp_valid_i(rsp_valid), .rsp_ready_o(rsp_ready),
         .rsp_status_i(rsp_status), .rsp_data_i(rsp_data),
@@ -191,7 +191,7 @@ module rekursiv_system #(
         .pager_i(pager), .index_i(index), .register_i(register), .memory_i(memory),
         .prepare_i(prepare), .prepared_i(prepared),
         .read_i(read), .load_vr_i(load_vr), .vr_i(vr),
-        .alloc_size_i(alloc_size), .alloc_scan_i(alloc_scan),
+        .alloc_size_i(alloc_size), .alloc_scan_i(alloc_scan), .speculative_i(speculative),
         .data_i(data), .check_type_i(check_type), .expected_type_i(expected_type),
         .svc_valid_i(svc_valid), .svc_ready_o(svc_ready), .svc_op_i(record[61:58]),
         .svc_ref_i('0), .svc_class_i(record[39:0]), .svc_base_i('0), .svc_size_i('0),

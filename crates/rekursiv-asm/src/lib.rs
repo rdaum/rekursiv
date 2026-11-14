@@ -111,7 +111,8 @@ macro_rules! codes {
 }
 codes!(Status { Ok = 0, BadCommand = 1, BadValue = 2, InvalidReference = 3,
     NotResident = 4, NoSelection = 5, BoundsError = 6, IndexOverflow = 7,
-    TypeError = 8, MemoryError = 9, ServiceError = 10, OutOfSpace = 11, IdentityExhausted = 12 });
+    TypeError = 8, MemoryError = 9, ServiceError = 10, OutOfSpace = 11, IdentityExhausted = 12,
+    Miss = 13 });
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{self:?}")
@@ -143,6 +144,10 @@ pub struct Command {
     pub prepare: bool,
     /// Use the previously prepared access instead of selection/index.
     pub prepared: bool,
+    /// A Fetch that LOGIK launched: a nonresident target makes it reply Miss
+    /// with no effects, and LOGIK replays it as an ordinary Fetch. Set by the
+    /// executor, never by a control word.
+    pub speculative: bool,
     pub read: Read,
     pub load_vr: bool,
     pub vr: u8,
@@ -264,6 +269,7 @@ impl Command {
         if self.vr > 7
             || (self.pager != Pager::None && self.memory != Memory::None && !self.prepared)
             || (self.prepared && self.memory == Memory::None)
+            || (self.speculative && self.pager != Pager::Fetch)
             || (self.pager != Pager::None && self.index == Index::Next)
             || (self.memory != Memory::None && self.read != Read::None)
         {
@@ -291,6 +297,7 @@ impl Command {
             expected_type: self.expected_type.unwrap_or(Word::ZERO).bits(),
             alloc_size: self.alloc_size,
             alloc_scan: self.alloc_scan as u8,
+            speculative: self.speculative as u8,
         })
     }
 }
@@ -336,12 +343,14 @@ pub struct Ports {
     pub expected_type: u64,
     pub alloc_size: u32,
     pub alloc_scan: u8,
+    pub speculative: u8,
 }
 impl Ports {
     pub fn decode(self) -> Result<Command, Status> {
         if self.load_vr > 1
             || self.check_type > 1
             || self.alloc_scan > 1
+            || self.speculative > 1
             || self.prepare > 1
             || self.prepared > 1
         {
@@ -354,6 +363,7 @@ impl Ports {
             memory: self.memory.try_into()?,
             prepare: self.prepare != 0,
             prepared: self.prepared != 0,
+            speculative: self.speculative != 0,
             read: self.read.try_into()?,
             load_vr: self.load_vr != 0,
             alloc_size: self.alloc_size,
@@ -493,7 +503,8 @@ mod tests {
                 check_type: 0,
                 expected_type: 0,
                 alloc_size: 0,
-                alloc_scan: 0
+                alloc_scan: 0,
+                speculative: 0,
             }
         );
         assert_eq!(p.decode().unwrap(), cmd);

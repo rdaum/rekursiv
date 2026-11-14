@@ -1,5 +1,5 @@
 use eyre::Result;
-use rekursiv_asm::{processor::*, Command, Index, Pager, Read, Word};
+use rekursiv_asm::{processor::*, Command, Index, Read, Word};
 use rekursiv_model::processor::{Image, Processor};
 use rekursiv_sim::{runtime, Harness, Timing};
 fn lit(value: u64) -> Instruction {
@@ -400,7 +400,8 @@ fn autonomous_allocate_evict_refill_and_loop_with_channel_stalls() -> Result<()>
     assert_eq!(model.rf[0], 0);
     assert_eq!(model.estkr, Word::signed(1234).bits());
     assert!(h.stats.saved_objects >= 5);
-    assert_eq!(h.stats.commands, 26);
+    // One refill is a speculative Fetch that misses, then its replay.
+    assert_eq!(h.stats.commands, 27);
     Ok(())
 }
 
@@ -462,13 +463,11 @@ fn object_error_and_reset_during_wait_preserve_processor_state() -> Result<()> {
         },
         None,
     )?;
-    // A paging command blocks; its error leaves the instruction unretired.
+    // An allocation blocks; one too large for the 512-word RAM, with no
+    // collector, fails and leaves the instruction unretired.
     let image = Image::program(&[Instruction {
         sp: Pointer::Increment,
-        object: Some(Command {
-            pager: Pager::Fetch,
-            ..Command::default()
-        }),
+        object: Some(Command::allocate(Word::reference(100, true)?, 4000, false)?),
         ..lit(5)
     }]);
     h.load_processor(&image)?;
